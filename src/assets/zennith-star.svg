@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="800" viewBox="0 0 800 800" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="star-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#5BB8DC" stop-opacity="0.45"/>
+      <stop offset="45%"  stop-color="#2196C4" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#2196C4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="star-glow-mid" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#7CCCE8" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#2196C4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="centre-dot" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#FFFFFF"/>
+      <stop offset="40%"  stop-color="#D1EEFA"/>
+      <stop offset="100%" stop-color="#5BB8DC"/>
+    </radialGradient>
+    <radialGradient id="centre-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#2196C4" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="centre-blur" x="-200%" y="-200%" width="500%" height="500%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <!-- Outermost atmospheric glow -->
+  <circle cx="400" cy="400" r="340" fill="url(#star-glow)" opacity="0.7"/>
+  <circle cx="400" cy="400" r="250" fill="url(#star-glow-mid)" opacity="0.8"/>
+
+  <!-- Outer dashed ring -->
+  <circle cx="400" cy="400" r="288"
+          stroke="#2196C4" stroke-width="1.2"
+          stroke-dasharray="5 12" opacity="0.28"
+          fill="none"/>
+
+  <!-- Mid dashed ring -->
+  <circle cx="400" cy="400" r="220"
+          stroke="#2196C4" stroke-width="0.7"
+          stroke-dasharray="3 8" opacity="0.18"
+          fill="none"/>
+
+  <!-- Inner dashed ring -->
+  <circle cx="400" cy="400" r="148"
+          stroke="#5BB8DC" stroke-width="0.5"
+          stroke-dasharray="2 6" opacity="0.14"
+          fill="none"/>
+
+  <!-- Outer star shape — very subtle fill -->
+  <path d="M400 98  L415 387 L702 400 L415 413 L400 702 L385 413 L98 400 L385 387 Z"
+        fill="#2196C4" opacity="0.06"/>
+
+  <!-- PRIMARY 4-pointed star — outer -->
+  <path d="M400 106 L414 387.5 L694 400 L414 412.5 L400 694 L386 412.5 L106 400 L386 387.5 Z"
+        fill="none"
+        stroke="#2196C4" stroke-width="1.8"
+        stroke-linejoin="round"/>
+
+  <!-- SECONDARY 4-pointed star — mid -->
+  <path d="M400 182 L411.5 389.5 L618 400 L411.5 410.5 L400 618 L388.5 410.5 L182 400 L388.5 389.5 Z"
+        fill="none"
+        stroke="#5BB8DC" stroke-width="1.0"
+        stroke-linejoin="round" opacity="0.55"/>
+
+  <!-- TERTIARY star — innermost, very subtle -->
+  <path d="M400 270 L407 393.5 L530 400 L407 406.5 L400 530 L393 406.5 L270 400 L393 393.5 Z"
+        fill="none"
+        stroke="#7CCCE8" stroke-width="0.6"
+        stroke-linejoin="round" opacity="0.32"/>
+
+  <!-- Cardinal radiant lines — TOP -->
+  <line x1="400" y1="95"  x2="400" y2="128" stroke="#5BB8DC" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="400" y1="78"  x2="400" y2="90"  stroke="#5BB8DC" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>
+  <line x1="400" y1="60"  x2="400" y2="72"  stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.28"/>
+
+  <!-- Cardinal radiant lines — BOTTOM -->
+  <line x1="400" y1="672" x2="400" y2="705" stroke="#5BB8DC" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="400" y1="710" x2="400" y2="722" stroke="#5BB8DC" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>
+  <line x1="400" y1="728" x2="400" y2="740" stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.28"/>
+
+  <!-- Cardinal radiant lines — LEFT -->
+  <line x1="95"  y1="400" x2="128" y2="400" stroke="#5BB8DC" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="78"  y1="400" x2="90"  y2="400" stroke="#5BB8DC" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>
+  <line x1="60"  y1="400" x2="72"  y2="400" stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.28"/>
+
+  <!-- Cardinal radiant lines — RIGHT -->
+  <line x1="672" y1="400" x2="705" y2="400" stroke="#5BB8DC" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="710" y1="400" x2="722" y2="400" stroke="#5BB8DC" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>
+  <line x1="728" y1="400" x2="740" y2="400" stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.28"/>
+
+  <!-- Diagonal secondary rays — 45° -->
+  <line x1="197" y1="197" x2="222" y2="222" stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.35"/>
+  <line x1="178" y1="178" x2="190" y2="190" stroke="#2196C4" stroke-width="0.7" stroke-linecap="round" opacity="0.18"/>
+  <line x1="603" y1="197" x2="578" y2="222" stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.35"/>
+  <line x1="622" y1="178" x2="610" y2="190" stroke="#2196C4" stroke-width="0.7" stroke-linecap="round" opacity="0.18"/>
+  <line x1="197" y1="603" x2="222" y2="578" stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.35"/>
+  <line x1="178" y1="622" x2="190" y2="610" stroke="#2196C4" stroke-width="0.7" stroke-linecap="round" opacity="0.18"/>
+  <line x1="603" y1="603" x2="578" y2="578" stroke="#2196C4" stroke-width="1.2" stroke-linecap="round" opacity="0.35"/>
+  <line x1="622" y1="622" x2="610" y2="610" stroke="#2196C4" stroke-width="0.7" stroke-linecap="round" opacity="0.18"/>
+
+  <!-- Centre glow layers -->
+  <circle cx="400" cy="400" r="52" fill="#2196C4" opacity="0.12"/>
+  <circle cx="400" cy="400" r="34" fill="#2196C4" opacity="0.18"/>
+  <circle cx="400" cy="400" r="22" fill="#3BA8D4" opacity="0.22"/>
+
+  <!-- Centre dot — bright core -->
+  <circle cx="400" cy="400" r="16" fill="url(#centre-dot)"/>
+  <circle cx="400" cy="400" r="8"  fill="#FFFFFF" opacity="0.95"/>
+  <circle cx="400" cy="400" r="4"  fill="#FFFFFF"/>
+</svg>
