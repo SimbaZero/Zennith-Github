@@ -195,24 +195,41 @@ Zennith/
 - [Bun](https://bun.sh/) installed
 - Node.js (for tooling compatibility)
 
+**Installing Bun** (if `bun --version` doesn't work yet):
+
+| OS | Command |
+|---|---|
+| **macOS / Linux / Ubuntu (WSL included)** | `curl -fsSL https://bun.sh/install \| bash` then restart your terminal (or run `source ~/.bashrc`) |
+| **Windows** | `powershell -c "irm bun.sh/install.ps1 \| iex"` (run in PowerShell) |
+
+Verify it worked:
+```bash
+bun --version
+```
+
 ### Installation
+
+> ⚠️ **Run this once** — the first time you set up the project on a machine. You do **not** need to re-run this every time you pull changes or edit a file; it only needs to run again if `package.json` changes (e.g. a new dependency was added).
 
 ```bash
 # Clone the repository
 git clone <repo-url>
 cd Zennith
 
-# Install dependencies
+# Install dependencies (one-time setup — creates node_modules/)
 bun install
 ```
 
-### Run the development server
+### Everyday Workflow
+
+Once set up, your day-to-day loop is just:
 
 ```bash
-bun run dev
+git pull        # pull the latest changes from the team
+bun run dev     # start the local dev server
 ```
 
-Then open the URL shown in your terminal (Vite's default is `http://localhost:5173`).
+Then open the URL shown in your terminal (Vite's default is `http://localhost:5173`). Edits you save to any file (e.g. `pharmacist.stock.tsx`) will hot-reload in the browser automatically — no restart or reinstall needed.
 
 ### Other available scripts
 
@@ -224,9 +241,26 @@ Then open the URL shown in your terminal (Vite's default is `http://localhost:51
 | `bun run lint` | Run ESLint |
 | `bun run format` | Format code with Prettier |
 
+### 🔑 Test Login Credentials (Mock Auth)
+
+Auth is currently mocked (`src/lib/auth.ts`) — not real authentication yet. To log in as a given role, use that **role name as the username** and `password` as the password:
+
+| Role | Username | Password |
+|---|---|---|
+| Pharmacist | `pharmacist` | `password` |
+| Doctor | `doctor` | `password` |
+| Nurse | `nurse` | `password` |
+| Receptionist | `receptionist` | `password` |
+| Patient | `patient` | `password` |
+| Admin | `admin` | `password` |
+| Super Admin | `superadmin` | `password` |
+
+> ⚠️ Usernames must match exactly (e.g. `pharmacist`, not `Pharmacist` or a made-up name) — any other username/password combo won't be recognized since these are the only accounts seeded into the mock store.
+
 ## 🧭 Current Status & Roadmap
 
 Zennith is currently a **fully functional frontend prototype**: every role has a working interface, driven by realistic seeded data and an in-memory reactive store, so the full product experience can be demoed and validated end-to-end.
+
 
 - [x] Role-based UI for all 7 roles (patient, receptionist, nurse, pharmacist, doctor, admin, super admin)
 - [x] Multi-clinic support (Hillbrow CHC, Orchards Clinic, Yeoville CHC)
