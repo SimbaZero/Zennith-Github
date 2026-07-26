@@ -1,5 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
+﻿import { createFileRoute } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { registerPatient } from "@/lib/clinic-data";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -22,12 +24,31 @@ function Registration() {
   const [f, setF] = useState(initial);
   const set = (k: keyof typeof initial) => (v: any) => setF({ ...f, [k]: v });
 
+  const register = useMutation({
+    mutationFn: () =>
+      registerPatient({
+        fullName: f.patientName,
+        nationalId: f.nationalId,
+        contactNum: f.telHome || f.telAlt,
+        city: f.district,
+        suburb: f.town,
+        emergencyContactName: f.emName,
+        emergencyContactNo: f.emTel,
+        insurance: f.scheme ? `${f.scheme}${f.schemeNo ? ` Â· ${f.schemeNo}` : ""}` : "",
+        remarks: f.remarks,
+      }),
+    onSuccess: (patientId) => {
+      toast.success(`${f.patientName} registered successfully â€” Patient ID ${patientId}`);
+      setF(initial);
+    },
+    onError: () => toast.error("Could not register patient â€” please try again"),
+  });
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!f.patientName || !f.nationalId) { toast.error("Patient name and National ID are required"); return; }
     if (!f.consent) { toast.error("Patient/Guardian consent is required"); return; }
-    toast.success(`${f.patientName} registered successfully`);
-    setF(initial);
+    register.mutate();
   };
 
   return (
@@ -124,7 +145,7 @@ function Registration() {
           <textarea
             value={f.remarks}
             onChange={(e) => set("remarks")(e.target.value)}
-            placeholder="Any additional notes from the receptionist…"
+            placeholder="Any additional notes from the receptionistâ€¦"
             className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] min-h-28"
           />
         </div>
@@ -145,7 +166,7 @@ function Registration() {
           </div>
           <label className="flex items-start gap-2 mt-3 text-sm">
             <input type="checkbox" checked={f.consent} onChange={(e) => set("consent")(e.target.checked)} className="mt-1" />
-            <span><strong>Patient / Guardian confirms consent</strong> — verbal authorisation captured by clerk.</span>
+            <span><strong>Patient / Guardian confirms consent</strong> â€” verbal authorisation captured by clerk.</span>
           </label>
         </div>
 
@@ -153,7 +174,9 @@ function Registration() {
           <p className="text-xs text-muted-foreground">Clerk: <strong>Logged-in user</strong>. All fields above will be saved to the patient master record.</p>
           <div className="flex gap-2">
             <button type="button" onClick={() => setF(initial)} className="border px-4 py-2 rounded-md text-sm hover:bg-secondary">Clear form</button>
-            <button type="submit" className="bg-[oklch(0.55_0.18_245)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.5_0.18_245)]">✓ Register Patient</button>
+            <button type="submit" disabled={register.isPending} className="bg-[oklch(0.55_0.18_245)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.5_0.18_245)] disabled:opacity-60">
+              {register.isPending ? "Registeringâ€¦" : "âœ“ Register Patient"}
+            </button>
           </div>
         </div>
       </form>

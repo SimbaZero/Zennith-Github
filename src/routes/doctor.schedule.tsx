@@ -1,71 +1,81 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+﻿import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { scheduleDays } from "@/lib/data";
-import { useAppointments, useNow, computeEffective } from "@/lib/store";
-import { useMemo, useState } from "react";
+import { fetchDoctorAppointments, attachPatientNames } from "@/lib/clinic-data";
+import { useState } from "react";
 
 export const Route = createFileRoute("/doctor/schedule")({ component: Schedule });
 
 function Schedule() {
   const navigate = useNavigate();
-  const [day, setDay] = useState(0);
-  const rows = useAppointments();
-  const now = useNow(30_000);
-  const effective = useMemo(() => computeEffective(rows, now), [rows, now]);
+  const [picked, setPicked] = useState<string | null>(null);
 
-  // For day 0 show everything; future days show a subset (demo data).
-  const list = useMemo(() => {
-    if (day === 0) return effective;
-    const step = Math.max(4, effective.length - day * 6);
-    return effective.slice(0, step);
-  }, [day, effective]);
+  const { data, isLoading } = useQuery({
+    queryKey: ["doctor-appointments"],
+    queryFn: fetchDoctorAppointments,
+  });
 
-  const view = (time: string, patient: string) => {
-    const hash = `appt-${encodeURIComponent(time)}-${encodeURIComponent(patient)}`;
-    (navigate as any)({ to: "/doctor/appointments", hash });
-    setTimeout(() => {
-      const el = document.getElementById(hash);
-      el?.scrollIntoView({ behavior: "smooth", block: "center" });
-      el?.classList.add("ring-2", "ring-[oklch(0.55_0.18_245)]");
-      setTimeout(() => el?.classList.remove("ring-2", "ring-[oklch(0.55_0.18_245)]"), 2000);
-    }, 150);
-  };
+  const day = picked ?? data?.scheduleDate ?? "";
+  const dayAppts = (data?.appts ?? []).filter((a) => a.date === day);
+
+  const { data: rows = [], isLoading: namesLoading } = useQuery({
+    queryKey: ["doctor-day", day, dayAppts.length],
+    queryFn: () => attachPatientNames(dayAppts),
+    enabled: !!data && dayAppts.length > 0,
+  });
+
+  // Show a window of up to 7 dates around the selected day.
+  const dates = data?.dates ?? [];
+  const idx = Math.max(0, dates.indexOf(day));
+  const window = dates.slice(Math.max(0, idx - 2), Math.max(0, idx - 2) + 7);
+  const today = new Date().toISOString().slice(0, 10);
 
   return (
     <AppShell role="doctor" title="My Schedule">
       <div className="flex flex-wrap gap-2 mb-5">
-        {scheduleDays.map((d, i) => (
+        {isLoading && <p className="text-sm text-muted-foreground">Loading scheduleâ€¦</p>}
+        {window.map((d) => (
           <button
-            key={d.iso}
-            onClick={() => setDay(i)}
+            key={d}
+            onClick={() => setPicked(d)}
             className={`px-4 py-2 rounded-md text-sm font-medium transition ${
-              i === day ? "bg-[oklch(0.18_0.06_260)] text-white" : "bg-white border hover:bg-secondary"
+              d === day ? "bg-[oklch(0.18_0.06_260)] text-white" : "bg-white border hover:bg-secondary"
             }`}
           >
-            {d.label}
+            {d === today ? "Today" : d}
           </button>
         ))}
       </div>
 
       <div className="bg-white rounded-xl border">
-        <div className="p-4 border-b text-sm font-medium">{list.length} appointments</div>
+        <div className="p-4 border-b text-sm font-medium">
+          {dayAppts.length} appointment{dayAppts.length === 1 ? "" : "s"} Â· {day || "â€”"}
+        </div>
         <div>
-          {list.map((a) => (
-            <div key={`${a.time}-${a.patient}`} className="flex items-center gap-4 px-5 py-4 border-t first:border-t-0">
+          {namesLoading && dayAppts.length > 0 && (
+            <p className="text-sm text-muted-foreground px-5 py-6">Loading appointmentsâ€¦</p>
+          )}
+          {rows.map((a) => (
+            <div key={a.id} className="flex items-center gap-4 px-5 py-4 border-t first:border-t-0">
               <div className="font-mono font-semibold w-14">{a.time}</div>
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm truncate">{a.patient}</div>
-                <div className="text-xs text-muted-foreground truncate">{a.pid} · {a.doctor} · {a.note}</div>
+                <div className="font-medium text-sm truncate">{a.patientName}</div>
+                <div className="text-xs text-muted-foreground truncate">
+                  {[a.patientId, a.condition, a.type].filter(Boolean).join(" Â· ")}
+                </div>
               </div>
               <span className="text-xs text-muted-foreground">30min</span>
               <button
-                onClick={() => view(a.time, a.patient)}
+                onClick={() => navigate({ to: "/doctor/appointments", search: { date: day } })}
                 className="border px-3 py-1 rounded-md text-xs hover:bg-secondary"
               >
                 View
               </button>
             </div>
           ))}
+          {data && dayAppts.length === 0 && (
+            <p className="text-sm text-muted-foreground px-5 py-8 text-center">No appointments on this day.</p>
+          )}
         </div>
       </div>
     </AppShell>

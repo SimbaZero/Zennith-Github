@@ -8,7 +8,7 @@ export const Route = createFileRoute("/admin/")({ component: AdminDashboard });
 
 function AdminDashboard() {
   const [count, setCount] = useState(0);
-  useEffect(() => { setCount(getCustomUsers().length); }, []);
+  useEffect(() => { getCustomUsers().then((l) => setCount(l.length)).catch(() => {}); }, []);
 
   return (
     <AppShell role="admin" title="Admin Dashboard" showBack={false}>

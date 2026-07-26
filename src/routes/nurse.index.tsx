@@ -1,32 +1,50 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+﻿import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell, StatusBadge } from "@/components/AppShell";
-import { appointments } from "@/lib/data";
-import { ScanLine, CalendarPlus, Users, Wifi, WifiOff, Trash2, PackageCheck } from "lucide-react";
+import { fetchDoctorDashboard } from "@/lib/clinic-data";
+import { ScanLine, CalendarPlus, Users, Wifi, WifiOff, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { useHandover, summarizeShift, useRollups } from "@/lib/handover";
-import { ShieldCheck } from "lucide-react";
+import { useHandover, summarizeShift } from "@/lib/handover";
 import { useOnline } from "@/lib/offline";
 import { getUsername } from "@/lib/auth";
 import { toast } from "sonner";
-import { useActiveClinic, CLINICS } from "@/lib/clinic";
-import { usePending, confirmReceipt } from "@/lib/store";
 
 export const Route = createFileRoute("/nurse/")({ component: NurseDashboard });
 
 function NurseDashboard() {
   const navigate = useNavigate();
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["clinician-dashboard"],
+    queryFn: fetchDoctorDashboard,
+  });
+  const today = new Date().toISOString().slice(0, 10);
+  const scheduleLabel =
+    !data || data.scheduleDate === today ? "Today's Appointments" : `Appointments Â· ${data.scheduleDate}`;
+
   return (
     <AppShell role="nurse" title="Nurse Dashboard" showBack={false}>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <Stat label="APPOINTMENTS TODAY" value="4" sub="4 scheduled" />
-        <Stat label="FILES DIGITIZED" value="12" sub="This week" />
-        <Stat label="PENDING FOLLOW-UPS" value="5" sub="To schedule" />
+        <Stat
+          label="APPOINTMENTS"
+          value={data ? String(data.stats.dayTotal) : "â€”"}
+          sub={data ? `${data.stats.dayCompleted} completed` : "loadingâ€¦"}
+        />
+        <Stat
+          label="PATIENTS THIS WEEK"
+          value={data ? String(data.stats.weekPatients) : "â€”"}
+          sub="Unique patients, 7 days"
+        />
+        <Stat
+          label="UPCOMING"
+          value={data ? String(data.stats.upcoming) : "â€”"}
+          sub="Future appointments"
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-xl border p-5">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold">Today's Appointments</h3>
+            <h3 className="font-semibold">{scheduleLabel}</h3>
             <button
               onClick={() => navigate({ to: "/nurse/appointments" })}
               className="text-sm border px-3 py-1.5 rounded-md hover:bg-secondary"
@@ -35,16 +53,23 @@ function NurseDashboard() {
             </button>
           </div>
           <div className="space-y-2">
-            {appointments.slice(0, 4).map((a) => (
-              <div key={a.time} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md">
+            {isLoading && <p className="text-sm text-muted-foreground py-6 text-center">Loading appointmentsâ€¦</p>}
+            {isError && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
+            {data?.schedule.map((a) => (
+              <div key={a.id} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md">
                 <div className="font-mono text-sm font-semibold w-12">{a.time}</div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">{a.patient}</div>
-                  <div className="text-xs text-muted-foreground truncate">{a.pid} · {a.note}</div>
+                  <div className="font-medium text-sm truncate">{a.patientName}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {[a.patientId, a.condition, a.type].filter(Boolean).join(" Â· ")}
+                  </div>
                 </div>
                 <StatusBadge status={a.status} />
               </div>
             ))}
+            {data && data.schedule.length === 0 && (
+              <p className="text-sm text-muted-foreground py-6 text-center">No appointments found for {data.doctorId}.</p>
+            )}
           </div>
         </div>
 
@@ -63,63 +88,20 @@ function NurseDashboard() {
           </div>
           <div className="mt-5 pt-5 border-t">
             <p className="text-[11px] tracking-wider text-muted-foreground mb-2">THIS WEEK</p>
-            <Row label="Patients registered" value="8" />
-            <Row label="Files digitized" value="12" />
-            <Row label="Appointments set" value="15" />
+            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "â€”"} />
+            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "â€”"} />
+            <Row label="Clinician" value={data?.doctorId ?? "â€”"} />
           </div>
         </div>
       </div>
 
-      <IncomingStock />
       <HandoverLog />
     </AppShell>
   );
 }
 
-function IncomingStock() {
-  const clinic = useActiveClinic();
-  const pending = usePending().filter((p) => p.clinic === clinic.id);
-  const confirm = (id: string, label: string) => {
-    if (confirmReceipt(id)) toast.success(`Received ${label} — clinic stock updated`);
-  };
-  return (
-    <div className="mt-6 bg-white rounded-xl border p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <div>
-          <h3 className="font-semibold flex items-center gap-2"><PackageCheck size={16} /> Incoming stock — awaiting your receipt</h3>
-          <p className="text-xs text-muted-foreground">Distributions sent by the pharmacist to {clinic.name}. Click "Confirm receipt" once you physically verify the delivery.</p>
-        </div>
-        <span className="text-xs px-2 py-1 rounded-full border bg-secondary/40">{pending.length} pending</span>
-      </div>
-      {pending.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No pending deliveries for {clinic.name}.</p>
-      ) : (
-        <ul className="divide-y">
-          {pending.map((p) => (
-            <li key={p.id} className="py-2.5 flex items-center justify-between text-sm">
-              <div>
-                <p className="font-medium">{p.med}</p>
-                <p className="text-xs text-muted-foreground">
-                  {p.units} units · from {p.from} · {new Date(p.createdAt).toLocaleString("en-ZA", { dateStyle: "short", timeStyle: "short" })}
-                </p>
-              </div>
-              <button
-                onClick={() => confirm(p.id, `${p.units} × ${p.med}`)}
-                className="bg-[oklch(0.18_0.06_260)] text-white px-3 py-1.5 rounded-md text-xs hover:bg-[oklch(0.25_0.08_260)] flex items-center gap-1.5"
-              >
-                <PackageCheck size={12} /> Confirm receipt
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 function HandoverLog() {
-  const { entries, add, remove, finalizeShift } = useHandover();
-  const rollups = useRollups();
+  const { entries, add, remove } = useHandover();
   const online = useOnline();
   const [shift, setShift] = useState<"Day" | "Night">("Day");
   const [patient, setPatient] = useState("");
@@ -131,15 +113,9 @@ function HandoverLog() {
     e.preventDefault();
     if (!note.trim()) return toast.error("Add a handover note first");
     add({ nurse, shift, patient: patient.trim() || undefined, note: note.trim() });
-    toast.success(online ? "Handover logged" : "Handover saved offline — will sync");
+    toast.success(online ? "Handover logged" : "Handover saved offline â€” will sync");
     setPatient("");
     setNote("");
-  };
-
-  const finalize = () => {
-    const r = finalizeShift(shift, nurse);
-    if (!r) return toast.error(`No ${shift.toLowerCase()}-shift entries to finalize`);
-    toast.success(`Shift finalized · ${r.entryCount} entries archived to audit log`);
   };
 
   return (
@@ -147,7 +123,7 @@ function HandoverLog() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="font-semibold">Shift Handover Log</h3>
-          <p className="text-xs text-muted-foreground">{summary.count} entries · {summary.patients} patients this {shift.toLowerCase()} shift</p>
+          <p className="text-xs text-muted-foreground">{summary.count} entries Â· {summary.patients} patients this {shift.toLowerCase()} shift</p>
         </div>
         <div className="flex items-center gap-2">
           <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}>
@@ -178,7 +154,7 @@ function HandoverLog() {
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Handover note (vitals, meds due, follow-up…)"
+          placeholder="Handover note (vitals, meds due, follow-upâ€¦)"
           className="px-3 py-2 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
         />
         <button className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)]">
@@ -197,7 +173,7 @@ function HandoverLog() {
               </span>
               <span className="text-xs px-2 py-0.5 rounded-full border shrink-0 mt-0.5">{e.shift}</span>
               <div className="flex-1 min-w-0">
-                <div className="font-medium">{e.patient ?? "General"} · <span className="text-muted-foreground font-normal">{e.nurse}</span></div>
+                <div className="font-medium">{e.patient ?? "General"} Â· <span className="text-muted-foreground font-normal">{e.nurse}</span></div>
                 <div className="text-muted-foreground">{e.note}</div>
               </div>
               <button onClick={() => remove(e.id)} className="text-muted-foreground hover:text-[oklch(0.55_0.2_25)]">
@@ -206,40 +182,6 @@ function HandoverLog() {
             </li>
           ))}
         </ul>
-      )}
-
-      <div className="mt-4 pt-4 border-t flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">
-          Finalizing packages this shift's notes into a permanent audit rollup.
-        </p>
-        <button
-          onClick={finalize}
-          disabled={summary.count === 0}
-          className="flex items-center gap-1.5 bg-[oklch(0.18_0.06_260)] text-white px-3 py-1.5 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
-        >
-          <ShieldCheck size={14} /> Finalize {shift} Shift
-        </button>
-      </div>
-
-      {rollups.length > 0 && (
-        <div className="mt-5 pt-5 border-t">
-          <p className="text-[11px] tracking-wider text-muted-foreground mb-2">AUDIT ROLLUPS · IMMUTABLE</p>
-          <ul className="space-y-2">
-            {rollups.slice(0, 4).map((r) => (
-              <li key={r.id} className="text-xs bg-secondary/40 rounded-md p-2.5">
-                <div className="flex justify-between">
-                  <span className="font-medium">{r.shift} shift · {r.nurse}</span>
-                  <span className="text-muted-foreground">
-                    {new Date(r.finalizedAt).toLocaleString("en-ZA", { dateStyle: "short", timeStyle: "short" })}
-                  </span>
-                </div>
-                <div className="text-muted-foreground mt-0.5">
-                  {r.entryCount} entries · {r.patientCount} patients
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
       )}
     </div>
   );

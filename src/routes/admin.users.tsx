@@ -14,23 +14,26 @@ function CreateUser() {
     password: "",
     role: "doctor" as StaffRole,
   });
+  const [saving, setSaving] = useState(false);
   const set = (k: keyof typeof form) => (v: any) => setForm({ ...form, [k]: v });
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.username || !form.password || !form.fullName) {
       toast.error("All fields are required");
       return;
     }
+    setSaving(true);
+    // New staff are bound to the facility the signed-in admin is scoped to.
     const fid = getUserFacility();
-    const res = addUser({
+    const res = await addUser({
       username: form.username.trim(),
       password: form.password,
       role: form.role,
       fullName: form.fullName.trim(),
       facilityId: fid ?? undefined,
-      createdAt: new Date().toISOString().slice(0, 10),
     });
+    setSaving(false);
     if (!res.ok) { toast.error(res.error || "Could not create user"); return; }
     toast.success(`${form.fullName} (${form.role}) created — login with username "${form.username}"`);
     setForm({ fullName: "", username: "", password: "", role: form.role });
@@ -40,7 +43,9 @@ function CreateUser() {
     <AppShell role="admin" title="Create User">
       <div className="max-w-2xl bg-white rounded-xl border p-6">
         <h2 className="font-semibold text-lg mb-1">New Staff Account</h2>
-        <p className="text-xs text-muted-foreground mb-1">Scope: <span className="font-medium">{facilityName(getUserFacility())}</span> — new accounts are bound to your facility.</p>
+        <p className="text-xs text-muted-foreground mb-1">
+          Scope: <span className="font-medium">{facilityName(getUserFacility())}</span> — new accounts are bound to your facility.
+        </p>
         <p className="text-sm text-muted-foreground mb-6">
           Patients are excluded — they are not hospital staff. Use this form for doctors, nurses, pharmacists and receptionists.
         </p>
@@ -82,8 +87,9 @@ function CreateUser() {
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={() => setForm({ fullName: "", username: "", password: "", role: "doctor" })}
               className="border px-4 py-2 rounded-md text-sm hover:bg-secondary">Reset</button>
-            <button type="submit" className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)]">
-              Create user
+            <button type="submit" disabled={saving}
+              className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60">
+              {saving ? "Creating..." : "Create user"}
             </button>
           </div>
         </form>

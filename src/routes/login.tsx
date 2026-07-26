@@ -43,21 +43,22 @@ function Login() {
     return () => clearInterval(id);
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
-    setTimeout(() => {
-      const user = checkCredentials(username, password);
-      if (!user) {
-        setError("Invalid credentials. Please try again.");
-        setLoading(false);
-        return;
-      }
-      const fac = user.facilityId ?? clinic;
-      if (user.role !== "super_admin" && user.role !== "patient") setActiveClinicId(fac as ClinicId);
-      navigate({ to: "/two-factor", search: { role: user.role, u: username.trim(), f: fac ?? "" } });
-    }, 500);
+    // Firebase Auth verifies the password; the role and assigned facility come
+    // from the user's Firestore profile.
+    const user = await checkCredentials(username, password);
+    if (!user) {
+      setError("Invalid credentials. Please try again.");
+      setLoading(false);
+      return;
+    }
+    // A profile-assigned facility wins; otherwise use the clinic picked above.
+    const fac = user.facilityId ?? clinic;
+    if (user.role !== "super_admin" && user.role !== "patient") setActiveClinicId(fac as ClinicId);
+    navigate({ to: "/two-factor", search: { role: user.role, u: username.trim(), f: fac ?? "" } });
   };
 
   const current = SLIDES[slide];

@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { getCustomUsers, removeUser, STAFF_ROLES, type StaffRole } from "@/lib/auth";
-import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Trash2, X, Stethoscope, Syringe, Pill, ClipboardList, Shield } from "lucide-react";
 
@@ -54,16 +55,23 @@ function defaultPermsFor(role: StaffRow["role"]) {
 const ROLE_ICON: Record<StaffRow["role"], any> = { doctor: Stethoscope, nurse: Syringe, pharmacist: Pill, receptionist: ClipboardList, admin: Shield };
 
 function Staff() {
-  const [users, setUsers] = useState(() => getCustomUsers());
+  const queryClient = useQueryClient();
+  // Staff accounts live in Firestore now, so loading is async.
+  const { data: users = [] } = useQuery({ queryKey: ["custom-users"], queryFn: getCustomUsers });
   const [roleFilter, setRoleFilter] = useState<StaffRow["role"] | "all">("all");
   const [selected, setSelected] = useState<StaffRow | null>(null);
-  useEffect(() => { setUsers(getCustomUsers()); }, []);
 
-  const del = (u: string) => {
-    removeUser(u);
-    setUsers(getCustomUsers());
-    toast.success(`Account "${u}" removed`);
-  };
+  const remove = useMutation({
+    mutationFn: (u: string) => removeUser(u),
+    onSuccess: (_, u) => {
+      toast.success(`Account "${u}" removed`);
+      queryClient.invalidateQueries({ queryKey: ["custom-users"] });
+      queryClient.invalidateQueries({ queryKey: ["profiles"] });
+    },
+    onError: () => toast.error("Could not remove account"),
+  });
+
+  const del = (u: string) => remove.mutate(u);
 
   const allRows: StaffRow[] = useMemo(() => {
     const builtIns: StaffRow[] = STAFF_ROLES.map((r) => ({

@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { useFacilities, registerFacility, removeFacility, type Facility } from "@/lib/facilities";
 import { addUser, getUsers, getUsername } from "@/lib/auth";
@@ -12,6 +13,8 @@ const KINDS: Facility["kind"][] = ["Public Hospital", "Private Hospital", "Clini
 
 function SuperFacilities() {
   const facilities = useFacilities();
+  // Accounts now live in Firestore, so the admin-per-facility lookup is async.
+  const { data: users = [] } = useQuery({ queryKey: ["profiles"], queryFn: getUsers });
   const [form, setForm] = useState({ name: "", area: "", kind: "Public Hospital" as Facility["kind"] });
   const [assign, setAssign] = useState<{ open: boolean; facility: Facility | null }>({ open: false, facility: null });
 
@@ -77,7 +80,7 @@ function SuperFacilities() {
             </thead>
             <tbody>
               {facilities.map((f) => {
-                const admins = getUsers().filter((u) => u.role === "admin" && u.facilityId === f.id);
+                const admins = users.filter((u) => u.role === "admin" && u.facilityId === f.id);
                 return (
                   <tr key={f.id} className="border-b last:border-0">
                     <td className="px-5 py-3 font-medium">
@@ -111,21 +114,32 @@ function SuperFacilities() {
 }
 
 function AssignAdmin({ facility, onClose }: { facility: Facility; onClose: () => void }) {
+  const queryClient = useQueryClient();
   const [form, setForm] = useState({ fullName: "", username: "", password: "" });
+
+  // Creates a real Firebase Auth account + Firestore profile scoped to this facility.
+  const assign = useMutation({
+    mutationFn: () =>
+      addUser({
+        username: form.username.trim().toLowerCase(),
+        password: form.password,
+        role: "admin",
+        fullName: form.fullName.trim(),
+        facilityId: facility.id,
+      }),
+    onSuccess: (res) => {
+      if (!res.ok) { toast.error(res.error || "Could not assign"); return; }
+      toast.success(`Assigned ${form.fullName} as Admin of ${facility.name}`);
+      queryClient.invalidateQueries({ queryKey: ["profiles"] });
+      onClose();
+    },
+    onError: () => toast.error("Could not assign facility admin"),
+  });
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.fullName || !form.username || !form.password) { toast.error("All fields required"); return; }
-    const res = addUser({
-      username: form.username.trim().toLowerCase(),
-      password: form.password,
-      role: "admin",
-      fullName: form.fullName.trim(),
-      facilityId: facility.id,
-      createdAt: new Date().toISOString().slice(0, 10),
-    });
-    if (!res.ok) { toast.error(res.error || "Could not assign"); return; }
-    toast.success(`Assigned ${form.fullName} as Admin of ${facility.name}`);
-    onClose();
+    assign.mutate();
   };
   return (
     <div className="fixed inset-0 z-50 flex">
@@ -140,7 +154,9 @@ function AssignAdmin({ facility, onClose }: { facility: Facility; onClose: () =>
           <Field label="Password"><input required type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="w-full border rounded-md px-3 py-2 text-sm" /></Field>
           <div className="flex gap-2 pt-2">
             <button type="button" onClick={onClose} className="flex-1 border py-2 rounded-md text-sm">Cancel</button>
-            <button type="submit" className="flex-1 bg-[oklch(0.18_0.06_260)] text-white py-2 rounded-md text-sm">Assign</button>
+            <button type="submit" disabled={assign.isPending} className="flex-1 bg-[oklch(0.18_0.06_260)] text-white py-2 rounded-md text-sm disabled:opacity-60">
+              {assign.isPending ? "Assigning…" : "Assign"}
+            </button>
           </div>
         </form>
       </div>

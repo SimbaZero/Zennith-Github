@@ -1,37 +1,70 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+﻿import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell, StatusBadge } from "@/components/AppShell";
-import { appointments } from "@/lib/data";
+import { fetchDoctorDashboard } from "@/lib/clinic-data";
 import { FileText, CalendarPlus, CalendarDays } from "lucide-react";
 
 export const Route = createFileRoute("/doctor/")({ component: DoctorDashboard });
 
 function DoctorDashboard() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["doctor-dashboard"],
+    queryFn: fetchDoctorDashboard,
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const scheduleLabel =
+    !data || data.scheduleDate === today ? "Today's Schedule" : `Schedule Â· ${data.scheduleDate}`;
+
   return (
     <AppShell role="doctor" title="Doctor Dashboard" showBack={false}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <Stat label="TODAY APPOINTMENTS" value="4" sub="3 confirmed" />
-        <Stat label="PENDING REVIEWS" value="3" sub="Lab results" />
-        <Stat label="PATIENTS THIS WEEK" value="18" sub="vs 16 last week" />
-        <Stat label="FOLLOW-UPS DUE" value="7" sub="Next 7 days" />
+        <Stat
+          label="APPOINTMENTS"
+          value={data ? String(data.stats.dayTotal) : "â€”"}
+          sub={data ? `${data.stats.dayCompleted} completed` : "loadingâ€¦"}
+        />
+        <Stat
+          label="PENDING REVIEWS"
+          value={data ? String(data.stats.pendingReviews) : "â€”"}
+          sub="Review appointments open"
+        />
+        <Stat
+          label="PATIENTS THIS WEEK"
+          value={data ? String(data.stats.weekPatients) : "â€”"}
+          sub="Unique patients, 7 days"
+        />
+        <Stat
+          label="UPCOMING"
+          value={data ? String(data.stats.upcoming) : "â€”"}
+          sub="Future appointments"
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-xl border p-5">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold">Today's Schedule</h3>
-            <Link to="/doctor/schedule" className="text-sm text-[oklch(0.55_0.18_245)] hover:underline">View all →</Link>
+            <h3 className="font-semibold">{scheduleLabel}</h3>
+            <Link to="/doctor/schedule" className="text-sm text-[oklch(0.55_0.18_245)] hover:underline">View all â†’</Link>
           </div>
           <div className="space-y-2">
-            {appointments.slice(0, 4).map((a) => (
-              <div key={a.time} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2" style={{ borderColor: a.status === "Complete" || a.status === "In-progress" ? "oklch(0.6 0.15 160)" : a.status === "No-show" ? "oklch(0.55 0.22 25)" : "oklch(0.75 0.15 70)" }}>
+            {isLoading && <p className="text-sm text-muted-foreground py-6 text-center">Loading scheduleâ€¦</p>}
+            {isError && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
+            {data?.schedule.map((a) => (
+              <div key={a.id} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2" style={{ borderColor: a.status === "Complete" || a.status === "In-progress" ? "oklch(0.6 0.15 160)" : a.status === "No-show" ? "oklch(0.55 0.22 25)" : "oklch(0.75 0.15 70)" }}>
                 <div className="font-mono text-sm font-semibold w-12">{a.time}</div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">{a.patient}</div>
-                  <div className="text-xs text-muted-foreground truncate">{a.note} · {a.type}</div>
+                  <div className="font-medium text-sm truncate">{a.patientName}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {[a.condition, a.type].filter(Boolean).join(" Â· ")}
+                  </div>
                 </div>
                 <StatusBadge status={a.status} />
               </div>
             ))}
+            {data && data.schedule.length === 0 && (
+              <p className="text-sm text-muted-foreground py-6 text-center">No appointments found for {data.doctorId}.</p>
+            )}
           </div>
         </div>
 
@@ -50,9 +83,9 @@ function DoctorDashboard() {
           </div>
           <div className="mt-5 pt-5 border-t">
             <p className="text-[11px] tracking-wider text-muted-foreground mb-2">THIS WEEK</p>
-            <Row label="Patients seen" value="18" />
-            <Row label="Avg consultation" value="22m" />
-            <Row label="Follow-ups scheduled" value="9" />
+            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "â€”"} />
+            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "â€”"} />
+            <Row label="Clinician" value={data?.doctorId ?? "â€”"} />
           </div>
         </div>
       </div>

@@ -1,79 +1,104 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+﻿import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { fetchPatientPage, findPatient } from "@/lib/clinic-data";
 import { useState } from "react";
-import { UserPlus } from "lucide-react";
-import { useAllPatients, registerPatient } from "@/lib/store";
-import { toast } from "sonner";
+import { useAdherence, today } from "@/lib/adherence";
+import { useOnline } from "@/lib/offline";
+import { Wifi, WifiOff, CheckCircle2, Circle } from "lucide-react";
 
 export const Route = createFileRoute("/nurse/patients")({ component: NursePatients });
 
-function NursePatients() {
+const MEDS_BY_CONDITION: Record<string, string[]> = {
+  HIV: ["TLD", "Efavirenz"],
+  AIDS: ["TLD", "Cotrimoxazole"],
+  TB: ["Rifafour", "Isoniazid"],
+  Hypertension: ["Amlodipine", "Enalapril"],
+  "Diabetes Type 2": ["Metformin", "Glimepiride"],
+  Cardiac: ["Aspirin", "Atorvastatin"],
+  "Chronic Kidney Disease": ["Furosemide", "Erythropoietin"],
+};
+
+function AdherenceCell({ pid, condition }: { pid: string; condition: string }) {
+  const { forToday, setTaken } = useAdherence(pid);
+  const meds = MEDS_BY_CONDITION[condition] ?? [];
+  if (meds.length === 0) return <span className="text-xs text-muted-foreground">â€”</span>;
   return (
-    <AppShell role="nurse" title="Patient Files">
-      <PatientFilesTable recordBase="/nurse/patient-record" />
-    </AppShell>
+    <div className="flex flex-wrap gap-1.5">
+      {meds.map((m) => {
+        const taken = !!forToday[m];
+        return (
+          <button
+            key={m}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTaken(m, !taken); }}
+            title={`${m} â€” ${today()}`}
+            className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${taken ? "bg-[oklch(0.95_0.08_160)] border-[oklch(0.7_0.15_160)] text-[oklch(0.35_0.15_160)]" : "hover:bg-secondary text-muted-foreground"}`}
+          >
+            {taken ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+            {m}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
-export function PatientFilesTable({ recordBase = "/nurse/patient-record" }: { recordBase?: string }) {
-  const [q, setQ] = useState("");
-  const [showReg, setShowReg] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newCondition, setNewCondition] = useState("Hypertension");
-  const all = useAllPatients();
-  const filtered = all.filter(
-    (p) => p.name.toLowerCase().includes(q.toLowerCase()) || p.id.toLowerCase().includes(q.toLowerCase()),
+function NursePatients() {
+  const online = useOnline();
+  return (
+    <AppShell role="nurse" title="Patient Files">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}>
+          {online ? <Wifi size={12} /> : <WifiOff size={12} />}
+          {online ? "Online" : "Offline â€” adherence saved locally"}
+        </span>
+        <span className="text-xs text-muted-foreground">Tap a medication badge to log today's dose (chronic-care).</span>
+      </div>
+      <PatientFilesTable recordBase="/nurse/patient-record" showAdherence />
+    </AppShell>
   );
-  const doRegister = () => {
-    const name = newName.trim();
-    if (!name) return;
-    const rec = registerPatient({ name, condition: newCondition });
-    toast.success(`Registered ${rec.name} — ${rec.id}`);
-    setNewName(""); setShowReg(false); setQ(name);
-  };
+}
+export { AdherenceCell };
+
+export function PatientFilesTable({ recordBase = "/nurse/patient-record", showAdherence = false }: { recordBase?: string; showAdherence?: boolean }) {
+  const [q, setQ] = useState("");
+
+  const { data: page = [], isLoading } = useQuery({
+    queryKey: ["patients-page"],
+    queryFn: fetchPatientPage,
+  });
+
+  // Exact patient-ID search hits Firestore directly (the dataset holds
+  // thousands of patients; only the first page is loaded for browsing).
+  const idQuery = /^pat-\d+$/i.test(q.trim()) ? `Pat-${q.trim().match(/\d+/)![0]}` : null;
+  const { data: found } = useQuery({
+    queryKey: ["patient-find", idQuery],
+    queryFn: () => findPatient(idQuery!),
+    enabled: !!idQuery,
+  });
+
+  const filtered = idQuery
+    ? (found ? [found] : [])
+    : page.filter(
+        (p) => p.name.toLowerCase().includes(q.toLowerCase()) || p.patientId.toLowerCase().includes(q.toLowerCase()),
+      );
+
   return (
     <div className="bg-white rounded-xl border overflow-hidden">
-      <div className="flex items-center justify-between p-5 border-b gap-3 flex-wrap">
-        <h3 className="font-semibold">Patient Files</h3>
-        <div className="flex items-center gap-2">
-          <input
-            placeholder="Search name or ID..."
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-64"
-          />
-          <button onClick={() => setShowReg((v) => !v)} className="inline-flex items-center gap-1.5 bg-[oklch(0.18_0.06_260)] text-white px-3 py-1.5 rounded-md text-xs hover:bg-[oklch(0.25_0.08_260)]">
-            <UserPlus size={12} /> Register new
-          </button>
+      <div className="flex items-center justify-between p-5 border-b">
+        <div>
+          <h3 className="font-semibold">Patient Files</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {isLoading ? "Loading patientsâ€¦" : "Browsing first 30 â€” search a Patient ID (e.g. Pat-828) for anyone else"}
+          </p>
         </div>
+        <input
+          placeholder="Search name or Pat-###â€¦"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-64"
+        />
       </div>
-      {showReg && (
-        <div className="p-5 border-b bg-secondary/30 grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
-          <div>
-            <label className="text-[10px] tracking-wider text-muted-foreground uppercase block mb-1">Full name</label>
-            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Thandi Mokoena" className="w-full border rounded-md px-3 py-2 text-sm bg-white" />
-          </div>
-          <div>
-            <label className="text-[10px] tracking-wider text-muted-foreground uppercase block mb-1">Primary condition</label>
-            <select value={newCondition} onChange={(e) => setNewCondition(e.target.value)} className="w-full border rounded-md px-3 py-2 text-sm bg-white">
-              {["Hypertension","Diabetes Type 2","HIV","TB","Cardiac","Chronic Kidney Disease","Asthma","None"].map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-          <button onClick={doRegister} disabled={!newName.trim()} className="bg-[oklch(0.5_0.18_160)] disabled:opacity-50 text-white px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.45_0.18_160)]">
-            Add patient
-          </button>
-        </div>
-      )}
-      {filtered.length === 0 && q.trim() && !showReg && (
-        <div className="p-5 text-sm text-muted-foreground flex items-center justify-between gap-3">
-          <span>No patient matches "{q}".</span>
-          <button onClick={() => { setNewName(q); setShowReg(true); }} className="inline-flex items-center gap-1.5 border px-3 py-1.5 rounded-md text-xs hover:bg-secondary">
-            <UserPlus size={12} /> Register "{q}"
-          </button>
-        </div>
-      )}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -81,20 +106,24 @@ export function PatientFilesTable({ recordBase = "/nurse/patient-record" }: { re
               <th className="px-5 py-3 font-medium">Patient ID</th>
               <th className="px-5 py-3 font-medium">Name</th>
               <th className="px-5 py-3 font-medium">Condition</th>
+              {showAdherence && <th className="px-5 py-3 font-medium">Today's meds</th>}
               <th className="px-5 py-3 font-medium">Last Visit</th>
               <th className="px-5 py-3" />
             </tr>
           </thead>
           <tbody>
             {filtered.map((p) => (
-              <tr key={p.id} className="border-t hover:bg-secondary/40">
-                <td className="px-5 py-3.5 text-muted-foreground">{p.id}</td>
+              <tr key={p.patientId} className="border-t hover:bg-secondary/40">
+                <td className="px-5 py-3.5 text-muted-foreground">{p.patientId}</td>
                 <td className="px-5 py-3.5 font-medium">{p.name}</td>
                 <td className="px-5 py-3.5">{p.condition}</td>
+                {showAdherence && (
+                  <td className="px-5 py-3.5"><AdherenceCell pid={p.patientId} condition={p.condition} /></td>
+                )}
                 <td className="px-5 py-3.5 text-muted-foreground">{p.lastVisit}</td>
                 <td className="px-5 py-3.5 text-right">
                   <Link
-                    to={`${recordBase}/${p.id}` as any}
+                    to={`${recordBase}/${p.patientId}` as any}
                     className="border px-3 py-1 rounded-md text-xs hover:bg-secondary"
                   >
                     View
@@ -102,6 +131,13 @@ export function PatientFilesTable({ recordBase = "/nurse/patient-record" }: { re
                 </td>
               </tr>
             ))}
+            {!isLoading && filtered.length === 0 && (
+              <tr>
+                <td colSpan={showAdherence ? 6 : 5} className="px-5 py-8 text-center text-muted-foreground">
+                  {idQuery ? `No patient with ID "${idQuery}".` : "No matching patients in the loaded page â€” try an exact Pat-### ID."}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
