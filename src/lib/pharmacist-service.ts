@@ -235,3 +235,136 @@ export function useRecentDistributions(max = 20): DistributionRecord[] {
 
   return records;
 }
+
+export interface PatientDirectoryEntry {
+  patientId: string; // e.g. "Pat-1" — also the Firestore doc ID
+  fullName: string;
+  medicalRecordNo?: number;
+  chronicCondition?: string;
+}
+
+/**
+ * Loads a searchable patient directory by joining `patients` + `users` in
+ * memory. Patients don't store a name directly (schema links them to
+ * `users` by a numeric userId) — this does two collection reads total,
+ * then joins them, rather than one read per patient.
+ */
+export function usePatientDirectory(): {
+  patients: PatientDirectoryEntry[];
+  loading: boolean;
+} {
+  const [patients, setPatients] = useState<PatientDirectoryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const [patientsSnap, usersSnap] = await Promise.all([
+          getDocs(collection(db, "patients")),
+          getDocs(collection(db, "users")),
+        ]);
+
+        // Build a quick lookup: userId (number) -> full name.
+        const userNameById = new Map<number, string>();
+        usersSnap.docs.forEach((d) => {
+          const u = d.data();
+          userNameById.set(
+            u.userId,
+            `${u.names ?? ""} ${u.surname ?? ""}`.trim(),
+          );
+        });
+
+        const joined: PatientDirectoryEntry[] = patientsSnap.docs.map((d) => {
+          const p = d.data();
+          return {
+            patientId: p.patientId ?? d.id,
+            fullName: userNameById.get(p.userId) || "Unknown patient",
+            medicalRecordNo: p.medicalRecordNo,
+            chronicCondition: p.chronicCondition,
+          };
+        });
+
+        if (!cancelled) {
+          setPatients(joined);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error("Failed to load patient directory:", err);
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { patients, loading };
+}
+
+/**
+ * Fetches just the prescription text for a patient, by their medicalRecordNo.
+ * Deliberately returns ONLY the prescription — not allergies, blood pressure,
+ * glucose, etc. — matching the existing UI's privacy design (pharmacists see
+ * what to dispense, not the patient's full clinical history).
+ */
+export async function getPrescriptionForPatient(
+  medicalRecordNo: number,
+): Promise<string | null> {
+  const snap = await getDoc(doc(db, "medicalRecords", String(medicalRecordNo)));
+  if (!snap.exists()) return null;
+  return snap.data().prescription ?? null;
+}
+
+/**
+ * Live-computes a real 7-day dispensing trend per medication, from actual
+ * `distributions` records — replaces the old fake/random sparkline data.
+ *
+ * Note: this measures "units dispensed per day" (usage rate), not "units on
+ * hand per day" like the old fake version did — a rising trend now means
+ * consumption is speeding up (useful for spotting meds that'll run out
+ * sooner than expected), which is arguably a more useful predictive signal
+ * anyway. If a medication has no distribution activity in the last 7 days,
+ * its trend will correctly show as flat zero — that's real data, not a bug,
+ * though it may look sparse until more distributions have been recorded.
+ */
+export function useMedicationDispenseTrends(): Record<string, number[]> {
+  const [trends, setTrends] = useState<Record<string, number[]>>({});
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "distributions"),
+      (snapshot) => {
+        // Build the last 7 calendar days (oldest first, today last).
+        const days: string[] = [];
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          days.push(d.toISOString().slice(0, 10));
+        }
+
+        const byMed: Record<string, number[]> = {};
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          const medName = data.medName as string;
+          const date = data.date as string;
+          const units = toNumber(data.unitsGiven);
+          const dayIndex = days.indexOf(date);
+          if (dayIndex === -1) return; // outside the last 7 days
+
+          if (!byMed[medName]) byMed[medName] = new Array(7).fill(0);
+          byMed[medName][dayIndex] += units;
+        });
+
+        setTrends(byMed);
+      },
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  return trends;
+}
