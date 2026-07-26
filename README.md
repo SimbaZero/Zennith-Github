@@ -202,6 +202,8 @@ Zennith/
 | **macOS / Linux / Ubuntu (WSL included)** | `curl -fsSL https://bun.sh/install \| bash` then restart your terminal (or run `source ~/.bashrc`) |
 | **Windows** | `powershell -c "irm bun.sh/install.ps1 \| iex"` (run in PowerShell) |
 
+VERY CRITICAL : PLEASE KILL TERMINAL AND CLOSE VS CODE AFTER SUCCESSFULLY RUNNING THE COMMAND
+
 Verify it worked:
 ```bash
 bun --version
