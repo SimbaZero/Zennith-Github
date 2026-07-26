@@ -7,9 +7,10 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/patient/appointments")({
   component: PatientAppointments,
-  validateSearch: (s: Record<string, unknown>) => ({
-    confirm: typeof s.confirm === "string" ? s.confirm : undefined,
-  }),
+  // `confirm` must be genuinely optional — returning it as a required key whose
+  // type includes undefined makes `search` mandatory on every Link to this route.
+  validateSearch: (s: Record<string, unknown>): { confirm?: string } =>
+    typeof s.confirm === "string" ? { confirm: s.confirm } : {},
 });
 
 type LocalStatus = "Confirmed" | "Cancelled" | null;
