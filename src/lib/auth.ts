@@ -33,7 +33,12 @@ export type Role =
   | "super_admin";
 
 export type StaffRole = Exclude<Role, "patient" | "super_admin">;
-export const STAFF_ROLES: StaffRole[] = ["doctor", "nurse", "pharmacist", "receptionist"];
+export const STAFF_ROLES: StaffRole[] = [
+  "doctor",
+  "nurse",
+  "pharmacist",
+  "receptionist",
+];
 
 const KEY = "zennith_auth";
 const NAME_KEY = "zennith_username";
@@ -51,7 +56,9 @@ const ROLES: Role[] = [
 // usernames without "@" map to this domain: "doctor" -> doctor@zennith.test
 const TEST_DOMAIN = "zennith.test";
 const toEmail = (username: string) =>
-  username.includes("@") ? username.trim().toLowerCase() : `${username.trim().toLowerCase()}@${TEST_DOMAIN}`;
+  username.includes("@")
+    ? username.trim().toLowerCase()
+    : `${username.trim().toLowerCase()}@${TEST_DOMAIN}`;
 
 // password is only used as INPUT to addUser — it is never stored in Firestore
 export interface StoredUser {
@@ -77,10 +84,14 @@ const USERS = "profiles";
  *  facility, if any) from the user's Firestore profile. */
 export async function checkCredentials(
   username: string,
-  password: string
+  password: string,
 ): Promise<{ role: Role; facilityId?: string | null } | null> {
   try {
-    const cred = await signInWithEmailAndPassword(auth, toEmail(username), password);
+    const cred = await signInWithEmailAndPassword(
+      auth,
+      toEmail(username),
+      password,
+    );
     const snap = await getDoc(doc(db, USERS, cred.user.uid));
     if (!snap.exists()) {
       console.warn("Auth OK but no Firestore profile for uid:", cred.user.uid);
@@ -123,12 +134,15 @@ export async function addUser(u: {
   fullName?: string;
   facilityId?: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const secondary = initializeApp(firebaseConfig, `user-creation-${Date.now()}`);
+  const secondary = initializeApp(
+    firebaseConfig,
+    `user-creation-${Date.now()}`,
+  );
   try {
     const cred = await createUserWithEmailAndPassword(
       getFbAuth(secondary),
       toEmail(u.username),
-      u.password
+      u.password,
     );
     await setDoc(doc(getFirestore(secondary), USERS, cred.user.uid), {
       username: u.username.trim().toLowerCase(),
@@ -151,9 +165,15 @@ export async function addUser(u: {
     if (err.code === "auth/weak-password")
       return { ok: false, error: "Password must be at least 6 characters" };
     if (err.code === "auth/operation-not-allowed")
-      return { ok: false, error: "Email/Password sign-in is not enabled in Firebase" };
+      return {
+        ok: false,
+        error: "Email/Password sign-in is not enabled in Firebase",
+      };
     console.error("addUser failed:", err.code, err.message);
-    return { ok: false, error: `Could not create account (${err.code ?? err.message ?? "unknown"})` };
+    return {
+      ok: false,
+      error: `Could not create account (${err.code ?? err.message ?? "unknown"})`,
+    };
   } finally {
     await deleteApp(secondary);
   }
@@ -166,10 +186,11 @@ export async function removeUser(username: string): Promise<void> {
   try {
     const q = query(
       collection(db, USERS),
-      where("username", "==", username.trim().toLowerCase())
+      where("username", "==", username.trim().toLowerCase()),
     );
     const snap = await getDocs(q);
-    const facilityId = (snap.docs[0]?.data()?.facilityId as string | undefined) ?? null;
+    const facilityId =
+      (snap.docs[0]?.data()?.facilityId as string | undefined) ?? null;
     await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
     logAction({
       facility_id: facilityId,
@@ -199,9 +220,25 @@ export async function saveTotpSecret(secret: string): Promise<void> {
   await updateDoc(doc(db, USERS, uid), { totpSecret: secret });
 }
 
+/**
+ * Clears the stored TOTP secret so the account can re-enroll a new
+ * authenticator (e.g. lost phone, deleted the authenticator app).
+ * Safe to expose here because reaching this screen already required a
+ * correct email + password — this is a recovery step, not a bypass.
+ */
+export async function resetTotpSecret(): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Not signed in");
+  await updateDoc(doc(db, USERS, uid), { totpSecret: null });
+}
+
 /* ================= SESSION (localStorage cache for route guards) ================= */
 
-export function setAuth(role: Role, username?: string, facilityId?: string | null) {
+export function setAuth(
+  role: Role,
+  username?: string,
+  facilityId?: string | null,
+) {
   if (typeof window === "undefined") return;
   localStorage.setItem(KEY, role);
   if (username) localStorage.setItem(NAME_KEY, username);
@@ -254,12 +291,19 @@ export function displayNameFor(role: Role, username: string): string {
   }
   const name = cap(username);
   switch (role) {
-    case "doctor":       return `Dr. ${name}`;
-    case "nurse":        return `Nurse ${name}`;
-    case "pharmacist":   return `Pharm. ${name}`;
-    case "receptionist": return `Reception ${name}`;
-    case "admin":        return `Admin ${name}`;
-    case "super_admin":  return `${name} (Platform)`;
-    case "patient":      return name;
+    case "doctor":
+      return `Dr. ${name}`;
+    case "nurse":
+      return `Nurse ${name}`;
+    case "pharmacist":
+      return `Pharm. ${name}`;
+    case "receptionist":
+      return `Reception ${name}`;
+    case "admin":
+      return `Admin ${name}`;
+    case "super_admin":
+      return `${name} (Platform)`;
+    case "patient":
+      return name;
   }
 }

@@ -3,13 +3,31 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AuthBackground } from "@/components/AuthBackground";
-import { setAuth, fetchTotpSecret, saveTotpSecret, type Role } from "@/lib/auth";
-import { generateSecret, verifyTotp, otpauthUrl, formatSecret } from "@/lib/totp";
+import {
+  setAuth,
+  fetchTotpSecret,
+  saveTotpSecret,
+  resetTotpSecret,
+  type Role,
+} from "@/lib/auth";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  generateSecret,
+  verifyTotp,
+  otpauthUrl,
+  formatSecret,
+} from "@/lib/totp";
 
 export const Route = createFileRoute("/two-factor")({
   validateSearch: (s: Record<string, unknown>) => {
     const allowed: Role[] = [
-      "doctor", "nurse", "patient", "pharmacist", "receptionist", "admin", "super_admin",
+      "doctor",
+      "nurse",
+      "patient",
+      "pharmacist",
+      "receptionist",
+      "admin",
+      "super_admin",
     ];
     const r = allowed.includes(s.role as Role) ? (s.role as Role) : "nurse";
     const username = typeof s.u === "string" ? (s.u as string) : "";
@@ -23,6 +41,20 @@ export const Route = createFileRoute("/two-factor")({
 function TwoFactor() {
   const { role, u, f } = Route.useSearch();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [resetting, setResetting] = useState(false);
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      await resetTotpSecret();
+      await queryClient.invalidateQueries({ queryKey: ["totp-secret", u] });
+    } catch (err) {
+      console.error(err);
+      setError("Couldn't reset 2FA. Please try again.");
+    } finally {
+      setResetting(false);
+    }
+  };
   const [digits, setDigits] = useState(["", "", "", "", "", ""]);
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
@@ -48,13 +80,18 @@ function TwoFactor() {
     (async () => {
       try {
         const { default: QRCode } = await import("qrcode");
-        const url = await QRCode.toDataURL(otpauthUrl(secret, u || "zennith"), { width: 192, margin: 1 });
+        const url = await QRCode.toDataURL(otpauthUrl(secret, u || "zennith"), {
+          width: 192,
+          margin: 1,
+        });
         if (alive) setQrDataUrl(url);
       } catch {
         /* falls back to the manual key below */
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [enrolling, secret, u]);
 
   const update = (i: number, v: string) => {
@@ -107,10 +144,12 @@ function TwoFactor() {
 
         {enrolling && (
           <div className="mb-5 rounded-lg border bg-secondary/40 p-4 text-sm space-y-3">
-            <p className="font-medium">1 · Scan this QR code with your authenticator app</p>
+            <p className="font-medium">
+              1 · Scan this QR code with your authenticator app
+            </p>
             <p className="text-xs text-muted-foreground">
-              Open Google Authenticator (or Authy, Microsoft Authenticator…) → add account →
-              <strong> Scan a QR code</strong>.
+              Open Google Authenticator (or Authy, Microsoft Authenticator…) →
+              add account →<strong> Scan a QR code</strong>.
             </p>
             <div className="flex justify-center">
               {qrDataUrl ? (
@@ -132,13 +171,16 @@ function TwoFactor() {
                 Can't scan? Enter the key manually
               </summary>
               <p className="mt-2">
-                Add account → "Enter a setup key" for <strong>{u || "zennith"}</strong>:
+                Add account → "Enter a setup key" for{" "}
+                <strong>{u || "zennith"}</strong>:
               </p>
               <p className="font-mono text-center text-sm tracking-wider bg-white border rounded-md py-2 px-3 mt-1 select-all">
                 {formatSecret(secret)}
               </p>
             </details>
-            <p className="font-medium pt-1">2 · Enter the 6-digit code the app shows to finish setup</p>
+            <p className="font-medium pt-1">
+              2 · Enter the 6-digit code the app shows to finish setup
+            </p>
           </div>
         )}
 
@@ -147,11 +189,14 @@ function TwoFactor() {
             {digits.map((d, i) => (
               <input
                 key={i}
-                ref={(el) => { refs.current[i] = el; }}
+                ref={(el) => {
+                  refs.current[i] = el;
+                }}
                 value={d}
                 onChange={(e) => update(i, e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Backspace" && !digits[i] && i > 0) refs.current[i - 1]?.focus();
+                  if (e.key === "Backspace" && !digits[i] && i > 0)
+                    refs.current[i - 1]?.focus();
                 }}
                 maxLength={1}
                 inputMode="numeric"
@@ -159,12 +204,20 @@ function TwoFactor() {
               />
             ))}
           </div>
-          {error && <p className="text-sm text-destructive text-center">{error}</p>}
+          {error && (
+            <p className="text-sm text-destructive text-center">{error}</p>
+          )}
           <button
             disabled={checking || isLoading}
             className="w-full bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60"
           >
-            {isLoading ? "Loading…" : checking ? "Verifying…" : enrolling ? "Activate & sign in" : "Verify"}
+            {isLoading
+              ? "Loading…"
+              : checking
+                ? "Verifying…"
+                : enrolling
+                  ? "Activate & sign in"
+                  : "Verify"}
           </button>
           <button
             type="button"
@@ -174,6 +227,18 @@ function TwoFactor() {
             Back to sign in
           </button>
         </form>
+        {!enrolling && (
+          <button
+            type="button"
+            onClick={handleReset}
+            disabled={resetting}
+            className="w-full text-xs text-muted-foreground hover:text-foreground mt-2 underline disabled:opacity-50"
+          >
+            {resetting
+              ? "Resetting…"
+              : "Lost your authenticator? Reset 2FA for this account"}
+          </button>
+        )}
       </div>
     </AuthBackground>
   );
