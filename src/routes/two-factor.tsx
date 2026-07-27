@@ -236,7 +236,7 @@ function TwoFactor() {
           >
             {resetting
               ? "Resetting…"
-              : "Lost your authenticator? Reset 2FA for this account"}
+              : "Lost your authenticator? Reset 2FA (dev/testing only — remove before production)"}
           </button>
         )}
       </div>

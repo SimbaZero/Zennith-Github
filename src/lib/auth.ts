@@ -5,6 +5,7 @@ import { initializeApp, deleteApp } from "firebase/app";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut as fbSignOut,
   getAuth as getFbAuth,
 } from "firebase/auth";
@@ -85,7 +86,11 @@ const USERS = "profiles";
 export async function checkCredentials(
   username: string,
   password: string,
-): Promise<{ role: Role; facilityId?: string | null } | null> {
+): Promise<{
+  role: Role;
+  facilityId?: string | null;
+  legacyUserId?: number | null;
+} | null> {
   try {
     const cred = await signInWithEmailAndPassword(
       auth,
@@ -100,10 +105,26 @@ export async function checkCredentials(
     const data = snap.data();
     const role = data.role as Role;
     if (!ROLES.includes(role)) return null;
-    return { role, facilityId: data.facilityId ?? null };
+    return {
+      role,
+      facilityId: data.facilityId ?? null,
+      legacyUserId: data.legacyUserId ?? null,
+    };
   } catch (err: any) {
     console.error("Login failed:", err.code);
     return null;
+  }
+}
+
+/** Sends a real Firebase password reset email. Always resolves (never
+ *  reveals whether the email exists, for security). */
+export async function sendPasswordReset(email: string): Promise<void> {
+  try {
+    await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+  } catch (err) {
+    console.warn("sendPasswordReset:", err);
+    // Deliberately swallow errors here too — same "don't reveal if the
+    // account exists" reasoning as the UI message itself.
   }
 }
 

@@ -3,6 +3,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   updateDoc,
@@ -20,7 +21,21 @@ import { db } from "@/lib/firebase";
 // else in the patient pages needs to change.
 // ---------------------------------------------------------------------------
 export function getCurrentPatientId(): string {
-  return "Pat-2";
+  if (typeof window !== "undefined") {
+    const stored = localStorage.getItem("zennith_current_patient_id");
+    if (stored) return stored;
+  }
+  return "Pat-2"; // fallback/demo default when no one's really logged in
+}
+
+export async function getPatientIdForUserId(
+  userId: number,
+): Promise<string | null> {
+  const snap = await getDocs(
+    query(collection(db, "patients"), where("userId", "==", userId)),
+  );
+  if (snap.empty) return null;
+  return snap.docs[0].data().patientId ?? snap.docs[0].id;
 }
 
 export interface CurrentPatient {
