@@ -1,47 +1,71 @@
 import { createFileRoute, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { AppShell, StatusBadge } from "@/components/AppShell";
-import { currentPatient, patientAppointments } from "@/lib/data";
+import { useEffect, useRef } from "react";
+import { AppShell } from "@/components/AppShell";
+import {
+  useCurrentPatient,
+  usePatientAppointments,
+  updateAppointmentStatus,
+} from "@/lib/patient-service";
 import { Check, X } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/patient/appointments")({
   component: PatientAppointments,
-  // `confirm` must be genuinely optional — returning it as a required key whose
-  // type includes undefined makes `search` mandatory on every Link to this route.
-  validateSearch: (s: Record<string, unknown>): { confirm?: string } =>
-    typeof s.confirm === "string" ? { confirm: s.confirm } : {},
+  validateSearch: (s: Record<string, unknown>) => ({
+    confirm: typeof s.confirm === "string" ? s.confirm : undefined,
+  }),
 });
 
-type LocalStatus = "Confirmed" | "Cancelled" | null;
-const KEY = "zennith_patient_appt_status";
-
-function loadStatuses(): Record<string, LocalStatus> {
-  if (typeof window === "undefined") return {};
-  try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { return {}; }
-}
-function saveStatuses(s: Record<string, LocalStatus>) {
-  if (typeof window !== "undefined") localStorage.setItem(KEY, JSON.stringify(s));
+function AppointmentStatusBadge({ status }: { status: string }) {
+  const color =
+    status === "Cancelled"
+      ? "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]"
+      : status === "Confirmed" || status === "Completed"
+        ? "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]"
+        : "bg-[oklch(0.96_0.05_245)] text-[oklch(0.4_0.15_245)]"; // Scheduled / default
+  return (
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${color}`}>
+      {status}
+    </span>
+  );
 }
 
 function PatientAppointments() {
   const { confirm } = useSearch({ from: "/patient/appointments" });
-  const [statuses, setStatuses] = useState<Record<string, LocalStatus>>({});
+  const { patient } = useCurrentPatient();
+  const appointments = usePatientAppointments(patient?.patientId);
 
-  useEffect(() => { setStatuses(loadStatuses()); }, []);
+  // If opened via an SMS-style confirm link (?confirm=<docId>), write the
+  // real confirmation to Firestore once. The ref guards against re-firing
+  // on every re-render.
+  const confirmedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (confirm) {
-      const next = { ...loadStatuses(), [confirm]: "Confirmed" as const };
-      saveStatuses(next);
-      setStatuses(next);
-      toast.success("Appointment confirmed via SMS link");
+    if (confirm && confirmedRef.current !== confirm) {
+      confirmedRef.current = confirm;
+      updateAppointmentStatus(confirm, "Confirmed")
+        .then(() => toast.success("Appointment confirmed via SMS link"))
+        .catch((err) => {
+          console.error(err);
+          toast.error("Couldn't confirm appointment. Please try again.");
+        });
     }
   }, [confirm]);
 
-  const set = (key: string, v: LocalStatus) => {
-    const next = { ...statuses, [key]: v };
-    setStatuses(next); saveStatuses(next);
-    toast.success(v === "Confirmed" ? "Appointment confirmed" : "Appointment cancelled — clinic will be notified");
+  const setStatus = async (
+    docId: string,
+    status: "Confirmed" | "Cancelled",
+  ) => {
+    try {
+      await updateAppointmentStatus(docId, status);
+      toast.success(
+        status === "Confirmed"
+          ? "Appointment confirmed"
+          : "Appointment cancelled — clinic will be notified",
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update appointment. Please try again.");
+    }
   };
 
   return (
@@ -58,45 +82,61 @@ function PatientAppointments() {
             <thead>
               <tr className="text-muted-foreground text-left">
                 <th className="px-5 py-3 font-medium">Date/Time</th>
-                <th className="px-5 py-3 font-medium">Patient</th>
                 <th className="px-5 py-3 font-medium">Type</th>
+                <th className="px-5 py-3 font-medium">Clinician</th>
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {patientAppointments.map((a) => {
-                const key = `${a.date}_${a.time}`;
-                const local = statuses[key];
+              {appointments.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-5 py-6 text-center text-muted-foreground"
+                  >
+                    No appointments found.
+                  </td>
+                </tr>
+              )}
+              {appointments.map((a) => {
+                const dt = new Date(a.dateTime);
                 return (
-                  <tr key={key} className="border-t">
+                  <tr key={a.docId} className="border-t">
                     <td className="px-5 py-3.5 font-medium">
-                      <div>{a.date}</div>
-                      <div className="text-xs text-muted-foreground font-mono">{a.time} · {a.doctor}</div>
+                      <div>
+                        {dt.toLocaleDateString("en-ZA", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </div>
+                      <div className="text-xs text-muted-foreground font-mono">
+                        {dt.toLocaleTimeString("en-ZA", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
                     </td>
-                    <td className="px-5 py-3.5">{currentPatient.name}</td>
                     <td className="px-5 py-3.5">{a.type}</td>
+                    <td className="px-5 py-3.5 font-mono text-xs">
+                      {a.clinician}
+                    </td>
                     <td className="px-5 py-3.5">
-                      {local === "Confirmed" ? (
-                        <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]">Confirmed</span>
-                      ) : local === "Cancelled" ? (
-                        <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]">Cancelled</span>
-                      ) : (
-                        <StatusBadge status={a.status} />
-                      )}
+                      <AppointmentStatusBadge status={a.status} />
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex gap-2">
                         <button
-                          disabled={local === "Confirmed"}
-                          onClick={() => set(key, "Confirmed")}
+                          disabled={a.status === "Confirmed"}
+                          onClick={() => setStatus(a.docId, "Confirmed")}
                           className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-[oklch(0.97_0.06_160)] disabled:opacity-40"
                         >
                           <Check size={12} /> Confirm
                         </button>
                         <button
-                          disabled={local === "Cancelled"}
-                          onClick={() => set(key, "Cancelled")}
+                          disabled={a.status === "Cancelled"}
+                          onClick={() => setStatus(a.docId, "Cancelled")}
                           className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-[oklch(0.97_0.05_25)] disabled:opacity-40"
                         >
                           <X size={12} /> Cancel

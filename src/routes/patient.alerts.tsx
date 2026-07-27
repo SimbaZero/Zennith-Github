@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { patientAlerts } from "@/lib/data";
+import {
+  useCurrentPatient,
+  usePatientNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+} from "@/lib/patient-service";
 import {
   enqueueNotification,
   useQueuedNotifications,
@@ -15,12 +19,10 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/patient/alerts")({ component: Alerts });
 
-const dotColor = { stock: "bg-[oklch(0.65_0.18_160)]", appointment: "bg-[oklch(0.6_0.18_245)]", redirect: "bg-[oklch(0.6_0.2_25)]" };
-const bgColor = { stock: "bg-[oklch(0.97_0.05_160)]", appointment: "bg-white", redirect: "bg-white" };
-
 function Alerts() {
-  const [items, setItems] = useState(patientAlerts);
-  const unread = items.filter((i) => i.unread).length;
+  const { patient } = useCurrentPatient();
+  const items = usePatientNotifications(patient?.userId);
+  const unread = items.filter((i) => !i.isRead).length;
   const online = useOnline();
   const queued = useQueuedNotifications();
   const delivered = queued.filter((q) => q.delivered);
@@ -34,15 +36,38 @@ function Alerts() {
     toast.success("Reminder queued — quiet hours 07:00–20:00 respected");
   };
 
+  const markOneRead = async (docId: string) => {
+    try {
+      await markNotificationRead(docId);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to mark as read");
+    }
+  };
+
+  const markAllRead = async () => {
+    try {
+      const unreadIds = items.filter((i) => !i.isRead).map((i) => i.docId);
+      await markAllNotificationsRead(unreadIds);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to mark all as read");
+    }
+  };
+
   return (
     <AppShell role="patient" title="Notifications & Alerts">
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}>
+        <span
+          className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}
+        >
           {online ? <Wifi size={12} /> : <WifiOff size={12} />}
           {online ? "Online" : "Offline — changes will sync"}
         </span>
         <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border bg-white text-muted-foreground">
-          <Clock size={12} /> Quiet hours: {String(QUIET_START).padStart(2, "0")}:00–{String(QUIET_END).padStart(2, "0")}:00
+          <Clock size={12} /> Quiet hours:{" "}
+          {String(QUIET_START).padStart(2, "0")}:00–
+          {String(QUIET_END).padStart(2, "0")}:00
         </span>
         <button
           onClick={scheduleReminder}
@@ -63,7 +88,11 @@ function Alerts() {
           <ul className="text-xs space-y-1 text-[oklch(0.45_0.15_85)]">
             {pending.slice(0, 3).map((p) => (
               <li key={p.id}>
-                · {p.title} — deliver at {new Date(p.scheduledFor).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })}
+                · {p.title} — deliver at{" "}
+                {new Date(p.scheduledFor).toLocaleTimeString("en-ZA", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
               </li>
             ))}
           </ul>
@@ -75,7 +104,7 @@ function Alerts() {
           <h3 className="font-semibold">{unread + delivered.length} unread</h3>
           {unread > 0 && (
             <button
-              onClick={() => setItems(items.map((i) => ({ ...i, unread: false })))}
+              onClick={markAllRead}
               className="text-xs border px-3 py-1.5 rounded-md hover:bg-secondary"
             >
               Mark all read
@@ -84,7 +113,10 @@ function Alerts() {
         </div>
         <div className="divide-y">
           {delivered.map((d) => (
-            <div key={d.id} className="w-full text-left flex gap-3 p-4 bg-[oklch(0.98_0.04_245)]">
+            <div
+              key={d.id}
+              className="w-full text-left flex gap-3 p-4 bg-[oklch(0.98_0.04_245)]"
+            >
               <div className="w-2 h-2 rounded-full mt-2 bg-[oklch(0.6_0.18_245)]" />
               <div className="flex-1">
                 <div className="flex justify-between">
@@ -100,19 +132,37 @@ function Alerts() {
               </div>
             </div>
           ))}
-          {items.map((a, i) => (
+          {items.length === 0 && delivered.length === 0 && (
+            <p className="p-5 text-sm text-muted-foreground">
+              No notifications.
+            </p>
+          )}
+          {items.map((a) => (
             <button
-              key={i}
-              onClick={() => setItems(items.map((x, j) => (j === i ? { ...x, unread: false } : x)))}
-              className={`w-full text-left flex gap-3 p-4 hover:bg-secondary/30 ${a.unread ? bgColor[a.type] : ""}`}
+              key={a.docId}
+              onClick={() => markOneRead(a.docId)}
+              className={`w-full text-left flex gap-3 p-4 hover:bg-secondary/30 ${!a.isRead ? "bg-[oklch(0.97_0.05_245)]" : ""}`}
             >
-              <div className={`w-2 h-2 rounded-full mt-2 ${dotColor[a.type]}`} />
+              <div className="w-2 h-2 rounded-full mt-2 bg-[oklch(0.6_0.18_245)]" />
               <div className="flex-1">
                 <div className="flex justify-between">
-                  <span className={`text-sm ${a.unread ? "font-semibold" : "font-medium text-muted-foreground"}`}>{a.title}</span>
-                  <span className="text-xs text-muted-foreground">{a.time}</span>
+                  <span
+                    className={`text-sm ${!a.isRead ? "font-semibold" : "font-medium text-muted-foreground"}`}
+                  >
+                    {a.title}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(a.timeSent).toLocaleString("en-ZA", {
+                      day: "numeric",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
                 </div>
-                <p className="text-sm text-muted-foreground mt-1">{a.body}</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {a.message}
+                </p>
               </div>
             </button>
           ))}
@@ -121,4 +171,3 @@ function Alerts() {
     </AppShell>
   );
 }
-
