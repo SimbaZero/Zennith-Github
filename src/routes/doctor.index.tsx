@@ -1,16 +1,12 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+﻿import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatusBadge } from "@/components/AppShell";
-import { fetchDoctorDashboard } from "@/lib/clinic-data";
+import { useDoctorDashboard } from "@/lib/doctor-service";
 import { FileText, CalendarPlus, CalendarDays } from "lucide-react";
 
 export const Route = createFileRoute("/doctor/")({ component: DoctorDashboard });
 
 function DoctorDashboard() {
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["doctor-dashboard"],
-    queryFn: fetchDoctorDashboard,
-  });
+  const { data, loading, error } = useDoctorDashboard();
 
   const today = new Date().toISOString().slice(0, 10);
   const scheduleLabel =
@@ -48,10 +44,10 @@ function DoctorDashboard() {
             <Link to="/doctor/schedule" className="text-sm text-[oklch(0.55_0.18_245)] hover:underline">View all →</Link>
           </div>
           <div className="space-y-2">
-            {isLoading && <p className="text-sm text-muted-foreground py-6 text-center">Loading schedule…</p>}
-            {isError && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
+            {loading && <p className="text-sm text-muted-foreground py-6 text-center">Loading schedule…</p>}
+            {error && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
             {data?.schedule.map((a) => (
-              <div key={a.id} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2" style={{ borderColor: a.status === "Complete" || a.status === "In-progress" ? "oklch(0.6 0.15 160)" : a.status === "No-show" ? "oklch(0.55 0.22 25)" : "oklch(0.75 0.15 70)" }}>
+              <div key={a.docId} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2" style={{ borderColor: a.status === "Complete" || a.status === "In-progress" ? "oklch(0.6 0.15 160)" : a.status === "No-show" ? "oklch(0.55 0.22 25)" : "oklch(0.75 0.15 70)" }}>
                 <div className="font-mono text-sm font-semibold w-12">{a.time}</div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm truncate">{a.patientName}</div>

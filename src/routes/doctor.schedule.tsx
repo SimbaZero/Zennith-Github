@@ -1,40 +1,27 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { AppShell } from "@/components/AppShell";
-import { fetchDoctorAppointments, attachPatientNames } from "@/lib/clinic-data";
+﻿import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { AppShell } from "@/components/AppShell";
+import { useDoctorWeekSchedule } from "@/lib/doctor-service";
 
 export const Route = createFileRoute("/doctor/schedule")({ component: Schedule });
 
 function Schedule() {
   const navigate = useNavigate();
+  const { dates, apptsByDate, loading, error } = useDoctorWeekSchedule();
+
+  const today = new Date().toISOString().slice(0, 10);
   const [picked, setPicked] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["doctor-appointments"],
-    queryFn: fetchDoctorAppointments,
-  });
-
-  const day = picked ?? data?.scheduleDate ?? "";
-  const dayAppts = (data?.appts ?? []).filter((a) => a.date === day);
-
-  const { data: rows = [], isLoading: namesLoading } = useQuery({
-    queryKey: ["doctor-day", day, dayAppts.length],
-    queryFn: () => attachPatientNames(dayAppts),
-    enabled: !!data && dayAppts.length > 0,
-  });
-
-  // Show a window of up to 7 dates around the selected day.
-  const dates = data?.dates ?? [];
-  const idx = Math.max(0, dates.indexOf(day));
-  const window = dates.slice(Math.max(0, idx - 2), Math.max(0, idx - 2) + 7);
-  const today = new Date().toISOString().slice(0, 10);
+  // Default to today if it falls within this week, otherwise the first day
+  // of the week (e.g. viewing on a Sunday evening after the early rollover).
+  const day = picked ?? (dates.includes(today) ? today : dates[0] ?? "");
+  const dayAppts = apptsByDate[day] ?? [];
 
   return (
     <AppShell role="doctor" title="My Schedule">
       <div className="flex flex-wrap gap-2 mb-5">
-        {isLoading && <p className="text-sm text-muted-foreground">Loading schedule…</p>}
-        {window.map((d) => (
+        {loading && <p className="text-sm text-muted-foreground">Loading schedule…</p>}
+        {dates.map((d) => (
           <button
             key={d}
             onClick={() => setPicked(d)}
@@ -52,11 +39,10 @@ function Schedule() {
           {dayAppts.length} appointment{dayAppts.length === 1 ? "" : "s"} · {day || "—"}
         </div>
         <div>
-          {namesLoading && dayAppts.length > 0 && (
-            <p className="text-sm text-muted-foreground px-5 py-6">Loading appointments…</p>
-          )}
-          {rows.map((a) => (
-            <div key={a.id} className="flex items-center gap-4 px-5 py-4 border-t first:border-t-0">
+          {loading && <p className="text-sm text-muted-foreground px-5 py-6">Loading appointments…</p>}
+          {error && <p className="text-sm text-destructive px-5 py-6">Could not load appointments.</p>}
+          {dayAppts.map((a) => (
+            <div key={a.docId} className="flex items-center gap-4 px-5 py-4 border-t first:border-t-0">
               <div className="font-mono font-semibold w-14">{a.time}</div>
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm truncate">{a.patientName}</div>
@@ -73,7 +59,7 @@ function Schedule() {
               </button>
             </div>
           ))}
-          {data && dayAppts.length === 0 && (
+          {!loading && dayAppts.length === 0 && (
             <p className="text-sm text-muted-foreground px-5 py-8 text-center">No appointments on this day.</p>
           )}
         </div>

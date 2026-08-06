@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AuthBackground } from "@/components/AuthBackground";
+import { sendPasswordReset } from "@/lib/auth";
 
 export const Route = createFileRoute("/forgot-password")({ component: Forgot });
 
@@ -9,8 +10,9 @@ function Forgot() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    await sendPasswordReset(email);
     setSent(true);
   };
 
@@ -24,9 +26,13 @@ function Forgot() {
         {sent ? (
           <div className="text-center space-y-4">
             <p className="text-sm text-muted-foreground">
-              If an account exists for <strong>{email}</strong>, a reset link has been sent.
+              If an account exists for <strong>{email}</strong>, a reset link
+              has been sent.
             </p>
-            <Link to="/login" className="inline-block bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm">
+            <Link
+              to="/login"
+              className="inline-block bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm"
+            >
               Back to sign in
             </Link>
           </div>
@@ -48,7 +54,10 @@ function Forgot() {
             <button className="w-full bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md font-medium hover:bg-[oklch(0.25_0.08_260)]">
               Send reset link
             </button>
-            <Link to="/login" className="block text-sm text-center text-muted-foreground hover:text-foreground">
+            <Link
+              to="/login"
+              className="block text-sm text-center text-muted-foreground hover:text-foreground"
+            >
               Back to sign in
             </Link>
           </form>

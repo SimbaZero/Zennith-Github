@@ -1,8 +1,7 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+﻿import { Link, useNavigate } from "@tanstack/react-router";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AppShell } from "@/components/AppShell";
-import { fetchPatientRecord } from "@/lib/clinic-data";
+import { usePatientRecord } from "@/lib/doctor-service";
 import { Download, ArrowLeft, Printer } from "lucide-react";
 import type { Role } from "@/lib/auth";
 
@@ -16,10 +15,7 @@ interface PatientRecordViewProps {
 /** Shared "PDF themed" patient record view, used by Nurse and Doctor. */
 export function PatientRecordView({ pid, role, backTo, backLabel }: PatientRecordViewProps) {
   const navigate = useNavigate();
-  const { data: record, isLoading, isError } = useQuery({
-    queryKey: ["patient-record", pid],
-    queryFn: () => fetchPatientRecord(pid),
-  });
+  const { record, loading, error } = usePatientRecord(pid);
 
   const download = () => {
     if (typeof window !== "undefined") window.print();
@@ -51,12 +47,12 @@ export function PatientRecordView({ pid, role, backTo, backLabel }: PatientRecor
         </div>
       </div>
 
-      {isLoading && (
+      {loading && (
         <p className="text-sm text-muted-foreground py-10 text-center">Loading medical record…</p>
       )}
-      {isError && (
+      {error && (
         <p className="text-sm text-destructive py-10 text-center">
-          Could not load a medical record for "{pid}".
+          {error === `Patient "${pid}" not found` ? error : `Could not load a medical record for "${pid}".`}
         </p>
       )}
 
