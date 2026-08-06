@@ -253,7 +253,9 @@ RESEND_API_KEY=
 
 Full console setup, security rules and operational runbook:
 [docs/FIREBASE.md](docs/FIREBASE.md). Architecture and data model:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Adding new collections and linked
+records (step-by-step, with a worked example):
+[docs/ADDING-DATA.md](docs/ADDING-DATA.md).
 
 ### Seeding the database
 

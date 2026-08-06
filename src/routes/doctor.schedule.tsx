@@ -1,4 +1,4 @@
-﻿import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { fetchDoctorAppointments, attachPatientNames } from "@/lib/clinic-data";
@@ -33,7 +33,7 @@ function Schedule() {
   return (
     <AppShell role="doctor" title="My Schedule">
       <div className="flex flex-wrap gap-2 mb-5">
-        {isLoading && <p className="text-sm text-muted-foreground">Loading scheduleâ€¦</p>}
+        {isLoading && <p className="text-sm text-muted-foreground">Loading schedule…</p>}
         {window.map((d) => (
           <button
             key={d}
@@ -49,11 +49,11 @@ function Schedule() {
 
       <div className="bg-white rounded-xl border">
         <div className="p-4 border-b text-sm font-medium">
-          {dayAppts.length} appointment{dayAppts.length === 1 ? "" : "s"} Â· {day || "â€”"}
+          {dayAppts.length} appointment{dayAppts.length === 1 ? "" : "s"} · {day || "—"}
         </div>
         <div>
           {namesLoading && dayAppts.length > 0 && (
-            <p className="text-sm text-muted-foreground px-5 py-6">Loading appointmentsâ€¦</p>
+            <p className="text-sm text-muted-foreground px-5 py-6">Loading appointments…</p>
           )}
           {rows.map((a) => (
             <div key={a.id} className="flex items-center gap-4 px-5 py-4 border-t first:border-t-0">
@@ -61,7 +61,7 @@ function Schedule() {
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm truncate">{a.patientName}</div>
                 <div className="text-xs text-muted-foreground truncate">
-                  {[a.patientId, a.condition, a.type].filter(Boolean).join(" Â· ")}
+                  {[a.patientId, a.condition, a.type].filter(Boolean).join(" · ")}
                 </div>
               </div>
               <span className="text-xs text-muted-foreground">30min</span>

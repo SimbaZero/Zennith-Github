@@ -1,4 +1,4 @@
-﻿import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -24,7 +24,7 @@ function Signup() {
       });
       if (!res.ok) return { ...res, mailOk: false };
       // Send the confirmation email via Resend (server-side). Never blocks the
-      // signup â€” report delivery status separately.
+      // signup — report delivery status separately.
       const mail = await sendWelcomeEmail({
         data: { email: form.email, name: form.name, patientId: res.patientId },
       }).catch(() => ({ ok: false }));
@@ -34,13 +34,13 @@ function Signup() {
       if (!res.ok) { setError(res.error || "Could not create account"); return; }
       toast.success(
         res.mailOk
-          ? `Account created (${res.patientId}). We've sent a confirmation email to ${form.email} â€” check your inbox, then sign in.`
+          ? `Account created (${res.patientId}). We've sent a confirmation email to ${form.email} — check your inbox, then sign in.`
           : `Account created (${res.patientId}). You can sign in now (confirmation email couldn't be sent).`,
         { duration: 7000 },
       );
       navigate({ to: "/login" });
     },
-    onError: () => setError("Could not create account â€” please try again"),
+    onError: () => setError("Could not create account — please try again"),
   });
 
   const submit = (e: React.FormEvent) => {

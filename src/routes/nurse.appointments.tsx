@@ -1,4 +1,4 @@
-﻿import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, StatusBadge, type AppointmentStatus } from "@/components/AppShell";
@@ -88,7 +88,7 @@ function NurseAppointments() {
   return (
     <AppShell role="nurse" title="Schedule Appointments">
       <div className="flex flex-wrap gap-2 mb-5">
-        {isLoading && <p className="text-sm text-muted-foreground">Loading appointmentsâ€¦</p>}
+        {isLoading && <p className="text-sm text-muted-foreground">Loading appointments…</p>}
         {window.map((d) => (
           <button
             key={d}
@@ -104,7 +104,7 @@ function NurseAppointments() {
 
       <div className="bg-white rounded-xl border overflow-hidden">
         <div className="flex items-center justify-between p-5 border-b">
-          <h3 className="font-semibold">Appointments Â· {day || "â€”"}</h3>
+          <h3 className="font-semibold">Appointments · {day || "—"}</h3>
           <button
             onClick={() => setShowForm((v) => !v)}
             className="flex items-center gap-1.5 bg-[oklch(0.18_0.06_260)] text-white px-3 py-1.5 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)]"
@@ -122,7 +122,7 @@ function NurseAppointments() {
             <div className="md:col-span-4 flex justify-end gap-2">
               <button type="button" onClick={() => setShowForm(false)} className="border px-3 py-1.5 rounded-md text-sm">Cancel</button>
               <button type="submit" disabled={create.isPending} className="bg-[oklch(0.55_0.18_245)] text-white px-3 py-1.5 rounded-md text-sm disabled:opacity-60">
-                {create.isPending ? "Savingâ€¦" : "Save appointment"}
+                {create.isPending ? "Saving…" : "Save appointment"}
               </button>
             </div>
           </form>

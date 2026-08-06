@@ -1,4 +1,4 @@
-﻿import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import { fetchDoctorDashboard } from "@/lib/clinic-data";
@@ -19,24 +19,24 @@ function NurseDashboard() {
   });
   const today = new Date().toISOString().slice(0, 10);
   const scheduleLabel =
-    !data || data.scheduleDate === today ? "Today's Appointments" : `Appointments Â· ${data.scheduleDate}`;
+    !data || data.scheduleDate === today ? "Today's Appointments" : `Appointments · ${data.scheduleDate}`;
 
   return (
     <AppShell role="nurse" title="Nurse Dashboard" showBack={false}>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat
           label="APPOINTMENTS"
-          value={data ? String(data.stats.dayTotal) : "â€”"}
-          sub={data ? `${data.stats.dayCompleted} completed` : "loadingâ€¦"}
+          value={data ? String(data.stats.dayTotal) : "—"}
+          sub={data ? `${data.stats.dayCompleted} completed` : "loading…"}
         />
         <Stat
           label="PATIENTS THIS WEEK"
-          value={data ? String(data.stats.weekPatients) : "â€”"}
+          value={data ? String(data.stats.weekPatients) : "—"}
           sub="Unique patients, 7 days"
         />
         <Stat
           label="UPCOMING"
-          value={data ? String(data.stats.upcoming) : "â€”"}
+          value={data ? String(data.stats.upcoming) : "—"}
           sub="Future appointments"
         />
       </div>
@@ -53,7 +53,7 @@ function NurseDashboard() {
             </button>
           </div>
           <div className="space-y-2">
-            {isLoading && <p className="text-sm text-muted-foreground py-6 text-center">Loading appointmentsâ€¦</p>}
+            {isLoading && <p className="text-sm text-muted-foreground py-6 text-center">Loading appointments…</p>}
             {isError && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
             {data?.schedule.map((a) => (
               <div key={a.id} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md">
@@ -61,7 +61,7 @@ function NurseDashboard() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm truncate">{a.patientName}</div>
                   <div className="text-xs text-muted-foreground truncate">
-                    {[a.patientId, a.condition, a.type].filter(Boolean).join(" Â· ")}
+                    {[a.patientId, a.condition, a.type].filter(Boolean).join(" · ")}
                   </div>
                 </div>
                 <StatusBadge status={a.status} />
@@ -88,9 +88,9 @@ function NurseDashboard() {
           </div>
           <div className="mt-5 pt-5 border-t">
             <p className="text-[11px] tracking-wider text-muted-foreground mb-2">THIS WEEK</p>
-            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "â€”"} />
-            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "â€”"} />
-            <Row label="Clinician" value={data?.doctorId ?? "â€”"} />
+            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "—"} />
+            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "—"} />
+            <Row label="Clinician" value={data?.doctorId ?? "—"} />
           </div>
         </div>
       </div>
@@ -113,7 +113,7 @@ function HandoverLog() {
     e.preventDefault();
     if (!note.trim()) return toast.error("Add a handover note first");
     add({ nurse, shift, patient: patient.trim() || undefined, note: note.trim() });
-    toast.success(online ? "Handover logged" : "Handover saved offline â€” will sync");
+    toast.success(online ? "Handover logged" : "Handover saved offline — will sync");
     setPatient("");
     setNote("");
   };
@@ -123,7 +123,7 @@ function HandoverLog() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="font-semibold">Shift Handover Log</h3>
-          <p className="text-xs text-muted-foreground">{summary.count} entries Â· {summary.patients} patients this {shift.toLowerCase()} shift</p>
+          <p className="text-xs text-muted-foreground">{summary.count} entries · {summary.patients} patients this {shift.toLowerCase()} shift</p>
         </div>
         <div className="flex items-center gap-2">
           <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}>
@@ -154,7 +154,7 @@ function HandoverLog() {
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Handover note (vitals, meds due, follow-upâ€¦)"
+          placeholder="Handover note (vitals, meds due, follow-up…)"
           className="px-3 py-2 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
         />
         <button className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)]">
@@ -173,7 +173,7 @@ function HandoverLog() {
               </span>
               <span className="text-xs px-2 py-0.5 rounded-full border shrink-0 mt-0.5">{e.shift}</span>
               <div className="flex-1 min-w-0">
-                <div className="font-medium">{e.patient ?? "General"} Â· <span className="text-muted-foreground font-normal">{e.nurse}</span></div>
+                <div className="font-medium">{e.patient ?? "General"} · <span className="text-muted-foreground font-normal">{e.nurse}</span></div>
                 <div className="text-muted-foreground">{e.note}</div>
               </div>
               <button onClick={() => remove(e.id)} className="text-muted-foreground hover:text-[oklch(0.55_0.2_25)]">

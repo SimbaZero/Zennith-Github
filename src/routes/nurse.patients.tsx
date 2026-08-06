@@ -1,4 +1,4 @@
-﻿import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { fetchPatientPage, findPatient } from "@/lib/clinic-data";
@@ -22,7 +22,7 @@ const MEDS_BY_CONDITION: Record<string, string[]> = {
 function AdherenceCell({ pid, condition }: { pid: string; condition: string }) {
   const { forToday, setTaken } = useAdherence(pid);
   const meds = MEDS_BY_CONDITION[condition] ?? [];
-  if (meds.length === 0) return <span className="text-xs text-muted-foreground">â€”</span>;
+  if (meds.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
   return (
     <div className="flex flex-wrap gap-1.5">
       {meds.map((m) => {
@@ -31,7 +31,7 @@ function AdherenceCell({ pid, condition }: { pid: string; condition: string }) {
           <button
             key={m}
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTaken(m, !taken); }}
-            title={`${m} â€” ${today()}`}
+            title={`${m} — ${today()}`}
             className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${taken ? "bg-[oklch(0.95_0.08_160)] border-[oklch(0.7_0.15_160)] text-[oklch(0.35_0.15_160)]" : "hover:bg-secondary text-muted-foreground"}`}
           >
             {taken ? <CheckCircle2 size={11} /> : <Circle size={11} />}
@@ -50,7 +50,7 @@ function NursePatients() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}>
           {online ? <Wifi size={12} /> : <WifiOff size={12} />}
-          {online ? "Online" : "Offline â€” adherence saved locally"}
+          {online ? "Online" : "Offline — adherence saved locally"}
         </span>
         <span className="text-xs text-muted-foreground">Tap a medication badge to log today's dose (chronic-care).</span>
       </div>
@@ -89,11 +89,11 @@ export function PatientFilesTable({ recordBase = "/nurse/patient-record", showAd
         <div>
           <h3 className="font-semibold">Patient Files</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {isLoading ? "Loading patientsâ€¦" : "Browsing first 30 â€” search a Patient ID (e.g. Pat-828) for anyone else"}
+            {isLoading ? "Loading patients…" : "Browsing first 30 — search a Patient ID (e.g. Pat-828) for anyone else"}
           </p>
         </div>
         <input
-          placeholder="Search name or Pat-###â€¦"
+          placeholder="Search name or Pat-###…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-64"
@@ -134,7 +134,7 @@ export function PatientFilesTable({ recordBase = "/nurse/patient-record", showAd
             {!isLoading && filtered.length === 0 && (
               <tr>
                 <td colSpan={showAdherence ? 6 : 5} className="px-5 py-8 text-center text-muted-foreground">
-                  {idQuery ? `No patient with ID "${idQuery}".` : "No matching patients in the loaded page â€” try an exact Pat-### ID."}
+                  {idQuery ? `No patient with ID "${idQuery}".` : "No matching patients in the loaded page — try an exact Pat-### ID."}
                 </td>
               </tr>
             )}

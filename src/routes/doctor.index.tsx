@@ -1,4 +1,4 @@
-﻿import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import { fetchDoctorDashboard } from "@/lib/clinic-data";
@@ -14,29 +14,29 @@ function DoctorDashboard() {
 
   const today = new Date().toISOString().slice(0, 10);
   const scheduleLabel =
-    !data || data.scheduleDate === today ? "Today's Schedule" : `Schedule Â· ${data.scheduleDate}`;
+    !data || data.scheduleDate === today ? "Today's Schedule" : `Schedule · ${data.scheduleDate}`;
 
   return (
     <AppShell role="doctor" title="Doctor Dashboard" showBack={false}>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <Stat
           label="APPOINTMENTS"
-          value={data ? String(data.stats.dayTotal) : "â€”"}
-          sub={data ? `${data.stats.dayCompleted} completed` : "loadingâ€¦"}
+          value={data ? String(data.stats.dayTotal) : "—"}
+          sub={data ? `${data.stats.dayCompleted} completed` : "loading…"}
         />
         <Stat
           label="PENDING REVIEWS"
-          value={data ? String(data.stats.pendingReviews) : "â€”"}
+          value={data ? String(data.stats.pendingReviews) : "—"}
           sub="Review appointments open"
         />
         <Stat
           label="PATIENTS THIS WEEK"
-          value={data ? String(data.stats.weekPatients) : "â€”"}
+          value={data ? String(data.stats.weekPatients) : "—"}
           sub="Unique patients, 7 days"
         />
         <Stat
           label="UPCOMING"
-          value={data ? String(data.stats.upcoming) : "â€”"}
+          value={data ? String(data.stats.upcoming) : "—"}
           sub="Future appointments"
         />
       </div>
@@ -45,10 +45,10 @@ function DoctorDashboard() {
         <div className="lg:col-span-2 bg-white rounded-xl border p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold">{scheduleLabel}</h3>
-            <Link to="/doctor/schedule" className="text-sm text-[oklch(0.55_0.18_245)] hover:underline">View all â†’</Link>
+            <Link to="/doctor/schedule" className="text-sm text-[oklch(0.55_0.18_245)] hover:underline">View all →</Link>
           </div>
           <div className="space-y-2">
-            {isLoading && <p className="text-sm text-muted-foreground py-6 text-center">Loading scheduleâ€¦</p>}
+            {isLoading && <p className="text-sm text-muted-foreground py-6 text-center">Loading schedule…</p>}
             {isError && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
             {data?.schedule.map((a) => (
               <div key={a.id} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2" style={{ borderColor: a.status === "Complete" || a.status === "In-progress" ? "oklch(0.6 0.15 160)" : a.status === "No-show" ? "oklch(0.55 0.22 25)" : "oklch(0.75 0.15 70)" }}>
@@ -56,7 +56,7 @@ function DoctorDashboard() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm truncate">{a.patientName}</div>
                   <div className="text-xs text-muted-foreground truncate">
-                    {[a.condition, a.type].filter(Boolean).join(" Â· ")}
+                    {[a.condition, a.type].filter(Boolean).join(" · ")}
                   </div>
                 </div>
                 <StatusBadge status={a.status} />
@@ -83,9 +83,9 @@ function DoctorDashboard() {
           </div>
           <div className="mt-5 pt-5 border-t">
             <p className="text-[11px] tracking-wider text-muted-foreground mb-2">THIS WEEK</p>
-            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "â€”"} />
-            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "â€”"} />
-            <Row label="Clinician" value={data?.doctorId ?? "â€”"} />
+            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "—"} />
+            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "—"} />
+            <Row label="Clinician" value={data?.doctorId ?? "—"} />
           </div>
         </div>
       </div>

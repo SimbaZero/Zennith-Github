@@ -1,4 +1,4 @@
-﻿import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AppShell } from "@/components/AppShell";
@@ -26,7 +26,7 @@ export function PatientRecordView({ pid, role, backTo, backLabel }: PatientRecor
   };
 
   return (
-    <AppShell role={role} title={`Medical Record Â· ${pid}`}>
+    <AppShell role={role} title={`Medical Record · ${pid}`}>
       {/* Toolbar (hidden in print) */}
       <div className="flex items-center justify-between mb-4 print:hidden">
         <button
@@ -52,7 +52,7 @@ export function PatientRecordView({ pid, role, backTo, backLabel }: PatientRecor
       </div>
 
       {isLoading && (
-        <p className="text-sm text-muted-foreground py-10 text-center">Loading medical recordâ€¦</p>
+        <p className="text-sm text-muted-foreground py-10 text-center">Loading medical record…</p>
       )}
       {isError && (
         <p className="text-sm text-destructive py-10 text-center">
@@ -76,7 +76,7 @@ export function PatientRecordView({ pid, role, backTo, backLabel }: PatientRecor
               </div>
             </div>
             <div className="text-right text-[10px] uppercase tracking-wider text-muted-foreground">
-              <div>Confidential Â· Medical Record</div>
+              <div>Confidential · Medical Record</div>
               <div className="font-mono mt-0.5">Generated {new Date().toLocaleString("en-ZA")}</div>
             </div>
           </header>
@@ -129,12 +129,12 @@ export function PatientRecordView({ pid, role, backTo, backLabel }: PatientRecor
           </Section>
 
           <footer className="mt-8 pt-4 border-t text-[10px] text-muted-foreground flex justify-between">
-            <span>Zennith Health Services Â· Auto-generated medical record</span>
+            <span>Zennith Health Services · Auto-generated medical record</span>
             <span>Page 1 of 1</span>
           </footer>
 
           <div className="mt-2 text-[10px] text-muted-foreground print:hidden">
-            <Link to={backTo as any} className="text-[oklch(0.55_0.18_245)] hover:underline">â† Back to patient files</Link>
+            <Link to={backTo as any} className="text-[oklch(0.55_0.18_245)] hover:underline">← Back to patient files</Link>
           </div>
         </div>
       )}
@@ -164,4 +164,4 @@ function Row({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-// Shared component only â€” routes are defined in src/routes/nurse.patient-record.$pid.tsx and src/routes/doctor.patient-record.$pid.tsx
+// Shared component only — routes are defined in src/routes/nurse.patient-record.$pid.tsx and src/routes/doctor.patient-record.$pid.tsx
