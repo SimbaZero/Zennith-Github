@@ -29,7 +29,7 @@ import type { AppointmentStatus } from "@/components/AppShell";
 // touch Firestore, so we only ever query once we actually know who's signed
 // in. No flash, no guessing, no retry-driven delay.
 // ---------------------------------------------------------------------------
-function waitForAuthReady(): Promise<User | null> {
+export function waitForAuthReady(): Promise<User | null> {
   if (auth.currentUser) return Promise.resolve(auth.currentUser);
   return new Promise((resolve) => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -187,7 +187,7 @@ export interface DoctorAppointment {
   condition: string;
 }
 
-function toBadgeStatus(s: string): AppointmentStatus {
+export function toBadgeStatus(s: string): AppointmentStatus {
   const v = (s ?? "").toLowerCase();
   if (v.startsWith("complet")) return "Complete";
   if (v.includes("progress")) return "In-progress";
@@ -197,7 +197,7 @@ function toBadgeStatus(s: string): AppointmentStatus {
 
 const patientNameCache = new Map<string, { name: string; condition: string }>();
 
-async function resolvePatientNames(
+export async function resolvePatientNames(
   patientIds: string[],
 ): Promise<Map<string, { name: string; condition: string }>> {
   const unique = [...new Set(patientIds)].filter((id) => !patientNameCache.has(id));
@@ -346,7 +346,7 @@ export function useDoctorDashboard(): {
 // 18:00 boundary rolls over on its own, without a manual refresh.
 // ---------------------------------------------------------------------------
 
-function useMinuteTick(): Date {
+export function useMinuteTick(): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60_000);
@@ -355,13 +355,13 @@ function useMinuteTick(): Date {
   return now;
 }
 
-interface WeekBounds {
+export interface WeekBounds {
   start: string; // YYYY-MM-DD, Monday
   end: string; // YYYY-MM-DD, Sunday
   dates: string[]; // 7 dates, Monday -> Sunday
 }
 
-function computeWeekBounds(now: Date): WeekBounds {
+export function computeWeekBounds(now: Date): WeekBounds {
   const effective = new Date(now);
 
   // Sunday 18:00 cutover: treat "today" as if it were already the next day

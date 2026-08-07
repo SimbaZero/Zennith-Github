@@ -403,8 +403,21 @@ export async function createAppointment(input: {
     clinician = await resolveClinicianId();
   }
 
-  await addDoc(collection(db, "appointments"), {
-    appointmentId: Date.now(),
+// Sequential doc IDs via a counters doc — so new appointments keep the
+  // "1, 2, 3…" numbering instead of a random Firestore auto-ID.
+  const nextId = await runTransaction(db, async (tx) => {
+    const ref = doc(db, "counters", "appointments");
+    const snap = await tx.get(ref);
+    // Base of 10 matches your current max doc ID (1-10). Self-initializes
+    // on first call — no manual Firestore edit needed.
+    const cur = snap.exists() ? (snap.data() as { apptNo: number }).apptNo : 10;
+    const next = cur + 1;
+    tx.set(ref, { apptNo: next });
+    return next;
+  });
+
+  await setDoc(doc(db, "appointments", String(nextId)), {
+    appointmentId: nextId,
     appointDateTime: `${input.date}T${input.time}:00.000Z`,
     appointType: input.type,
     clinician,
