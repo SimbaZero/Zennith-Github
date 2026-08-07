@@ -1,4 +1,4 @@
-﻿import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, StatusBadge } from "@/components/AppShell";
@@ -49,7 +49,7 @@ function ReceptionAppointments() {
           <div>
             <h2 className="font-semibold">Latest Appointments</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {isLoading ? "Loadingâ€¦" : "25 most recent, clinic-wide"}
+              {isLoading ? "Loading…" : "25 most recent, clinic-wide"}
             </p>
           </div>
           <button
@@ -70,7 +70,7 @@ function ReceptionAppointments() {
             <div className="md:col-span-5 flex justify-end gap-2">
               <button type="button" onClick={() => setShowForm(false)} className="border px-3 py-1.5 rounded-md text-sm">Cancel</button>
               <button type="submit" disabled={create.isPending} className="bg-[oklch(0.55_0.18_245)] text-white px-3 py-1.5 rounded-md text-sm disabled:opacity-60">
-                {create.isPending ? "Bookingâ€¦" : "Book appointment"}
+                {create.isPending ? "Booking…" : "Book appointment"}
               </button>
             </div>
           </form>

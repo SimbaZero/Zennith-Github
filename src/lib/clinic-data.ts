@@ -5,15 +5,18 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
   getFirestore,
   limit,
+  onSnapshot,
   orderBy,
   query,
   runTransaction,
   setDoc,
+  updateDoc,
   where,
 } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
@@ -200,6 +203,146 @@ export async function distributeStock(
 }
 
 // ---------------------------------------------------------------------------
+// Walk-in queue — a shared Firestore collection, not per-screen state.
+// Reception drives it today; any other role can render the same live queue by
+// calling subscribeQueue (e.g. a nurse "who's waiting" widget).
+
+export type QueueStatus = "waiting" | "called" | "in-room" | "done";
+
+export interface QueueEntry {
+  id: string;
+  patientId: string;
+  patientName: string;
+  reason: string;
+  clinician: string | null;
+  priority: "normal" | "urgent";
+  status: QueueStatus;
+  joinedAt: string;
+  calledAt: string | null;
+  facilityId: string | null;
+}
+
+const toQueueEntry = (id: string, x: any): QueueEntry => ({
+  id,
+  patientId: x.patientId ?? "",
+  patientName: x.patientName ?? x.patientId ?? "",
+  reason: x.reason ?? "",
+  clinician: x.clinician ?? null,
+  priority: x.priority === "urgent" ? "urgent" : "normal",
+  status: (["waiting", "called", "in-room", "done"].includes(x.status) ? x.status : "waiting") as QueueStatus,
+  joinedAt: x.joinedAt ?? "",
+  calledAt: x.calledAt ?? null,
+  facilityId: x.facilityId ?? null,
+});
+
+/** Urgent first, then longest-waiting. Done entries sink to the bottom. */
+function sortQueue(rows: QueueEntry[]): QueueEntry[] {
+  const rank = { waiting: 0, called: 1, "in-room": 2, done: 3 } as Record<QueueStatus, number>;
+  return [...rows].sort(
+    (a, b) =>
+      rank[a.status] - rank[b.status] ||
+      (a.priority === b.priority ? 0 : a.priority === "urgent" ? -1 : 1) ||
+      a.joinedAt.localeCompare(b.joinedAt),
+  );
+}
+
+/**
+ * Live subscription to the walk-in queue. Every screen calling this updates the
+ * moment reception adds or calls a patient — no refresh needed.
+ * Returns the unsubscribe function.
+ */
+export function subscribeQueue(
+  onChange: (rows: QueueEntry[]) => void,
+  onError?: (e: unknown) => void,
+): () => void {
+  return onSnapshot(
+    collection(db, "queue"),
+    (snap) => onChange(sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())))),
+    (err) => onError?.(err),
+  );
+}
+
+/** One-off read (used where a live subscription isn't warranted). */
+export async function fetchQueue(): Promise<QueueEntry[]> {
+  const snap = await getDocs(collection(db, "queue"));
+  return sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())));
+}
+
+/** Adds a walk-in. Validates the patient exists and joins their real name. */
+export async function addToQueue(input: {
+  patientId: string;
+  reason: string;
+  clinician?: string;
+  priority?: "normal" | "urgent";
+  facilityId?: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  const pid = input.patientId.trim();
+  const pSnap = await getDoc(doc(db, "patients", pid));
+  if (!pSnap.exists()) return { ok: false, error: `Patient "${pid}" not found` };
+
+  const existing = await getDocs(query(collection(db, "queue"), where("patientId", "==", pid)));
+  if (existing.docs.some((d) => d.data().status !== "done")) {
+    return { ok: false, error: `${pid} is already in the queue` };
+  }
+
+  const names = await patientNames([pid]);
+  await addDoc(collection(db, "queue"), {
+    patientId: pid,
+    patientName: names.get(pid)?.name ?? pid,
+    reason: input.reason.trim() || "Walk-in",
+    clinician: input.clinician?.trim() || null,
+    priority: input.priority ?? "normal",
+    status: "waiting",
+    joinedAt: new Date().toISOString(),
+    calledAt: null,
+    facilityId: input.facilityId ?? null,
+  });
+  return { ok: true };
+}
+
+/**
+ * Calls a patient: flips the entry to "called" and writes an in-app
+ * notification to their portal. Respects the 07:00–20:00 quiet-hours window —
+ * outside it the notification is stamped for the next allowed send time.
+ */
+export async function callPatient(
+  entry: QueueEntry,
+  deliverAt: Date,
+): Promise<void> {
+  await updateDoc(doc(db, "queue", entry.id), {
+    status: "called",
+    calledAt: new Date().toISOString(),
+  });
+
+  // notifications are addressed by the dataset's numeric userId
+  const pSnap = await getDoc(doc(db, "patients", entry.patientId));
+  const userId = pSnap.exists() ? Number(pSnap.data().userId) : null;
+  if (userId == null || Number.isNaN(userId)) return;
+
+  await addDoc(collection(db, "notifications"), {
+    notifId: Date.now(),
+    userId,
+    title: "You're being called",
+    message: entry.clinician
+      ? `Please proceed to ${entry.clinician}. ${entry.reason}`.trim()
+      : `Please proceed to the consulting room. ${entry.reason}`.trim(),
+    isRead: false,
+    timeSent: deliverAt.toISOString(),
+  });
+}
+
+export async function setQueueStatus(id: string, status: QueueStatus): Promise<void> {
+  await updateDoc(doc(db, "queue", id), {
+    status,
+    ...(status === "called" ? { calledAt: new Date().toISOString() } : {}),
+  });
+}
+
+export async function removeFromQueue(id: string): Promise<void> {
+  await deleteDoc(doc(db, "queue", id));
+}
+
+// ---------------------------------------------------------------------------
 // Patients + medical records
 
 export interface PatientSummary {
@@ -313,6 +456,79 @@ export async function fetchPatientRecord(pid: string): Promise<PatientRecord> {
       .sort((a, b) => b.historyId - a.historyId)
       .map(({ id, description }) => ({ id, description })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Digitised (OCR) patient files
+
+export interface DigitisedRecord {
+  patientId: string;
+  fullName?: string;
+  idNumber?: string;
+  dob?: string;
+  cell?: string;
+  diagnosis?: string;
+  medication?: string;
+  notes?: string;
+  /** Raw OCR output, stored for audit / re-checking a bad scan. */
+  rawText: string;
+  confidence: number;
+}
+
+/**
+ * Files an OCR-captured paper record against an existing patient:
+ *  - appends a clinical note to medicalRecordsHistory (with the raw scan text)
+ *  - updates the patient's medicalRecords with any fields that were captured
+ *  - refreshes contact details on the users row when present
+ * Nothing is overwritten with blanks — only captured fields are written.
+ */
+export async function saveDigitisedRecord(
+  rec: DigitisedRecord,
+): Promise<{ ok: boolean; error?: string }> {
+  const pid = rec.patientId.trim();
+  const pSnap = await getDoc(doc(db, "patients", pid));
+  if (!pSnap.exists()) return { ok: false, error: `Patient "${pid}" not found` };
+  const patient = pSnap.data();
+  const recordNo = patient.medicalRecordNo;
+  if (recordNo == null) return { ok: false, error: `${pid} has no medical record number` };
+
+  const writes: Promise<unknown>[] = [];
+
+  // 1 — clinical note capturing the scan
+  writes.push(
+    addDoc(collection(db, "medicalRecordsHistory"), {
+      historyId: Date.now(),
+      medicalRecordNo: Number(recordNo),
+      patientId: pid,
+      description:
+        (rec.notes?.trim() ? `${rec.notes.trim()} ` : "") +
+        `[Digitised from paper file, OCR confidence ${Math.round(rec.confidence)}%]`,
+      source: "ocr",
+      rawText: rec.rawText.slice(0, 4000),
+      capturedAt: new Date().toISOString(),
+    }),
+  );
+
+  // 2 — merge captured clinical fields into the medical record
+  const mr: Record<string, unknown> = {};
+  if (rec.diagnosis?.trim()) mr.diagnosis = rec.diagnosis.trim();
+  if (rec.medication?.trim()) mr.prescription = rec.medication.trim();
+  if (Object.keys(mr).length > 0) {
+    mr.lastVisit = new Date().toISOString();
+    writes.push(setDoc(doc(db, "medicalRecords", String(recordNo)), mr, { merge: true }));
+  }
+
+  // 3 — refresh demographics on the linked users row
+  const u: Record<string, unknown> = {};
+  if (rec.idNumber?.trim()) u.idNumber = rec.idNumber.trim();
+  if (rec.cell?.trim()) u.contactNum = rec.cell.trim();
+  if (rec.dob?.trim()) u.dateOfBirth = rec.dob.trim();
+  if (Object.keys(u).length > 0 && patient.userId != null) {
+    writes.push(setDoc(doc(db, "users", String(patient.userId)), u, { merge: true }));
+  }
+
+  await Promise.all(writes);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------

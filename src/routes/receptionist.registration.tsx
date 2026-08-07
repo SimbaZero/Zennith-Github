@@ -1,4 +1,4 @@
-﻿import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { registerPatient } from "@/lib/clinic-data";
@@ -64,18 +64,18 @@ function Registration() {
         emergencyContactName: f.emName,
         emergencyContactNo: f.emTel,
         insurance: f.scheme
-          ? `${f.scheme}${f.schemeNo ? ` Â· ${f.schemeNo}` : ""}`
+          ? `${f.scheme}${f.schemeNo ? ` · ${f.schemeNo}` : ""}`
           : "",
         remarks: f.remarks,
       }),
     onSuccess: (patientId) => {
       toast.success(
-        `${f.patientName} registered successfully â€” Patient ID ${patientId}`,
+        `${f.patientName} registered successfully ”” Patient ID ${patientId}`,
       );
       setF(initial);
     },
     onError: () =>
-      toast.error("Could not register patient â€” please try again"),
+      toast.error("Could not register patient ”” please try again"),
   });
 
   const submit = (e: React.FormEvent) => {
@@ -380,7 +380,7 @@ function Registration() {
           <textarea
             value={f.remarks}
             onChange={(e) => set("remarks")(e.target.value)}
-            placeholder="Any additional notes from the receptionistâ€¦"
+            placeholder="Any additional notes from the receptionist”¦"
             className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] min-h-28"
           />
         </div>
@@ -417,7 +417,7 @@ function Registration() {
               className="mt-1"
             />
             <span>
-              <strong>Patient / Guardian confirms consent</strong> â€” verbal
+              <strong>Patient / Guardian confirms consent</strong> ”” verbal
               authorisation captured by clerk.
             </span>
           </label>
@@ -441,7 +441,7 @@ function Registration() {
               disabled={register.isPending}
               className="bg-[oklch(0.55_0.18_245)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.5_0.18_245)] disabled:opacity-60"
             >
-              {register.isPending ? "Registeringâ€¦" : "Register Patient"}
+              {register.isPending ? "Registering”¦" : "Register Patient"}
             </button>
           </div>
         </div>
