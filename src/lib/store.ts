@@ -8,7 +8,7 @@ import {
 import type { AppointmentStatus } from "@/components/AppShell";
 import { CLINIC_IDS, splitByClinic, type ClinicId } from "./clinic";
 
-// ---------- Reactive in-memory store ----------
+// ---------- Reactive in-memory store (legacy — still used for pharmacy/stock) ----------
 type Listener = () => void;
 const listeners = new Set<Listener>();
 const emit = () => listeners.forEach((f) => f());
@@ -141,7 +141,7 @@ export const useAllPatients = () => useStoreSnapshot(getAllPatients);
 export const useClinicStock = (clinic: import("./clinic").ClinicId) =>
   useStoreSnapshot(() => stockForClinic(clinic));
 
-// ---------- Real-time clock ----------
+// ---------- Real-time clock (used by queue escalation timers) ----------
 export function useNow(intervalMs = 30_000) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -151,7 +151,7 @@ export function useNow(intervalMs = 30_000) {
   return now;
 }
 
-// ---------- Effective appointment statuses ----------
+// ---------- Effective appointment statuses (legacy local logic) ----------
 const toMin = (t: string) => {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + m;
