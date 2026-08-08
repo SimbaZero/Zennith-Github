@@ -18,6 +18,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  serverTimestamp,
 } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
 import { createUserWithEmailAndPassword, getAuth as getFbAuth } from "firebase/auth";
@@ -38,7 +39,6 @@ export interface ClinicAppointment {
 
 export interface DoctorDashboardData {
   doctorId: string;
-  /** Date the schedule list shows — today if the dataset has appointments today, otherwise the most recent day that does. */
   scheduleDate: string;
   schedule: ClinicAppointment[];
   stats: {
@@ -50,8 +50,6 @@ export interface DoctorDashboardData {
   };
 }
 
-// The imported dataset uses statuses like "Completed"/"Scheduled"; the UI badge
-// has its own vocabulary.
 function toBadgeStatus(s: string): AppointmentStatus {
   const v = s.toLowerCase();
   if (v.startsWith("complet")) return "Complete";
@@ -82,9 +80,6 @@ async function patientNames(patientIds: string[]): Promise<Map<string, { name: s
   return out;
 }
 
-/** Resolve the signed-in user's clinician id (Doc-N for doctors, Nur-N for
- *  nurses). Demo accounts (no legacyUserId in the dataset) fall back to
- *  Doc-1 / Nur-1 so the dashboards still demonstrate live data. */
 async function resolveClinicianId(): Promise<string> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Not signed in");
@@ -101,10 +96,329 @@ async function resolveClinicianId(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// ACUTE CARE TRIAGE SYSTEM — Sprint 1 Handoff Fixes
+// ---------------------------------------------------------------------------
+
+export type TriageLevel = "red" | "orange" | "yellow" | "green";
+
+export type QueueStatus = "waiting" | "called" | "in-room" | "handoff" | "done";
+
+export interface QueueEntry {
+  id: string;
+  patientId: string;
+  patientName: string;
+  reason: string;
+  clinician: string | null;
+  triage: TriageLevel;
+  priority: "normal" | "urgent";
+  status: QueueStatus;
+  joinedAt: string;
+  calledAt: string | null;
+  facilityId: string | null;
+  handedOffTo: string | null;
+  handedOffAt: string | null;
+  handedOffBy: string | null;
+  inRoomAt: string | null;
+  doneAt: string | null;
+}
+
+const TRIAGE_ORDER: Record<TriageLevel, number> = { red: 0, orange: 1, yellow: 2, green: 3 };
+
+export const TRIAGE_LABELS: Record<TriageLevel, string> = {
+  red: "Critical — Immediate",
+  orange: "Emergent — 10 min",
+  yellow: "Urgent — 30 min",
+  green: "Less Urgent — 60 min",
+};
+
+export const TRIAGE_MAX_WAIT_MINUTES: Record<TriageLevel, number> = {
+  red: 0,
+  orange: 10,
+  yellow: 30,
+  green: 60,
+};
+
+const toQueueEntry = (id: string, x: any): QueueEntry => ({
+  id,
+  patientId: x.patientId ?? "",
+  patientName: x.patientName ?? x.patientId ?? "",
+  reason: x.reason ?? "",
+  clinician: x.clinician ?? null,
+  triage: (typeof x.triage === "string" && ["red","orange","yellow","green"].includes(x.triage))
+    ? (x.triage as TriageLevel)
+    : "yellow",
+  priority: x.priority === "urgent" ? "urgent" : "normal",
+  status: (["waiting", "called", "in-room", "handoff", "done"].includes(x.status) ? x.status : "waiting") as QueueStatus,
+  joinedAt: x.joinedAt ?? "",
+  calledAt: x.calledAt ?? null,
+  facilityId: x.facilityId ?? null,
+  handedOffTo: x.handedOffTo ?? null,
+  handedOffAt: x.handedOffAt ?? null,
+  handedOffBy: x.handedOffBy ?? null,
+  inRoomAt: x.inRoomAt ?? null,
+  doneAt: x.doneAt ?? null,
+});
+
+function sortQueue(rows: QueueEntry[]): QueueEntry[] {
+  const rank = { waiting: 0, called: 1, "in-room": 2, handoff: 3, done: 4 } as Record<QueueStatus, number>;
+  return [...rows].sort(
+    (a, b) =>
+      rank[a.status] - rank[b.status] ||
+      TRIAGE_ORDER[a.triage] - TRIAGE_ORDER[b.triage] ||
+      a.joinedAt.localeCompare(b.joinedAt),
+  );
+}
+
+export function subscribeQueue(
+  onChange: (rows: QueueEntry[]) => void,
+  onError?: (e: unknown) => void,
+): () => void {
+  return onSnapshot(
+    collection(db, "queue"),
+    (snap) => onChange(sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())))),
+    (err) => onError?.(err),
+  );
+}
+
+export async function fetchQueue(): Promise<QueueEntry[]> {
+  const snap = await getDocs(collection(db, "queue"));
+  return sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())));
+}
+
+/** Get only acute care entries (not done) for a specific clinician or unassigned. */
+export async function getAcuteQueue(clinicianFilter?: string): Promise<QueueEntry[]> {
+  const all = await fetchQueue();
+  const active = all.filter((q) => q.status !== "done");
+  if (!clinicianFilter) return active;
+  return active.filter((q) =>
+    q.clinician === clinicianFilter ||
+    q.handedOffTo === clinicianFilter ||
+    (!q.clinician && !q.handedOffTo)
+  );
+}
+
+export async function addToQueue(input: {
+  patientId: string;
+  reason: string;
+  clinician?: string;
+  triage?: TriageLevel;
+  priority?: "normal" | "urgent";
+  facilityId?: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  const pid = input.patientId.trim();
+  const pSnap = await getDoc(doc(db, "patients", pid));
+  if (!pSnap.exists()) return { ok: false, error: `Patient "${pid}" not found` };
+
+  const existing = await getDocs(query(collection(db, "queue"), where("patientId", "==", pid)));
+  if (existing.docs.some((d) => d.data().status !== "done")) {
+    return { ok: false, error: `${pid} is already in the queue` };
+  }
+
+  const names = await patientNames([pid]);
+  const entryRef = await addDoc(collection(db, "queue"), {
+    patientId: pid,
+    patientName: names.get(pid)?.name ?? pid,
+    reason: input.reason.trim() || "Walk-in",
+    clinician: input.clinician?.trim() || null,
+    triage: input.triage ?? "yellow",
+    priority: input.priority ?? "normal",
+    status: "waiting",
+    joinedAt: new Date().toISOString(),
+    calledAt: null,
+    facilityId: input.facilityId ?? null,
+    handedOffTo: null,
+    handedOffAt: null,
+    handedOffBy: null,
+    inRoomAt: null,
+    doneAt: null,
+  });
+
+  // Audit log
+  await logQueueEvent({
+    entryId: entryRef.id,
+    patientId: pid,
+    action: "added",
+    triage: input.triage ?? "yellow",
+    by: auth.currentUser?.uid ?? "system",
+    details: `Added to queue: ${input.reason || "Walk-in"}`,
+  });
+
+  return { ok: true };
+}
+
+export async function callPatient(entry: QueueEntry, deliverAt: Date): Promise<void> {
+  await updateDoc(doc(db, "queue", entry.id), {
+    status: "called",
+    calledAt: new Date().toISOString(),
+  });
+
+  const pSnap = await getDoc(doc(db, "patients", entry.patientId));
+  const userId = pSnap.exists() ? Number(pSnap.data().userId) : null;
+  if (userId == null || Number.isNaN(userId)) return;
+
+  await addDoc(collection(db, "notifications"), {
+    notifId: Date.now(),
+    userId,
+    title: "You're being called",
+    message: entry.clinician
+      ? `Please proceed to ${entry.clinician}. ${entry.reason}`.trim()
+      : `Please proceed to the consulting room. ${entry.reason}`.trim(),
+    isRead: false,
+    timeSent: deliverAt.toISOString(),
+  });
+
+  await logQueueEvent({
+    entryId: entry.id,
+    patientId: entry.patientId,
+    action: "called",
+    triage: entry.triage,
+    by: auth.currentUser?.uid ?? "system",
+    details: `Called by ${entry.clinician || "reception"}`,
+  });
+}
+
+export async function setQueueStatus(id: string, status: QueueStatus): Promise<void> {
+  const updates: Record<string, any> = { status };
+  if (status === "called") updates.calledAt = new Date().toISOString();
+  if (status === "in-room") updates.inRoomAt = new Date().toISOString();
+  if (status === "done") updates.doneAt = new Date().toISOString();
+  await updateDoc(doc(db, "queue", id), updates);
+
+  const entrySnap = await getDoc(doc(db, "queue", id));
+  if (entrySnap.exists()) {
+    const entry = toQueueEntry(id, entrySnap.data());
+    await logQueueEvent({
+      entryId: id,
+      patientId: entry.patientId,
+      action: status,
+      triage: entry.triage,
+      by: auth.currentUser?.uid ?? "system",
+      details: `Status changed to ${status}`,
+    });
+  }
+}
+
+export async function handoffPatient(
+  entryId: string,
+  targetClinician: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const entrySnap = await getDoc(doc(db, "queue", entryId));
+    const entry = entrySnap.exists() ? toQueueEntry(entryId, entrySnap.data()) : null;
+
+    await updateDoc(doc(db, "queue", entryId), {
+      status: "handoff",
+      handedOffTo: targetClinician,
+      handedOffAt: new Date().toISOString(),
+      handedOffBy: auth.currentUser?.uid ?? "unknown",
+    });
+
+    await logQueueEvent({
+      entryId,
+      patientId: entry?.patientId ?? "unknown",
+      action: "handoff",
+      triage: entry?.triage ?? "yellow",
+      by: auth.currentUser?.uid ?? "system",
+      details: `Handed off from ${entry?.clinician ?? "reception"} to ${targetClinician}`,
+    });
+
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err.message ?? "Handoff failed" };
+  }
+}
+
+export async function acceptHandoff(
+  entryId: string,
+  newClinician: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const entrySnap = await getDoc(doc(db, "queue", entryId));
+    const entry = entrySnap.exists() ? toQueueEntry(entryId, entrySnap.data()) : null;
+
+    await updateDoc(doc(db, "queue", entryId), {
+      status: "in-room",
+      clinician: newClinician,
+      handedOffTo: null,
+      inRoomAt: new Date().toISOString(),
+    });
+
+    await logQueueEvent({
+      entryId,
+      patientId: entry?.patientId ?? "unknown",
+      action: "accept-handoff",
+      triage: entry?.triage ?? "yellow",
+      by: auth.currentUser?.uid ?? "system",
+      details: `${newClinician} accepted handoff from ${entry?.handedOffBy ?? "unknown"}`,
+    });
+
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err.message ?? "Accept handoff failed" };
+  }
+}
+
+export async function removeFromQueue(id: string): Promise<void> {
+  const entrySnap = await getDoc(doc(db, "queue", id));
+  const entry = entrySnap.exists() ? toQueueEntry(id, entrySnap.data()) : null;
+
+  await deleteDoc(doc(db, "queue", id));
+
+  if (entry) {
+    await logQueueEvent({
+      entryId: id,
+      patientId: entry.patientId,
+      action: "removed",
+      triage: entry.triage,
+      by: auth.currentUser?.uid ?? "system",
+      details: "Removed from queue",
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AUDIT LOG — persistent Firestore trail for Sprint 1 panel review
+// ---------------------------------------------------------------------------
+
+export interface QueueAuditEvent {
+  id?: string;
+  entryId: string;
+  patientId: string;
+  action: string;
+  triage: TriageLevel;
+  by: string;
+  details: string;
+  timestamp: any; // serverTimestamp
+}
+
+export async function logQueueEvent(event: Omit<QueueAuditEvent, "id" | "timestamp">): Promise<void> {
+  await addDoc(collection(db, "queueAudit"), {
+    ...event,
+    timestamp: serverTimestamp(),
+  });
+}
+
+/** Fetch audit trail for a specific queue entry or all recent events. */
+export async function fetchQueueAudit(entryId?: string, limitCount = 50): Promise<QueueAuditEvent[]> {
+  let q;
+  if (entryId) {
+    q = query(collection(db, "queueAudit"), where("entryId", "==", entryId), orderBy("timestamp", "desc"), limit(limitCount));
+  } else {
+    q = query(collection(db, "queueAudit"), orderBy("timestamp", "desc"), limit(limitCount));
+  }
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+  } as QueueAuditEvent));
+}
+
+// ---------------------------------------------------------------------------
 // Pharmacy: inventory + distributions
+// ---------------------------------------------------------------------------
 
 export interface InventoryItem {
-  id: string; // Firestore doc id
+  id: string;
   inventId: number;
   name: string;
   category: string;
@@ -131,7 +445,6 @@ export async function fetchInventory(): Promise<InventoryItem[]> {
         inventId: Number(x.inventId ?? d.id),
         name: x.medName ?? "",
         category: x.category ?? "",
-        // the imported dataset stores quantity as a string
         units: Number(x.quantity ?? 0),
         threshold: Number(x.threshold ?? 0),
         lastUpdated: x.lastUpdated ?? "",
@@ -154,7 +467,6 @@ export async function fetchRecentDistributions(): Promise<DistributionRecord[]> 
   });
 }
 
-/** Supplier intake: add units to an inventory item. */
 export async function receiveStock(itemId: string, units: number): Promise<void> {
   const ref = doc(db, "inventory", itemId);
   await runTransaction(db, async (tx) => {
@@ -165,8 +477,6 @@ export async function receiveStock(itemId: string, units: number): Promise<void>
   });
 }
 
-/** Distribute units to nurses: deducts stock atomically, then logs one
- *  distributions record per nurse that received a non-zero amount. */
 export async function distributeStock(
   itemId: string,
   allocations: Record<string, number>,
@@ -203,147 +513,8 @@ export async function distributeStock(
 }
 
 // ---------------------------------------------------------------------------
-// Walk-in queue — a shared Firestore collection, not per-screen state.
-// Reception drives it today; any other role can render the same live queue by
-// calling subscribeQueue (e.g. a nurse "who's waiting" widget).
-
-export type QueueStatus = "waiting" | "called" | "in-room" | "done";
-
-export interface QueueEntry {
-  id: string;
-  patientId: string;
-  patientName: string;
-  reason: string;
-  clinician: string | null;
-  priority: "normal" | "urgent";
-  status: QueueStatus;
-  joinedAt: string;
-  calledAt: string | null;
-  facilityId: string | null;
-}
-
-const toQueueEntry = (id: string, x: any): QueueEntry => ({
-  id,
-  patientId: x.patientId ?? "",
-  patientName: x.patientName ?? x.patientId ?? "",
-  reason: x.reason ?? "",
-  clinician: x.clinician ?? null,
-  priority: x.priority === "urgent" ? "urgent" : "normal",
-  status: (["waiting", "called", "in-room", "done"].includes(x.status) ? x.status : "waiting") as QueueStatus,
-  joinedAt: x.joinedAt ?? "",
-  calledAt: x.calledAt ?? null,
-  facilityId: x.facilityId ?? null,
-});
-
-/** Urgent first, then longest-waiting. Done entries sink to the bottom. */
-function sortQueue(rows: QueueEntry[]): QueueEntry[] {
-  const rank = { waiting: 0, called: 1, "in-room": 2, done: 3 } as Record<QueueStatus, number>;
-  return [...rows].sort(
-    (a, b) =>
-      rank[a.status] - rank[b.status] ||
-      (a.priority === b.priority ? 0 : a.priority === "urgent" ? -1 : 1) ||
-      a.joinedAt.localeCompare(b.joinedAt),
-  );
-}
-
-/**
- * Live subscription to the walk-in queue. Every screen calling this updates the
- * moment reception adds or calls a patient — no refresh needed.
- * Returns the unsubscribe function.
- */
-export function subscribeQueue(
-  onChange: (rows: QueueEntry[]) => void,
-  onError?: (e: unknown) => void,
-): () => void {
-  return onSnapshot(
-    collection(db, "queue"),
-    (snap) => onChange(sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())))),
-    (err) => onError?.(err),
-  );
-}
-
-/** One-off read (used where a live subscription isn't warranted). */
-export async function fetchQueue(): Promise<QueueEntry[]> {
-  const snap = await getDocs(collection(db, "queue"));
-  return sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())));
-}
-
-/** Adds a walk-in. Validates the patient exists and joins their real name. */
-export async function addToQueue(input: {
-  patientId: string;
-  reason: string;
-  clinician?: string;
-  priority?: "normal" | "urgent";
-  facilityId?: string | null;
-}): Promise<{ ok: boolean; error?: string }> {
-  const pid = input.patientId.trim();
-  const pSnap = await getDoc(doc(db, "patients", pid));
-  if (!pSnap.exists()) return { ok: false, error: `Patient "${pid}" not found` };
-
-  const existing = await getDocs(query(collection(db, "queue"), where("patientId", "==", pid)));
-  if (existing.docs.some((d) => d.data().status !== "done")) {
-    return { ok: false, error: `${pid} is already in the queue` };
-  }
-
-  const names = await patientNames([pid]);
-  await addDoc(collection(db, "queue"), {
-    patientId: pid,
-    patientName: names.get(pid)?.name ?? pid,
-    reason: input.reason.trim() || "Walk-in",
-    clinician: input.clinician?.trim() || null,
-    priority: input.priority ?? "normal",
-    status: "waiting",
-    joinedAt: new Date().toISOString(),
-    calledAt: null,
-    facilityId: input.facilityId ?? null,
-  });
-  return { ok: true };
-}
-
-/**
- * Calls a patient: flips the entry to "called" and writes an in-app
- * notification to their portal. Respects the 07:00–20:00 quiet-hours window —
- * outside it the notification is stamped for the next allowed send time.
- */
-export async function callPatient(
-  entry: QueueEntry,
-  deliverAt: Date,
-): Promise<void> {
-  await updateDoc(doc(db, "queue", entry.id), {
-    status: "called",
-    calledAt: new Date().toISOString(),
-  });
-
-  // notifications are addressed by the dataset's numeric userId
-  const pSnap = await getDoc(doc(db, "patients", entry.patientId));
-  const userId = pSnap.exists() ? Number(pSnap.data().userId) : null;
-  if (userId == null || Number.isNaN(userId)) return;
-
-  await addDoc(collection(db, "notifications"), {
-    notifId: Date.now(),
-    userId,
-    title: "You're being called",
-    message: entry.clinician
-      ? `Please proceed to ${entry.clinician}. ${entry.reason}`.trim()
-      : `Please proceed to the consulting room. ${entry.reason}`.trim(),
-    isRead: false,
-    timeSent: deliverAt.toISOString(),
-  });
-}
-
-export async function setQueueStatus(id: string, status: QueueStatus): Promise<void> {
-  await updateDoc(doc(db, "queue", id), {
-    status,
-    ...(status === "called" ? { calledAt: new Date().toISOString() } : {}),
-  });
-}
-
-export async function removeFromQueue(id: string): Promise<void> {
-  await deleteDoc(doc(db, "queue", id));
-}
-
-// ---------------------------------------------------------------------------
 // Patients + medical records
+// ---------------------------------------------------------------------------
 
 export interface PatientSummary {
   patientId: string;
@@ -369,13 +540,11 @@ async function toPatientSummary(pid: string, p: Record<string, any>): Promise<Pa
   };
 }
 
-/** First page of patient files (the dataset holds thousands — search by ID for the rest). */
 export async function fetchPatientPage(): Promise<PatientSummary[]> {
   const snap = await getDocs(query(collection(db, "patients"), orderBy("userId"), limit(30)));
   return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
 }
 
-/** Direct lookup by patient ID, e.g. "Pat-828". */
 export async function findPatient(pid: string): Promise<PatientSummary | null> {
   const snap = await getDoc(doc(db, "patients", pid));
   if (!snap.exists()) return null;
@@ -460,6 +629,7 @@ export async function fetchPatientRecord(pid: string): Promise<PatientRecord> {
 
 // ---------------------------------------------------------------------------
 // Digitised (OCR) patient files
+// ---------------------------------------------------------------------------
 
 export interface DigitisedRecord {
   patientId: string;
@@ -470,18 +640,10 @@ export interface DigitisedRecord {
   diagnosis?: string;
   medication?: string;
   notes?: string;
-  /** Raw OCR output, stored for audit / re-checking a bad scan. */
   rawText: string;
   confidence: number;
 }
 
-/**
- * Files an OCR-captured paper record against an existing patient:
- *  - appends a clinical note to medicalRecordsHistory (with the raw scan text)
- *  - updates the patient's medicalRecords with any fields that were captured
- *  - refreshes contact details on the users row when present
- * Nothing is overwritten with blanks — only captured fields are written.
- */
 export async function saveDigitisedRecord(
   rec: DigitisedRecord,
 ): Promise<{ ok: boolean; error?: string }> {
@@ -494,7 +656,6 @@ export async function saveDigitisedRecord(
 
   const writes: Promise<unknown>[] = [];
 
-  // 1 — clinical note capturing the scan
   writes.push(
     addDoc(collection(db, "medicalRecordsHistory"), {
       historyId: Date.now(),
@@ -509,7 +670,6 @@ export async function saveDigitisedRecord(
     }),
   );
 
-  // 2 — merge captured clinical fields into the medical record
   const mr: Record<string, unknown> = {};
   if (rec.diagnosis?.trim()) mr.diagnosis = rec.diagnosis.trim();
   if (rec.medication?.trim()) mr.prescription = rec.medication.trim();
@@ -518,7 +678,6 @@ export async function saveDigitisedRecord(
     writes.push(setDoc(doc(db, "medicalRecords", String(recordNo)), mr, { merge: true }));
   }
 
-  // 3 — refresh demographics on the linked users row
   const u: Record<string, unknown> = {};
   if (rec.idNumber?.trim()) u.idNumber = rec.idNumber.trim();
   if (rec.cell?.trim()) u.contactNum = rec.cell.trim();
@@ -533,15 +692,14 @@ export async function saveDigitisedRecord(
 
 // ---------------------------------------------------------------------------
 // Doctor appointments
+// ---------------------------------------------------------------------------
 
 export type RawAppointment = Omit<ClinicAppointment, "patientName" | "condition">;
 
 export interface DoctorAppointments {
   doctorId: string;
   appts: RawAppointment[];
-  /** All distinct dates that have appointments, ascending. */
   dates: string[];
-  /** Today if it has appointments, otherwise the most recent day that does. */
   scheduleDate: string;
 }
 
@@ -582,7 +740,6 @@ export async function attachPatientNames(appts: RawAppointment[]): Promise<Clini
   }));
 }
 
-// UI badge status → dataset status vocabulary.
 const FROM_BADGE: Record<AppointmentStatus, string> = {
   Complete: "Completed",
   "In-progress": "In Progress",
@@ -601,10 +758,9 @@ export async function setAppointmentStatus(apptDocId: string, status: Appointmen
 
 export async function createAppointment(input: {
   patientId: string;
-  date: string; // YYYY-MM-DD
-  time: string; // HH:mm
+  date: string;
+  time: string;
   type: string;
-  /** Doc-N or Nur-N; defaults to the signed-in doctor. */
   clinician?: string;
 }): Promise<void> {
   const patient = await getDoc(doc(db, "patients", input.patientId));
@@ -619,13 +775,9 @@ export async function createAppointment(input: {
     clinician = await resolveClinicianId();
   }
 
-// Sequential doc IDs via a counters doc — so new appointments keep the
-  // "1, 2, 3…" numbering instead of a random Firestore auto-ID.
   const nextId = await runTransaction(db, async (tx) => {
     const ref = doc(db, "counters", "appointments");
     const snap = await tx.get(ref);
-    // Base of 10 matches your current max doc ID (1-10). Self-initializes
-    // on first call — no manual Firestore edit needed.
     const cur = snap.exists() ? (snap.data() as { apptNo: number }).apptNo : 10;
     const next = cur + 1;
     tx.set(ref, { apptNo: next });
@@ -644,6 +796,7 @@ export async function createAppointment(input: {
 
 // ---------------------------------------------------------------------------
 // Reception: clinic-wide appointments + patient registration
+// ---------------------------------------------------------------------------
 
 export interface ClinicWideAppointment extends ClinicAppointment {
   clinician: string;
@@ -687,16 +840,10 @@ export interface RegistrationInput {
   remarks: string;
 }
 
-/**
- * Registers a new patient: allocates sequential IDs via a counters document
- * (race-safe), then creates the users, medicalRecords, and patients docs the
- * rest of the app joins across. Returns the new Pat-### id.
- */
 export async function registerPatient(input: RegistrationInput): Promise<string> {
   const ids = await runTransaction(db, async (tx) => {
     const ref = doc(db, "counters", "registration");
     const snap = await tx.get(ref);
-    // Bases sit far above the imported dataset's ranges to avoid collisions.
     const cur = snap.exists()
       ? (snap.data() as { patientNo: number; userNo: number; recordNo: number })
       : { patientNo: 9000, userNo: 90000, recordNo: 9000 };
@@ -757,16 +904,6 @@ export interface PatientSignupInput {
   password: string;
 }
 
-/**
- * Public self-service signup (the "Create an account" flow on the login page).
- * Creates BOTH a Firebase Auth login and the linked clinical patient object:
- *   - users / medicalRecords / patients docs (same shape registerPatient writes)
- *   - a profiles/{uid} doc, role "patient", whose legacyUserId points at the new
- *     users row — the join every staff dashboard uses to find the patient.
- * IDs come from the same race-safe counters/registration document as the
- * receptionist flow. All writes run on a throwaway secondary app instance
- * (authenticated as the new patient) so any existing session is untouched.
- */
 export async function signUpPatient(
   input: PatientSignupInput,
 ): Promise<{ ok: boolean; patientId?: string; error?: string }> {
@@ -838,8 +975,6 @@ export async function signUpPatient(
       }),
     ]);
 
-    // The confirmation email is sent separately via Resend (see
-    // src/lib/welcome-email.ts) — Firebase's built-in email proved unreliable.
     return { ok: true, patientId };
   } catch (err: any) {
     if (err.code === "auth/email-already-in-use")
@@ -859,6 +994,7 @@ export async function signUpPatient(
 
 // ---------------------------------------------------------------------------
 // Doctor dashboard
+// ---------------------------------------------------------------------------
 
 export async function fetchDoctorDashboard(): Promise<DoctorDashboardData> {
   const { doctorId, appts, scheduleDate } = await fetchDoctorAppointments();
