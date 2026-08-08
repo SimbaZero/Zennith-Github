@@ -9,223 +9,321 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { auth, db } from "@/lib/firebase";
 
 // ---------------------------------------------------------------------------
-// SINGLE SOURCE OF TRUTH for "who is the current patient".
-// Every page asks THIS function, never hardcodes a patient ID directly.
-//
-// TODO(login): currently hardcoded to one real test patient (Pat-2) since
-// real patient login isn't built yet. When it is, change ONLY this function
-// to derive the real patientId from the logged-in user's profile — nothing
-// else in the patient pages needs to change.
+// AUTH RACE FIX — same pattern as doctor-service.ts. On a hard reload our
+// own getAuth() resolves instantly (route guard lets the page render) but
+// Firebase Auth's auth.currentUser is still null until the SDK rehydrates
+// the session from IndexedDB. We wait for the first real auth event before
+// touching Firestore.
 // ---------------------------------------------------------------------------
-export function getCurrentPatientId(): string {
-  if (typeof window !== "undefined") {
-    const stored = localStorage.getItem("zennith_current_patient_id");
-    if (stored) return stored;
-  }
-  return "Pat-2"; // fallback/demo default when no one's really logged in
+function waitForAuthReady(): Promise<User | null> {
+  if (auth.currentUser) return Promise.resolve(auth.currentUser);
+  return new Promise((resolve) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      unsubscribe();
+      resolve(user);
+    });
+  });
 }
 
-export async function getPatientIdForUserId(
-  userId: number,
-): Promise<string | null> {
-  const snap = await getDocs(
-    query(collection(db, "patients"), where("userId", "==", userId)),
-  );
-  if (snap.empty) return null;
-  return snap.docs[0].data().patientId ?? snap.docs[0].id;
-}
+// ---------------------------------------------------------------------------
+// CurrentPatient — flattened identity + medical record, since the patient
+// pages (dashboard, medical-record) read straight off `patient.*` rather
+// than a separate record object.
+// ---------------------------------------------------------------------------
 
 export interface CurrentPatient {
-  patientId: string;
-  fullName: string;
+  patientId: string; // e.g. "Pat-1"
   userId?: number;
   medicalRecordNo?: number;
-  chronicCondition?: string;
-  emergencyContactName?: string;
-  emergencyContactNo?: string;
-  // From users collection:
+  fullName: string;
   idNumber?: string;
   contactNum?: string;
-  // From medicalRecords collection:
+  email?: string;
+  emergencyContactName?: string;
+  emergencyContactNo?: string;
+  chronicCondition?: string;
+  prescription?: string;
   bloodType?: string;
   allergies?: string;
   bp?: string;
-  glucose?: number;
+  glucose?: string;
   lastVisit?: string;
-  prescription?: string;
 }
 
 /**
- * Loads the current patient's real record — joined with `users` (for name,
- * ID number, contact) and `medicalRecords` (for clinical summary fields).
- * Note: the real schema has no age, gender, or patient "status" field —
- * see db-issues.md #8. Those are simply omitted rather than faked.
+ * One-shot lookup (not a hook) — resolves the "patients" doc ID for a given
+ * numeric userId. Used by login.tsx right after authentication, before any
+ * component that would call useCurrentPatient() has mounted, so this can't
+ * rely on the live subscription/cache below.
+ *
+ * ASSUMPTION: "patients" docs carry a `userId` field pointing back to the
+ * `users` collection (same relationship doctor-service.ts relies on for
+ * doctors). Returns null if no matching patient doc exists.
  */
-export function useCurrentPatient(): {
-  patient: CurrentPatient | null;
-  loading: boolean;
-} {
+export async function getPatientIdForUserId(userId: number): Promise<string | null> {
+  const snap = await getDocs(query(collection(db, "patients"), where("userId", "==", userId)));
+  if (snap.empty) return null;
+  return snap.docs[0].id;
+}
+
+const patientIdCacheByUid = new Map<string, Promise<string>>();
+
+async function resolvePatientIdForUid(uid: string): Promise<string> {
+  const profileSnap = await getDoc(doc(db, "profiles", uid));
+  const profile = profileSnap.exists() ? profileSnap.data() : ({} as Record<string, any>);
+  return profile.patientId ?? "Pat-1";
+}
+
+/**
+ * Live-subscribes to the signed-in patient's identity + medical record,
+ * joining `patients` -> `users` -> `medicalRecords` client-side (Firestore
+ * can't join across collections). Updates automatically if a nurse/doctor
+ * edits the record while this page is open.
+ */
+export function useCurrentPatient(): { patient: CurrentPatient | null; loading: boolean } {
+  const [uid, setUid] = useState<string | null>(null);
+  const [patientId, setPatientId] = useState<string | null>(null);
+
+  const [patientBase, setPatientBase] = useState<Record<string, any> | null>(null);
+  const [userData, setUserData] = useState<Record<string, any>>({});
+  const [mrData, setMrData] = useState<Record<string, any>>({});
+
   const [patient, setPatient] = useState<CurrentPatient | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // 1. Resolve which uid is signed in.
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUid(user?.uid ?? null);
+      if (!user) setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Resolve patientId for that uid (cached per-uid).
+  useEffect(() => {
+    if (!uid) return;
     let cancelled = false;
+    setLoading(true);
 
-    async function load() {
-      try {
-        const patientId = getCurrentPatientId();
-        const pSnap = await getDoc(doc(db, "patients", patientId));
-        if (!pSnap.exists()) {
-          if (!cancelled) setLoading(false);
-          return;
-        }
-        const p = pSnap.data();
-
-        let fullName = "Unknown patient";
-        let idNumber: string | undefined;
-        let contactNum: string | undefined;
-        if (p.userId != null) {
-          const uSnap = await getDoc(doc(db, "users", String(p.userId)));
-          if (uSnap.exists()) {
-            const u = uSnap.data();
-            fullName = `${u.names ?? ""} ${u.surname ?? ""}`.trim();
-            idNumber = u.idNumber;
-            contactNum = u.contactNum;
-          }
-        }
-
-        let bloodType, allergies, bp, glucose, lastVisit, prescription;
-        if (p.medicalRecordNo != null) {
-          const mrSnap = await getDoc(
-            doc(db, "medicalRecords", String(p.medicalRecordNo)),
-          );
-          if (mrSnap.exists()) {
-            const mr = mrSnap.data();
-            bloodType = mr.bloodType;
-            allergies = mr.allergies;
-            bp = mr.bp;
-            glucose = mr.glucose;
-            lastVisit = mr.lastVisit;
-            prescription = mr.prescription;
-          }
-        }
-
-        if (!cancelled) {
-          setPatient({
-            patientId: p.patientId ?? patientId,
-            fullName,
-            userId: p.userId,
-            medicalRecordNo: p.medicalRecordNo,
-            chronicCondition: p.chronicCondition,
-            emergencyContactName: p.emergencyContactName,
-            emergencyContactNo: p.emergencyContactNo,
-            idNumber,
-            contactNum,
-            bloodType,
-            allergies,
-            bp,
-            glucose,
-            lastVisit,
-            prescription,
-          });
-          setLoading(false);
-        }
-      } catch (err) {
-        console.error("Failed to load current patient:", err);
-        if (!cancelled) setLoading(false);
-      }
+    if (!patientIdCacheByUid.has(uid)) {
+      patientIdCacheByUid.set(uid, resolvePatientIdForUid(uid));
     }
+    patientIdCacheByUid
+      .get(uid)!
+      .then((pid) => {
+        if (!cancelled) setPatientId(pid);
+      })
+      .catch((err) => {
+        console.error("Failed to resolve current patient id:", err);
+        patientIdCacheByUid.delete(uid);
+        if (!cancelled) setLoading(false);
+      });
 
-    load();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [uid]);
+
+  // 3. Subscribe to the patient doc itself (waits for auth to be ready).
+  useEffect(() => {
+    if (!patientId) return;
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    waitForAuthReady().then(() => {
+      if (cancelled) return;
+      unsubscribe = onSnapshot(doc(db, "patients", patientId), (snap) => {
+        setPatientBase(snap.exists() ? snap.data() : null);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [patientId]);
+
+  // 4. Subscribe to the linked user + medical record docs.
+  useEffect(() => {
+    if (patientBase?.userId == null) return;
+    const unsubscribe = onSnapshot(doc(db, "users", String(patientBase.userId)), (snap) => {
+      setUserData(snap.exists() ? snap.data() : {});
+    });
+    return () => unsubscribe();
+  }, [patientBase?.userId]);
+
+  useEffect(() => {
+    if (patientBase?.medicalRecordNo == null) return;
+    const unsubscribe = onSnapshot(
+      doc(db, "medicalRecords", String(patientBase.medicalRecordNo)),
+      (snap) => {
+        setMrData(snap.exists() ? snap.data() : {});
+      },
+    );
+    return () => unsubscribe();
+  }, [patientBase?.medicalRecordNo]);
+
+  // 5. Assemble the flattened CurrentPatient once the base doc has loaded.
+  useEffect(() => {
+    if (!patientId || !patientBase) return;
+    const u = userData;
+    const mr = mrData;
+
+    setPatient({
+      patientId,
+      userId: patientBase.userId,
+      medicalRecordNo: patientBase.medicalRecordNo,
+      fullName: [u.names, u.surname].filter(Boolean).join(" ") || patientId,
+      idNumber: u.idNumber,
+      contactNum: u.contactNum,
+      email: u.email,
+      emergencyContactName: patientBase.emergencyContactName,
+      emergencyContactNo: patientBase.emergencyContactNo,
+      chronicCondition: patientBase.chronicCondition,
+      prescription: mr.prescription,
+      bloodType: mr.bloodType,
+      allergies: mr.allergies,
+      bp: mr.bp,
+      glucose: mr.glucose != null ? String(mr.glucose) : undefined,
+      lastVisit: mr.lastVisit,
+    });
+    setLoading(false);
+  }, [patientId, patientBase, userData, mrData]);
 
   return { patient, loading };
 }
 
-export interface VisitHistoryEntry {
+// ---------------------------------------------------------------------------
+// Appointments — plain array (not {appointments, loading}) to match how the
+// route files consume it directly with .filter/.map/.length. `clinician` is
+// left as the raw clinician ID (e.g. "Doc-1", "Nur-1") since that's what the
+// appointments table displays, not a resolved name.
+// ---------------------------------------------------------------------------
+
+export interface PatientAppointmentRow {
   docId: string;
-  historyId: number;
-  description: string;
-}
-
-/**
- * Live-subscribes to this patient's real visit history.
- * Note: medicalRecordsHistory has no explicit date field — sorted by
- * historyId descending as the best available proxy for chronological order.
- */
-export function usePatientVisitHistory(
-  medicalRecordNo: number | undefined,
-): VisitHistoryEntry[] {
-  const [entries, setEntries] = useState<VisitHistoryEntry[]>([]);
-
-  useEffect(() => {
-    if (medicalRecordNo == null) return;
-    const q = query(
-      collection(db, "medicalRecordsHistory"),
-      where("medicalRecordNo", "==", medicalRecordNo),
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((d) => ({
-        docId: d.id,
-        historyId: d.data().historyId,
-        description: d.data().description,
-      }));
-      items.sort((a, b) => b.historyId - a.historyId);
-      setEntries(items);
-    });
-    return () => unsubscribe();
-  }, [medicalRecordNo]);
-
-  return entries;
-}
-
-export interface PatientAppointment {
-  docId: string;
-  dateTime: string; // ISO string
+  dateTime: string; // full ISO, from appointDateTime
   type: string;
-  clinician: string; // doctor ID, e.g. "Doc-1" — TODO: join to doctors collection for a real name later
-  status: string;
+  clinicianId: string; // raw ID, e.g. "Doc-1", "Nur-1" — kept for reference/keys
+  clinician: string; // resolved display name, e.g. "Dr. Mutizwa" or "Nurse Olorato" — falls back to clinicianId while resolving or if lookup fails
+  status: string; // "Scheduled" | "Confirmed" | "Completed" | "Cancelled" | ...
 }
 
-/**
- * Live-subscribes to this patient's real appointments.
- */
-export function usePatientAppointments(
-  patientId: string | undefined,
-): PatientAppointment[] {
-  const [appointments, setAppointments] = useState<PatientAppointment[]>([]);
+function toDisplayStatus(raw: string): string {
+  const v = (raw ?? "").trim();
+  if (!v) return "Scheduled";
+  return v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
+}
+
+// Clinician IDs come in two flavors — "Doc-1" (doctors collection) and
+// "Nur-1" (nurses collection) — so the lookup checks the prefix and joins
+// through to `users` for the real name, same join pattern doctor-service.ts
+// uses for patient names. Cached across calls since clinician rosters don't
+// change often within a session.
+const clinicianNameCache = new Map<string, string>();
+
+async function resolveClinicianName(clinicianId: string): Promise<string> {
+  if (clinicianNameCache.has(clinicianId)) return clinicianNameCache.get(clinicianId)!;
+
+  const isNurse = clinicianId.toLowerCase().startsWith("nur");
+  const collectionName = isNurse ? "nurses" : "doctors";
+
+  try {
+    const snap = await getDoc(doc(db, collectionName, clinicianId));
+    if (!snap.exists()) {
+      clinicianNameCache.set(clinicianId, clinicianId);
+      return clinicianId;
+    }
+    const c = snap.data();
+    const uSnap = c.userId != null ? await getDoc(doc(db, "users", String(c.userId))) : null;
+    const u = uSnap?.exists() ? uSnap.data() : {};
+    const fullName = [u.names, u.surname].filter(Boolean).join(" ");
+    const display = fullName
+      ? isNurse
+        ? `Nurse ${fullName}`
+        : `Dr. ${fullName}`
+      : clinicianId;
+    clinicianNameCache.set(clinicianId, display);
+    return display;
+  } catch (err) {
+    console.error(`Failed to resolve clinician name for ${clinicianId}:`, err);
+    return clinicianId;
+  }
+}
+
+export function usePatientAppointments(patientId: string | undefined): PatientAppointmentRow[] {
+  const [appointments, setAppointments] = useState<PatientAppointmentRow[]>([]);
 
   useEffect(() => {
-    if (!patientId) return;
-    const q = query(
-      collection(db, "appointments"),
-      where("patientId", "==", patientId),
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((d) => {
-        const data = d.data();
-        return {
-          docId: d.id,
-          dateTime: data.appointDateTime,
-          type: data.appointType,
-          clinician: data.clinician,
-          status: data.status,
-        };
-      });
-      items.sort((a, b) => a.dateTime.localeCompare(b.dateTime));
-      setAppointments(items);
+    if (!patientId) {
+      setAppointments([]);
+      return;
+    }
+    let cancelled = false;
+    const q = query(collection(db, "appointments"), where("patientId", "==", patientId));
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const base = snapshot.docs
+        .map((d) => {
+          const a = d.data();
+          return {
+            docId: d.id,
+            dateTime: a.appointDateTime ?? "",
+            type: a.appointType ?? "",
+            clinicianId: a.clinician ?? "",
+            status: toDisplayStatus(a.status ?? ""),
+          };
+        })
+        .sort((a, b) => a.dateTime.localeCompare(b.dateTime));
+
+      // Show rows immediately with the raw ID, then swap in real names once
+      // resolved — avoids blocking the whole list on name lookups.
+      if (!cancelled) {
+        setAppointments(base.map((a) => ({ ...a, clinician: a.clinicianId })));
+      }
+
+      const uniqueIds = [...new Set(base.map((a) => a.clinicianId))].filter(Boolean);
+      await Promise.all(uniqueIds.map((id) => resolveClinicianName(id)));
+
+      if (!cancelled) {
+        setAppointments(
+          base.map((a) => ({
+            ...a,
+            clinician: clinicianNameCache.get(a.clinicianId) ?? a.clinicianId,
+          })),
+        );
+      }
     });
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [patientId]);
 
   return appointments;
 }
+
+/**
+ * Writes a new status onto an appointment doc — used for the patient-facing
+ * Confirm / Cancel buttons and the SMS confirm-link flow.
+ */
+export async function updateAppointmentStatus(
+  docId: string,
+  status: "Confirmed" | "Cancelled",
+): Promise<void> {
+  await updateDoc(doc(db, "appointments", docId), { status });
+}
+
+// ---------------------------------------------------------------------------
+// Notifications — keyed by userId (not patientId), per the Alerts page.
+// ASSUMPTION: top-level "notifications" collection with fields `userId`,
+// `title`, `message`, `timeSent`, `isRead`. Adjust field names below if your
+// schema differs.
+// ---------------------------------------------------------------------------
 
 export interface PatientNotification {
   docId: string;
@@ -235,63 +333,84 @@ export interface PatientNotification {
   isRead: boolean;
 }
 
-/**
- * Live-subscribes to this patient's real notifications, newest first.
- */
-export function usePatientNotifications(
-  userId: number | undefined,
-): PatientNotification[] {
-  const [notifications, setNotifications] = useState<PatientNotification[]>([]);
+export function usePatientNotifications(userId: number | undefined): PatientNotification[] {
+  const [items, setItems] = useState<PatientNotification[]>([]);
 
   useEffect(() => {
-    if (userId == null) return;
-    const q = query(
-      collection(db, "notifications"),
-      where("userId", "==", userId),
-    );
+    if (userId == null) {
+      setItems([]);
+      return;
+    }
+    const q = query(collection(db, "notifications"), where("userId", "==", userId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((d) => {
-        const data = d.data();
-        return {
-          docId: d.id,
-          title: data.title,
-          message: data.message,
-          timeSent: data.timeSent,
-          isRead: data.isRead ?? false,
-        };
-      });
-      items.sort((a, b) => b.timeSent.localeCompare(a.timeSent));
-      setNotifications(items);
+      const rows: PatientNotification[] = snapshot.docs
+        .map((d) => {
+          const n = d.data();
+          return {
+            docId: d.id,
+            title: n.title ?? "",
+            message: n.message ?? "",
+            timeSent: n.timeSent ?? "",
+            isRead: !!n.isRead,
+          };
+        })
+        .sort((a, b) => b.timeSent.localeCompare(a.timeSent));
+      setItems(rows);
     });
     return () => unsubscribe();
   }, [userId]);
 
-  return notifications;
+  return items;
 }
 
-/**
- * Real write: updates an appointment's status in Firestore (e.g. patient
- * confirming or cancelling). Replaces the old localStorage-only mock version.
- */
-export async function updateAppointmentStatus(
-  docId: string,
-  status: string,
-): Promise<void> {
-  await updateDoc(doc(db, "appointments", docId), { status });
-}
-
-/**
- * Real write: marks a single notification as read.
- */
 export async function markNotificationRead(docId: string): Promise<void> {
   await updateDoc(doc(db, "notifications", docId), { isRead: true });
 }
 
-/**
- * Real write: marks multiple notifications as read at once (e.g. "Mark all read").
- */
-export async function markAllNotificationsRead(
-  docIds: string[],
-): Promise<void> {
+export async function markAllNotificationsRead(docIds: string[]): Promise<void> {
   await Promise.all(docIds.map((id) => markNotificationRead(id)));
+}
+
+// ---------------------------------------------------------------------------
+// Visit history — keyed by medicalRecordNo (per medical-record.tsx), unlike
+// doctor-service.ts's medicalRecordsHistory lookup which keys off patientId.
+// ASSUMPTION: history docs also carry a `medicalRecordNo` field alongside
+// `patientId`. If they don't, swap the `where` clause below to filter by
+// patientId instead and pass patient.patientId from the caller.
+// ---------------------------------------------------------------------------
+
+export interface VisitHistoryEntry {
+  docId: string;
+  description: string;
+}
+
+export function usePatientVisitHistory(
+  medicalRecordNo: number | undefined,
+): VisitHistoryEntry[] {
+  const [visits, setVisits] = useState<VisitHistoryEntry[]>([]);
+
+  useEffect(() => {
+    if (medicalRecordNo == null) {
+      setVisits([]);
+      return;
+    }
+    const q = query(
+      collection(db, "medicalRecordsHistory"),
+      where("medicalRecordNo", "==", medicalRecordNo),
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const rows: VisitHistoryEntry[] = snapshot.docs
+        .map((d) => ({
+          docId: d.id,
+          description: d.data().description ?? "",
+          historyId: Number(d.data().historyId ?? 0),
+        }))
+        .sort((a: any, b: any) => b.historyId - a.historyId)
+        .map(({ docId, description }) => ({ docId, description }));
+      setVisits(rows);
+    });
+    return () => unsubscribe();
+  }, [medicalRecordNo]);
+
+  return visits;
 }

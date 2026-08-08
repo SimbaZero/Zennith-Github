@@ -6,6 +6,7 @@ import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { getRoleSearchIndex, type SearchEntry } from "@/lib/search-index";
 import { getNotifications, type Notification } from "@/lib/notifications";
 import { useActiveClinic, CLINICS, type ClinicId } from "@/lib/clinic";
+import { useCurrentPatient } from "@/lib/patient-service";
 
 export type NavItem = { to: string; label: string; icon: any };
 
@@ -82,11 +83,20 @@ export function AppShell({
   };
 
   const username = typeof window !== "undefined" ? getUsername() : "";
-  const display = displayNameFor(role, username);
+  const { patient: sidebarPatient } = useCurrentPatient();
+  const display =
+    role === "patient" && sidebarPatient?.fullName
+      ? sidebarPatient.fullName
+      : displayNameFor(role, username);
   const initial = display.charAt(0).toUpperCase();
   const clinic = useActiveClinic();
   const canSwitch = !!staffCanSwitch[role];
-  const siteLabel = role === "super_admin" ? "Zennith Platform · All facilities" : clinic.name;
+  const siteLabel =
+    role === "super_admin"
+      ? "Zennith Platform · All facilities"
+      : role === "patient"
+        ? "Patient Portal"
+        : clinic.name;
 
   return (
     <div className="min-h-screen flex bg-[oklch(0.97_0.01_240)]">
@@ -152,7 +162,9 @@ export function AppShell({
           )}
           <h1 className="font-semibold text-base lg:text-lg truncate">{title}</h1>
           <div className="flex-1" />
-          <ClinicChip clinicId={clinic.id} clinicName={clinic.name} canSwitch={canSwitch} onSwitch={clinic.setId} />
+          {role !== "patient" && (
+            <ClinicChip clinicId={clinic.id} clinicName={clinic.name} canSwitch={canSwitch} onSwitch={clinic.setId} />
+          )}
           <ScopedSearch role={role} />
           <NotificationsButton role={role} />
           <button

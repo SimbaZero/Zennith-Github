@@ -51,16 +51,23 @@ function PatientAppointments() {
     }
   }, [confirm]);
 
-  const setStatus = async (
+  // Clicking the ALREADY-ACTIVE button undoes it back to "Scheduled" instead
+  // of doing nothing — so patients aren't locked into a choice. Clicking the
+  // other (inactive) button switches straight to that status as before.
+  const toggleStatus = async (
     docId: string,
-    status: "Confirmed" | "Cancelled",
+    currentStatus: string,
+    target: "Confirmed" | "Cancelled",
   ) => {
+    const nextStatus = currentStatus === target ? "Scheduled" : target;
     try {
-      await updateAppointmentStatus(docId, status);
+      await updateAppointmentStatus(docId, nextStatus as "Confirmed" | "Cancelled" | "Scheduled");
       toast.success(
-        status === "Confirmed"
-          ? "Appointment confirmed"
-          : "Appointment cancelled — clinic will be notified",
+        nextStatus === "Scheduled"
+          ? "Reverted to scheduled"
+          : nextStatus === "Confirmed"
+            ? "Appointment confirmed"
+            : "Appointment cancelled — clinic will be notified",
       );
     } catch (err) {
       console.error(err);
@@ -128,18 +135,28 @@ function PatientAppointments() {
                     <td className="px-5 py-3.5">
                       <div className="flex gap-2">
                         <button
-                          disabled={a.status === "Confirmed"}
-                          onClick={() => setStatus(a.docId, "Confirmed")}
-                          className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-[oklch(0.97_0.06_160)] disabled:opacity-40"
+                          disabled={a.status === "Cancelled"}
+                          onClick={() => toggleStatus(a.docId, a.status, "Confirmed")}
+                          className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md disabled:opacity-40 ${
+                            a.status === "Confirmed"
+                              ? "bg-[oklch(0.94_0.08_160)] border-[oklch(0.7_0.1_160)]"
+                              : "hover:bg-[oklch(0.97_0.06_160)]"
+                          }`}
+                          title={a.status === "Confirmed" ? "Click to undo confirmation" : "Confirm this appointment"}
                         >
-                          <Check size={12} /> Confirm
+                          <Check size={12} /> {a.status === "Confirmed" ? "Confirmed" : "Confirm"}
                         </button>
                         <button
-                          disabled={a.status === "Cancelled"}
-                          onClick={() => setStatus(a.docId, "Cancelled")}
-                          className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-[oklch(0.97_0.05_25)] disabled:opacity-40"
+                          disabled={a.status === "Confirmed"}
+                          onClick={() => toggleStatus(a.docId, a.status, "Cancelled")}
+                          className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md disabled:opacity-40 ${
+                            a.status === "Cancelled"
+                              ? "bg-[oklch(0.94_0.08_25)] border-[oklch(0.7_0.15_25)]"
+                              : "hover:bg-[oklch(0.97_0.05_25)]"
+                          }`}
+                          title={a.status === "Cancelled" ? "Click to undo cancellation" : "Cancel this appointment"}
                         >
-                          <X size={12} /> Cancel
+                          <X size={12} /> {a.status === "Cancelled" ? "Cancelled" : "Cancel"}
                         </button>
                       </div>
                     </td>

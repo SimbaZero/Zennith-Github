@@ -2,7 +2,6 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import { useNow } from "@/lib/store";
-import { useActiveClinic } from "@/lib/clinic";
 import { useInventory } from "@/lib/pharmacist-service"; // real central stock, shared across roles
 import {
   useCurrentPatient,
@@ -49,7 +48,6 @@ function AppointmentStatusBadge({ status }: { status: string }) {
 function PatientDashboard() {
   const navigate = useNavigate();
   const now = useNow(1000);
-  const clinic = useActiveClinic();
   const { stock } = useInventory();
 
   const { patient, loading: patientLoading } = useCurrentPatient();
@@ -97,7 +95,7 @@ function PatientDashboard() {
               : (patient?.fullName ?? "Unknown patient")}
           </h2>
           <p className="text-sm text-white/70 mt-1">
-            {patient?.patientId} · {clinic.name}
+            {patient?.patientId}
           </p>
         </div>
         <div className="text-right">
@@ -179,7 +177,7 @@ function PatientDashboard() {
             Available
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            Ready for collection at {clinic.name}
+            Ready for collection
           </p>
         </div>
         <button
@@ -255,7 +253,7 @@ function PatientDashboard() {
               Medication Collection
             </p>
             <div className="bg-[oklch(0.96_0.05_160)] text-[oklch(0.35_0.12_160)] rounded-md p-3 text-sm">
-              ✓ Available at {clinic.name}
+              ✓ Available for collection
               <br />
               <span className="text-xs">Collection hours: 08:00 — 16:00</span>
             </div>
