@@ -50,6 +50,7 @@ import { Route as DoctorAppointmentsRouteImport } from './routes/doctor.appointm
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
+import { Route as ReceptionistProfilesPidRouteImport } from './routes/receptionist.profiles_.$pid'
 import { Route as NursePatientRecordPidRouteImport } from './routes/nurse.patient-record.$pid'
 import { Route as DoctorPatientRecordPidRouteImport } from './routes/doctor.patient-record.$pid'
 
@@ -260,6 +261,11 @@ const AdminAuditRoute = AdminAuditRouteImport.update({
   path: '/audit',
   getParentRoute: () => AdminRoute,
 } as any)
+const ReceptionistProfilesPidRoute = ReceptionistProfilesPidRouteImport.update({
+  id: '/profiles_/$pid',
+  path: '/profiles/$pid',
+  getParentRoute: () => ReceptionistRoute,
+} as any)
 const NursePatientRecordPidRoute = NursePatientRecordPidRouteImport.update({
   id: '/patient-record/$pid',
   path: '/patient-record/$pid',
@@ -315,6 +321,7 @@ export interface FileRoutesByFullPath {
   '/super-admin/': typeof SuperAdminIndexRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
+  '/receptionist/profiles/$pid': typeof ReceptionistProfilesPidRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -353,6 +360,7 @@ export interface FileRoutesByTo {
   '/super-admin': typeof SuperAdminIndexRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
+  '/receptionist/profiles/$pid': typeof ReceptionistProfilesPidRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -399,6 +407,7 @@ export interface FileRoutesById {
   '/super-admin/': typeof SuperAdminIndexRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
+  '/receptionist/profiles_/$pid': typeof ReceptionistProfilesPidRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -446,6 +455,7 @@ export interface FileRouteTypes {
     | '/super-admin/'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
+    | '/receptionist/profiles/$pid'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -484,6 +494,7 @@ export interface FileRouteTypes {
     | '/super-admin'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
+    | '/receptionist/profiles/$pid'
   id:
     | '__root__'
     | '/'
@@ -529,6 +540,7 @@ export interface FileRouteTypes {
     | '/super-admin/'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
+    | '/receptionist/profiles_/$pid'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -835,6 +847,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAuditRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/receptionist/profiles_/$pid': {
+      id: '/receptionist/profiles_/$pid'
+      path: '/profiles/$pid'
+      fullPath: '/receptionist/profiles/$pid'
+      preLoaderRoute: typeof ReceptionistProfilesPidRouteImport
+      parentRoute: typeof ReceptionistRoute
+    }
     '/nurse/patient-record/$pid': {
       id: '/nurse/patient-record/$pid'
       path: '/patient-record/$pid'
@@ -949,6 +968,7 @@ interface ReceptionistRouteChildren {
   ReceptionistProfilesRoute: typeof ReceptionistProfilesRoute
   ReceptionistRegistrationRoute: typeof ReceptionistRegistrationRoute
   ReceptionistIndexRoute: typeof ReceptionistIndexRoute
+  ReceptionistProfilesPidRoute: typeof ReceptionistProfilesPidRoute
 }
 
 const ReceptionistRouteChildren: ReceptionistRouteChildren = {
@@ -956,6 +976,7 @@ const ReceptionistRouteChildren: ReceptionistRouteChildren = {
   ReceptionistProfilesRoute: ReceptionistProfilesRoute,
   ReceptionistRegistrationRoute: ReceptionistRegistrationRoute,
   ReceptionistIndexRoute: ReceptionistIndexRoute,
+  ReceptionistProfilesPidRoute: ReceptionistProfilesPidRoute,
 }
 
 const ReceptionistRouteWithChildren = ReceptionistRoute._addFileChildren(

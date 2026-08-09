@@ -1191,3 +1191,77 @@ export async function fetchDoctorDashboard(): Promise<DoctorDashboardData> {
     },
   };
 }
+
+// Paste these functions at the bottom of your existing src/lib/clinic-data.ts
+
+
+
+export interface PatientUpdateInput {
+  chronicCondition?: string;
+  emergencyContactName?: string;
+  emergencyContactNo?: string;
+}
+
+export interface UserUpdateInput {
+  names?: string;
+  surname?: string;
+  idNumber?: string;
+  contactNum?: string;
+  city?: string;
+  suburb?: string;
+  email?: string;
+  dob?: string;
+  gender?: string;
+  marital?: string;
+  residential?: string;
+  mailing?: string;
+  occupation?: string;
+  employer?: string;
+  employerTel?: string;
+  employerAddr?: string;
+  finClass?: string;
+  scheme?: string;
+  schemeNo?: string;
+  deps?: string;
+  income?: string;
+  assets?: string;
+  payerName?: string;
+  payerTel?: string;
+  payerRel?: string;
+  payerAddr?: string;
+  remarks?: string;
+}
+
+export interface MedicalRecordUpdateInput {
+  bloodType?: string;
+  allergies?: string;
+  prescription?: string;
+  dosage?: number;
+  bp?: string;
+  glucose?: number;
+  cd4?: number;
+  viralLoad?: number;
+  insurancePolicyNumber?: string;
+}
+
+export async function updatePatient(patientId: string, input: PatientUpdateInput): Promise<void> {
+  await updateDoc(doc(db, "patients", patientId), {
+    ...input,
+    lastUpdated: new Date().toISOString(),
+  });
+}
+
+export async function updateUser(userId: string | number, input: UserUpdateInput): Promise<void> {
+  await updateDoc(doc(db, "users", String(userId)), {
+    ...input,
+    lastUpdated: new Date().toISOString(),
+  });
+}
+
+export async function updateMedicalRecord(recordNo: string | number, input: MedicalRecordUpdateInput): Promise<void> {
+  await updateDoc(doc(db, "medicalRecords", String(recordNo)), {
+    ...input,
+    lastUpdated: new Date().toISOString(),
+  });
+}
+

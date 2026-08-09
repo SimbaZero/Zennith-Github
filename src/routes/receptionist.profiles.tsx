@@ -56,39 +56,27 @@ function Profiles() {
             <tbody>
               {isLoading && (
                 <tr>
-                  <td
-                    colSpan={5}
-                    className="px-5 py-6 text-center text-muted-foreground"
-                  >
+                  <td colSpan={5} className="px-5 py-6 text-center text-muted-foreground">
                     Loading...
                   </td>
                 </tr>
               )}
               {isError && (
                 <tr>
-                  <td
-                    colSpan={5}
-                    className="px-5 py-6 text-center text-destructive"
-                  >
+                  <td colSpan={5} className="px-5 py-6 text-center text-destructive">
                     Failed to load patients.
                   </td>
                 </tr>
               )}
               {!isLoading && filtered.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={5}
-                    className="px-5 py-6 text-center text-muted-foreground"
-                  >
+                  <td colSpan={5} className="px-5 py-6 text-center text-muted-foreground">
                     No matching patients.
                   </td>
                 </tr>
               )}
               {filtered.map((p) => (
-                <tr
-                  key={p.patientId}
-                  className="border-b last:border-0 hover:bg-secondary/40"
-                >
+                <tr key={p.patientId} className="border-b last:border-0 hover:bg-secondary/40">
                   <td className="px-5 py-3 text-muted-foreground font-mono text-xs">
                     {p.patientId}
                   </td>
@@ -98,7 +86,7 @@ function Profiles() {
                   <td className="px-5 py-3 text-right">
                     <button
                       onClick={() =>
-                        navigate({ to: "/receptionist/registration" })
+                        navigate({ to: `/receptionist/profiles/${p.patientId}` })
                       }
                       className="border text-xs px-3 py-1 rounded-md hover:bg-secondary"
                     >
@@ -111,8 +99,7 @@ function Profiles() {
           </table>
         </div>
         <div className="px-5 py-3 text-xs text-muted-foreground border-t">
-          Showing first {all.length} patients — search by ID for others not
-          listed here.
+          Showing first {all.length} patients — search by ID for others not listed here.
         </div>
       </div>
     </AppShell>
