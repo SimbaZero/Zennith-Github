@@ -21,7 +21,10 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
-import { createUserWithEmailAndPassword, getAuth as getFbAuth } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  getAuth as getFbAuth,
+} from "firebase/auth";
 import { auth, db, firebaseConfig } from "@/firebase";
 import type { AppointmentStatus } from "@/components/AppShell";
 
@@ -54,11 +57,14 @@ function toBadgeStatus(s: string): AppointmentStatus {
   const v = s.toLowerCase();
   if (v.startsWith("complet")) return "Complete";
   if (v.includes("progress")) return "In-progress";
-  if (v.includes("no-show") || v.includes("no show") || v.includes("cancel")) return "No-show";
+  if (v.includes("no-show") || v.includes("no show") || v.includes("cancel"))
+    return "No-show";
   return "Incomplete";
 }
 
-async function patientNames(patientIds: string[]): Promise<Map<string, { name: string; condition: string }>> {
+async function patientNames(
+  patientIds: string[],
+): Promise<Map<string, { name: string; condition: string }>> {
   const unique = [...new Set(patientIds)];
   const out = new Map<string, { name: string; condition: string }>();
   await Promise.all(
@@ -89,7 +95,12 @@ async function resolveClinicianId(): Promise<string> {
   const col = isNurse ? "nurses" : "doctors";
   const idField = isNurse ? "nurseId" : "doctorId";
   if (data.legacyUserId != null) {
-    const snap = await getDocs(query(collection(db, col), where("userId", "==", Number(data.legacyUserId))));
+    const snap = await getDocs(
+      query(
+        collection(db, col),
+        where("userId", "==", Number(data.legacyUserId)),
+      ),
+    );
     if (!snap.empty) return snap.docs[0].data()[idField] ?? snap.docs[0].id;
   }
   return isNurse ? "Nur-1" : "Doc-1";
@@ -122,7 +133,12 @@ export interface QueueEntry {
   doneAt: string | null;
 }
 
-const TRIAGE_ORDER: Record<TriageLevel, number> = { red: 0, orange: 1, yellow: 2, green: 3 };
+const TRIAGE_ORDER: Record<TriageLevel, number> = {
+  red: 0,
+  orange: 1,
+  yellow: 2,
+  green: 3,
+};
 
 export const TRIAGE_LABELS: Record<TriageLevel, string> = {
   red: "Critical — Immediate",
@@ -144,11 +160,17 @@ const toQueueEntry = (id: string, x: any): QueueEntry => ({
   patientName: x.patientName ?? x.patientId ?? "",
   reason: x.reason ?? "",
   clinician: x.clinician ?? null,
-  triage: (typeof x.triage === "string" && ["red","orange","yellow","green"].includes(x.triage))
-    ? (x.triage as TriageLevel)
-    : "yellow",
+  triage:
+    typeof x.triage === "string" &&
+    ["red", "orange", "yellow", "green"].includes(x.triage)
+      ? (x.triage as TriageLevel)
+      : "yellow",
   priority: x.priority === "urgent" ? "urgent" : "normal",
-  status: (["waiting", "called", "in-room", "handoff", "done"].includes(x.status) ? x.status : "waiting") as QueueStatus,
+  status: (["waiting", "called", "in-room", "handoff", "done"].includes(
+    x.status,
+  )
+    ? x.status
+    : "waiting") as QueueStatus,
   joinedAt: x.joinedAt ?? "",
   calledAt: x.calledAt ?? null,
   facilityId: x.facilityId ?? null,
@@ -160,7 +182,13 @@ const toQueueEntry = (id: string, x: any): QueueEntry => ({
 });
 
 function sortQueue(rows: QueueEntry[]): QueueEntry[] {
-  const rank = { waiting: 0, called: 1, "in-room": 2, handoff: 3, done: 4 } as Record<QueueStatus, number>;
+  const rank = {
+    waiting: 0,
+    called: 1,
+    "in-room": 2,
+    handoff: 3,
+    done: 4,
+  } as Record<QueueStatus, number>;
   return [...rows].sort(
     (a, b) =>
       rank[a.status] - rank[b.status] ||
@@ -175,7 +203,8 @@ export function subscribeQueue(
 ): () => void {
   return onSnapshot(
     collection(db, "queue"),
-    (snap) => onChange(sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())))),
+    (snap) =>
+      onChange(sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())))),
     (err) => onError?.(err),
   );
 }
@@ -186,14 +215,17 @@ export async function fetchQueue(): Promise<QueueEntry[]> {
 }
 
 /** Get only acute care entries (not done) for a specific clinician or unassigned. */
-export async function getAcuteQueue(clinicianFilter?: string): Promise<QueueEntry[]> {
+export async function getAcuteQueue(
+  clinicianFilter?: string,
+): Promise<QueueEntry[]> {
   const all = await fetchQueue();
   const active = all.filter((q) => q.status !== "done");
   if (!clinicianFilter) return active;
-  return active.filter((q) =>
-    q.clinician === clinicianFilter ||
-    q.handedOffTo === clinicianFilter ||
-    (!q.clinician && !q.handedOffTo)
+  return active.filter(
+    (q) =>
+      q.clinician === clinicianFilter ||
+      q.handedOffTo === clinicianFilter ||
+      (!q.clinician && !q.handedOffTo),
   );
 }
 
@@ -207,9 +239,12 @@ export async function addToQueue(input: {
 }): Promise<{ ok: boolean; error?: string }> {
   const pid = input.patientId.trim();
   const pSnap = await getDoc(doc(db, "patients", pid));
-  if (!pSnap.exists()) return { ok: false, error: `Patient "${pid}" not found` };
+  if (!pSnap.exists())
+    return { ok: false, error: `Patient "${pid}" not found` };
 
-  const existing = await getDocs(query(collection(db, "queue"), where("patientId", "==", pid)));
+  const existing = await getDocs(
+    query(collection(db, "queue"), where("patientId", "==", pid)),
+  );
   if (existing.docs.some((d) => d.data().status !== "done")) {
     return { ok: false, error: `${pid} is already in the queue` };
   }
@@ -246,7 +281,10 @@ export async function addToQueue(input: {
   return { ok: true };
 }
 
-export async function callPatient(entry: QueueEntry, deliverAt: Date): Promise<void> {
+export async function callPatient(
+  entry: QueueEntry,
+  deliverAt: Date,
+): Promise<void> {
   await updateDoc(doc(db, "queue", entry.id), {
     status: "called",
     calledAt: new Date().toISOString(),
@@ -277,7 +315,10 @@ export async function callPatient(entry: QueueEntry, deliverAt: Date): Promise<v
   });
 }
 
-export async function setQueueStatus(id: string, status: QueueStatus): Promise<void> {
+export async function setQueueStatus(
+  id: string,
+  status: QueueStatus,
+): Promise<void> {
   const updates: Record<string, any> = { status };
   if (status === "called") updates.calledAt = new Date().toISOString();
   if (status === "in-room") updates.inRoomAt = new Date().toISOString();
@@ -304,7 +345,9 @@ export async function handoffPatient(
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const entrySnap = await getDoc(doc(db, "queue", entryId));
-    const entry = entrySnap.exists() ? toQueueEntry(entryId, entrySnap.data()) : null;
+    const entry = entrySnap.exists()
+      ? toQueueEntry(entryId, entrySnap.data())
+      : null;
 
     await updateDoc(doc(db, "queue", entryId), {
       status: "handoff",
@@ -334,7 +377,9 @@ export async function acceptHandoff(
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const entrySnap = await getDoc(doc(db, "queue", entryId));
-    const entry = entrySnap.exists() ? toQueueEntry(entryId, entrySnap.data()) : null;
+    const entry = entrySnap.exists()
+      ? toQueueEntry(entryId, entrySnap.data())
+      : null;
 
     await updateDoc(doc(db, "queue", entryId), {
       status: "in-room",
@@ -391,7 +436,9 @@ export interface QueueAuditEvent {
   timestamp: any; // serverTimestamp
 }
 
-export async function logQueueEvent(event: Omit<QueueAuditEvent, "id" | "timestamp">): Promise<void> {
+export async function logQueueEvent(
+  event: Omit<QueueAuditEvent, "id" | "timestamp">,
+): Promise<void> {
   await addDoc(collection(db, "queueAudit"), {
     ...event,
     timestamp: serverTimestamp(),
@@ -399,18 +446,33 @@ export async function logQueueEvent(event: Omit<QueueAuditEvent, "id" | "timesta
 }
 
 /** Fetch audit trail for a specific queue entry or all recent events. */
-export async function fetchQueueAudit(entryId?: string, limitCount = 50): Promise<QueueAuditEvent[]> {
+export async function fetchQueueAudit(
+  entryId?: string,
+  limitCount = 50,
+): Promise<QueueAuditEvent[]> {
   let q;
   if (entryId) {
-    q = query(collection(db, "queueAudit"), where("entryId", "==", entryId), orderBy("timestamp", "desc"), limit(limitCount));
+    q = query(
+      collection(db, "queueAudit"),
+      where("entryId", "==", entryId),
+      orderBy("timestamp", "desc"),
+      limit(limitCount),
+    );
   } else {
-    q = query(collection(db, "queueAudit"), orderBy("timestamp", "desc"), limit(limitCount));
+    q = query(
+      collection(db, "queueAudit"),
+      orderBy("timestamp", "desc"),
+      limit(limitCount),
+    );
   }
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-  } as QueueAuditEvent));
+  return snap.docs.map(
+    (d) =>
+      ({
+        id: d.id,
+        ...d.data(),
+      }) as QueueAuditEvent,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -453,8 +515,16 @@ export async function fetchInventory(): Promise<InventoryItem[]> {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function fetchRecentDistributions(): Promise<DistributionRecord[]> {
-  const snap = await getDocs(query(collection(db, "distributions"), orderBy("createdAt", "desc"), limit(15)));
+export async function fetchRecentDistributions(): Promise<
+  DistributionRecord[]
+> {
+  const snap = await getDocs(
+    query(
+      collection(db, "distributions"),
+      orderBy("createdAt", "desc"),
+      limit(15),
+    ),
+  );
   return snap.docs.map((d) => {
     const x = d.data();
     return {
@@ -467,13 +537,19 @@ export async function fetchRecentDistributions(): Promise<DistributionRecord[]> 
   });
 }
 
-export async function receiveStock(itemId: string, units: number): Promise<void> {
+export async function receiveStock(
+  itemId: string,
+  units: number,
+): Promise<void> {
   const ref = doc(db, "inventory", itemId);
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Medication not found");
     const current = Number(snap.data().quantity ?? 0);
-    tx.update(ref, { quantity: current + units, lastUpdated: new Date().toISOString() });
+    tx.update(ref, {
+      quantity: current + units,
+      lastUpdated: new Date().toISOString(),
+    });
   });
 }
 
@@ -493,7 +569,10 @@ export async function distributeStock(
     if (total > current) throw new Error("Total exceeds available stock");
     medName = x.medName ?? "";
     inventId = Number(x.inventId ?? 0);
-    tx.update(ref, { quantity: current - total, lastUpdated: new Date().toISOString() });
+    tx.update(ref, {
+      quantity: current - total,
+      lastUpdated: new Date().toISOString(),
+    });
   });
   const now = new Date();
   await Promise.all(
@@ -523,7 +602,10 @@ export interface PatientSummary {
   lastVisit: string;
 }
 
-async function toPatientSummary(pid: string, p: Record<string, any>): Promise<PatientSummary> {
+async function toPatientSummary(
+  pid: string,
+  p: Record<string, any>,
+): Promise<PatientSummary> {
   const [uSnap, mrSnap] = await Promise.all([
     getDoc(doc(db, "users", String(p.userId))),
     p.medicalRecordNo != null
@@ -541,7 +623,9 @@ async function toPatientSummary(pid: string, p: Record<string, any>): Promise<Pa
 }
 
 export async function fetchPatientPage(): Promise<PatientSummary[]> {
-  const snap = await getDocs(query(collection(db, "patients"), orderBy("userId"), limit(30)));
+  const snap = await getDocs(
+    query(collection(db, "patients"), orderBy("userId"), limit(30)),
+  );
   return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
 }
 
@@ -585,8 +669,15 @@ export async function fetchPatientRecord(pid: string): Promise<PatientRecord> {
     p.medicalRecordNo != null
       ? getDoc(doc(db, "medicalRecords", String(p.medicalRecordNo)))
       : Promise.resolve(null),
-    getDocs(query(collection(db, "medicalRecordsHistory"), where("patientId", "==", pid))),
-    getDocs(query(collection(db, "appointments"), where("patientId", "==", pid))),
+    getDocs(
+      query(
+        collection(db, "medicalRecordsHistory"),
+        where("patientId", "==", pid),
+      ),
+    ),
+    getDocs(
+      query(collection(db, "appointments"), where("patientId", "==", pid)),
+    ),
   ]);
   const u = uSnap.exists() ? uSnap.data() : {};
   const mr = mrSnap?.exists() ? mrSnap.data() : {};
@@ -595,7 +686,9 @@ export async function fetchPatientRecord(pid: string): Promise<PatientRecord> {
   const upcoming = apptSnap.docs
     .map((d) => d.data())
     .filter((a) => (a.appointDateTime ?? "") > now)
-    .sort((a, b) => (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""))[0];
+    .sort((a, b) =>
+      (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""),
+    )[0];
 
   return {
     patientId: pid,
@@ -621,7 +714,11 @@ export async function fetchPatientRecord(pid: string): Promise<PatientRecord> {
       ? `${(upcoming.appointDateTime ?? "").slice(0, 10)} · ${upcoming.appointType ?? ""}`
       : "None scheduled",
     history: histSnap.docs
-      .map((d) => ({ id: d.id, description: d.data().description ?? "", historyId: Number(d.data().historyId ?? 0) }))
+      .map((d) => ({
+        id: d.id,
+        description: d.data().description ?? "",
+        historyId: Number(d.data().historyId ?? 0),
+      }))
       .sort((a, b) => b.historyId - a.historyId)
       .map(({ id, description }) => ({ id, description })),
   };
@@ -649,10 +746,12 @@ export async function saveDigitisedRecord(
 ): Promise<{ ok: boolean; error?: string }> {
   const pid = rec.patientId.trim();
   const pSnap = await getDoc(doc(db, "patients", pid));
-  if (!pSnap.exists()) return { ok: false, error: `Patient "${pid}" not found` };
+  if (!pSnap.exists())
+    return { ok: false, error: `Patient "${pid}" not found` };
   const patient = pSnap.data();
   const recordNo = patient.medicalRecordNo;
-  if (recordNo == null) return { ok: false, error: `${pid} has no medical record number` };
+  if (recordNo == null)
+    return { ok: false, error: `${pid} has no medical record number` };
 
   const writes: Promise<unknown>[] = [];
 
@@ -675,7 +774,9 @@ export async function saveDigitisedRecord(
   if (rec.medication?.trim()) mr.prescription = rec.medication.trim();
   if (Object.keys(mr).length > 0) {
     mr.lastVisit = new Date().toISOString();
-    writes.push(setDoc(doc(db, "medicalRecords", String(recordNo)), mr, { merge: true }));
+    writes.push(
+      setDoc(doc(db, "medicalRecords", String(recordNo)), mr, { merge: true }),
+    );
   }
 
   const u: Record<string, unknown> = {};
@@ -683,7 +784,9 @@ export async function saveDigitisedRecord(
   if (rec.cell?.trim()) u.contactNum = rec.cell.trim();
   if (rec.dob?.trim()) u.dateOfBirth = rec.dob.trim();
   if (Object.keys(u).length > 0 && patient.userId != null) {
-    writes.push(setDoc(doc(db, "users", String(patient.userId)), u, { merge: true }));
+    writes.push(
+      setDoc(doc(db, "users", String(patient.userId)), u, { merge: true }),
+    );
   }
 
   await Promise.all(writes);
@@ -694,7 +797,10 @@ export async function saveDigitisedRecord(
 // Doctor appointments
 // ---------------------------------------------------------------------------
 
-export type RawAppointment = Omit<ClinicAppointment, "patientName" | "condition">;
+export type RawAppointment = Omit<
+  ClinicAppointment,
+  "patientName" | "condition"
+>;
 
 export interface DoctorAppointments {
   doctorId: string;
@@ -705,7 +811,9 @@ export interface DoctorAppointments {
 
 export async function fetchDoctorAppointments(): Promise<DoctorAppointments> {
   const doctorId = await resolveClinicianId();
-  const apptSnap = await getDocs(query(collection(db, "appointments"), where("clinician", "==", doctorId)));
+  const apptSnap = await getDocs(
+    query(collection(db, "appointments"), where("clinician", "==", doctorId)),
+  );
   const appts = apptSnap.docs
     .map((d) => {
       const a = d.data();
@@ -731,7 +839,9 @@ export async function fetchDoctorAppointments(): Promise<DoctorAppointments> {
   return { doctorId, appts, dates, scheduleDate };
 }
 
-export async function attachPatientNames(appts: RawAppointment[]): Promise<ClinicAppointment[]> {
+export async function attachPatientNames(
+  appts: RawAppointment[],
+): Promise<ClinicAppointment[]> {
   const names = await patientNames(appts.map((a) => a.patientId));
   return appts.map((a) => ({
     ...a,
@@ -747,7 +857,10 @@ const FROM_BADGE: Record<AppointmentStatus, string> = {
   "No-show": "No-Show",
 };
 
-export async function setAppointmentStatus(apptDocId: string, status: AppointmentStatus): Promise<void> {
+export async function setAppointmentStatus(
+  apptDocId: string,
+  status: AppointmentStatus,
+): Promise<void> {
   await runTransaction(db, async (tx) => {
     const ref = doc(db, "appointments", apptDocId);
     const snap = await tx.get(ref);
@@ -764,13 +877,17 @@ export async function createAppointment(input: {
   clinician?: string;
 }): Promise<void> {
   const patient = await getDoc(doc(db, "patients", input.patientId));
-  if (!patient.exists()) throw new Error(`Patient "${input.patientId}" not found`);
+  if (!patient.exists())
+    throw new Error(`Patient "${input.patientId}" not found`);
 
   let clinician = input.clinician?.trim();
   if (clinician) {
     const col = /^doc/i.test(clinician) ? "doctors" : "nurses";
     const c = await getDoc(doc(db, col, clinician));
-    if (!c.exists()) throw new Error(`Clinician "${clinician}" not found (use e.g. Doc-2 or Nur-315)`);
+    if (!c.exists())
+      throw new Error(
+        `Clinician "${clinician}" not found (use e.g. Doc-2 or Nur-315)`,
+      );
   } else {
     clinician = await resolveClinicianId();
   }
@@ -802,9 +919,15 @@ export interface ClinicWideAppointment extends ClinicAppointment {
   clinician: string;
 }
 
-export async function fetchRecentAppointments(): Promise<ClinicWideAppointment[]> {
+export async function fetchRecentAppointments(): Promise<
+  ClinicWideAppointment[]
+> {
   const snap = await getDocs(
-    query(collection(db, "appointments"), orderBy("appointDateTime", "desc"), limit(25)),
+    query(
+      collection(db, "appointments"),
+      orderBy("appointDateTime", "desc"),
+      limit(25),
+    ),
   );
   const raw = snap.docs.map((d) => {
     const a = d.data();
@@ -840,14 +963,20 @@ export interface RegistrationInput {
   remarks: string;
 }
 
-export async function registerPatient(input: RegistrationInput): Promise<string> {
+export async function registerPatient(
+  input: RegistrationInput,
+): Promise<string> {
   const ids = await runTransaction(db, async (tx) => {
     const ref = doc(db, "counters", "registration");
     const snap = await tx.get(ref);
     const cur = snap.exists()
       ? (snap.data() as { patientNo: number; userNo: number; recordNo: number })
       : { patientNo: 9000, userNo: 90000, recordNo: 9000 };
-    const next = { patientNo: cur.patientNo + 1, userNo: cur.userNo + 1, recordNo: cur.recordNo + 1 };
+    const next = {
+      patientNo: cur.patientNo + 1,
+      userNo: cur.userNo + 1,
+      recordNo: cur.recordNo + 1,
+    };
     tx.set(ref, next);
     return next;
   });
@@ -902,13 +1031,39 @@ export interface PatientSignupInput {
   email: string;
   phone: string;
   password: string;
+  clinicId: number;
+}
+
+// Real clinic list — reads the actual `clinics` collection, unlike the old
+// hardcoded 3-entry list in lib/clinic.ts. Used on the signup form so new
+// patients actually get a real clinicId instead of none at all.
+export interface RealClinic {
+  clinicId: number;
+  clinicName: string;
+  type?: string;
+}
+export async function fetchRealClinics(): Promise<RealClinic[]> {
+  const snap = await getDocs(collection(db, "clinics"));
+  return snap.docs
+    .map((d) => {
+      const data = d.data();
+      return {
+        clinicId: Number(data.clinicId),
+        clinicName: data.clinicName ?? `Clinic ${data.clinicId}`,
+        type: data.type,
+      };
+    })
+    .sort((a, b) => a.clinicName.localeCompare(b.clinicName));
 }
 
 export async function signUpPatient(
   input: PatientSignupInput,
 ): Promise<{ ok: boolean; patientId?: string; error?: string }> {
   const email = input.email.trim().toLowerCase();
-  const secondary = initializeApp(firebaseConfig, `patient-signup-${Date.now()}`);
+  const secondary = initializeApp(
+    firebaseConfig,
+    `patient-signup-${Date.now()}`,
+  );
   const fdb = getFirestore(secondary);
   try {
     const cred = await createUserWithEmailAndPassword(
@@ -921,7 +1076,11 @@ export async function signUpPatient(
       const ref = doc(fdb, "counters", "registration");
       const snap = await tx.get(ref);
       const cur = snap.exists()
-        ? (snap.data() as { patientNo: number; userNo: number; recordNo: number })
+        ? (snap.data() as {
+            patientNo: number;
+            userNo: number;
+            recordNo: number;
+          })
         : { patientNo: 9000, userNo: 90000, recordNo: 9000 };
       const next = {
         patientNo: cur.patientNo + 1,
@@ -963,6 +1122,7 @@ export async function signUpPatient(
         chronicCondition: "Not yet assessed",
         emergencyContactName: "",
         emergencyContactNo: "",
+        clinicId: input.clinicId,
       }),
       setDoc(doc(fdb, "profiles", cred.user.uid), {
         username: email,
@@ -984,9 +1144,15 @@ export async function signUpPatient(
     if (err.code === "auth/invalid-email")
       return { ok: false, error: "Enter a valid email address" };
     if (err.code === "auth/operation-not-allowed")
-      return { ok: false, error: "Email/Password sign-in is not enabled in Firebase" };
+      return {
+        ok: false,
+        error: "Email/Password sign-in is not enabled in Firebase",
+      };
     console.error("signUpPatient failed:", err.code, err.message);
-    return { ok: false, error: `Could not create account (${err.code ?? err.message ?? "unknown"})` };
+    return {
+      ok: false,
+      error: `Could not create account (${err.code ?? err.message ?? "unknown"})`,
+    };
   } finally {
     await deleteApp(secondary);
   }
@@ -1005,7 +1171,9 @@ export async function fetchDoctorDashboard(): Promise<DoctorDashboardData> {
   const weekStart = new Date(scheduleDate);
   weekStart.setDate(weekStart.getDate() - 6);
   const weekStartIso = weekStart.toISOString().slice(0, 10);
-  const week = appts.filter((a) => a.date >= weekStartIso && a.date <= scheduleDate);
+  const week = appts.filter(
+    (a) => a.date >= weekStartIso && a.date <= scheduleDate,
+  );
 
   return {
     doctorId,
@@ -1014,7 +1182,10 @@ export async function fetchDoctorDashboard(): Promise<DoctorDashboardData> {
     stats: {
       dayTotal: day.length,
       dayCompleted: day.filter((a) => a.status === "Complete").length,
-      pendingReviews: appts.filter((a) => a.type.toLowerCase().includes("review") && a.status !== "Complete").length,
+      pendingReviews: appts.filter(
+        (a) =>
+          a.type.toLowerCase().includes("review") && a.status !== "Complete",
+      ).length,
       weekPatients: new Set(week.map((a) => a.patientId)).size,
       upcoming: appts.filter((a) => a.date > scheduleDate).length,
     },

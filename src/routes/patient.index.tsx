@@ -51,6 +51,7 @@ function PatientDashboard() {
   const { stock } = useInventory();
 
   const { patient, loading: patientLoading } = useCurrentPatient();
+  const clinicLabel = patient?.clinicName ?? "No clinic assigned";
   const appointments = usePatientAppointments(patient?.patientId);
   const notifications = usePatientNotifications(patient?.userId);
   const unread = notifications.filter((n) => !n.isRead).length;
@@ -95,7 +96,7 @@ function PatientDashboard() {
               : (patient?.fullName ?? "Unknown patient")}
           </h2>
           <p className="text-sm text-white/70 mt-1">
-            {patient?.patientId}
+            {patient?.patientId} · {clinicLabel}
           </p>
         </div>
         <div className="text-right">
@@ -177,7 +178,7 @@ function PatientDashboard() {
             Available
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            Ready for collection
+            Ready for collection at {clinicLabel}
           </p>
         </div>
         <button
@@ -253,7 +254,7 @@ function PatientDashboard() {
               Medication Collection
             </p>
             <div className="bg-[oklch(0.96_0.05_160)] text-[oklch(0.35_0.12_160)] rounded-md p-3 text-sm">
-              ✓ Available for collection
+              ✓ Available for collection at {clinicLabel}
               <br />
               <span className="text-xs">Collection hours: 08:00 — 16:00</span>
             </div>

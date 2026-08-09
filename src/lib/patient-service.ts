@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  addDoc,
   collection,
   doc,
   getDoc,
@@ -8,6 +9,7 @@ import {
   query,
   updateDoc,
   where,
+  type DocumentData,
 } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
@@ -52,6 +54,12 @@ export interface CurrentPatient {
   bp?: string;
   glucose?: string;
   lastVisit?: string;
+  // From patients.clinicId, joined against the real clinics collection —
+  // replaces the old fake localStorage "active clinic". undefined = this
+  // patient has no clinicId set yet (e.g. very old self-registered accounts
+  // from before signup started collecting one).
+  clinicId?: number;
+  clinicName?: string;
 }
 
 /**
@@ -64,8 +72,12 @@ export interface CurrentPatient {
  * `users` collection (same relationship doctor-service.ts relies on for
  * doctors). Returns null if no matching patient doc exists.
  */
-export async function getPatientIdForUserId(userId: number): Promise<string | null> {
-  const snap = await getDocs(query(collection(db, "patients"), where("userId", "==", userId)));
+export async function getPatientIdForUserId(
+  userId: number,
+): Promise<string | null> {
+  const snap = await getDocs(
+    query(collection(db, "patients"), where("userId", "==", userId)),
+  );
   if (snap.empty) return null;
   return snap.docs[0].id;
 }
@@ -74,7 +86,9 @@ const patientIdCacheByUid = new Map<string, Promise<string>>();
 
 async function resolvePatientIdForUid(uid: string): Promise<string> {
   const profileSnap = await getDoc(doc(db, "profiles", uid));
-  const profile = profileSnap.exists() ? profileSnap.data() : ({} as Record<string, any>);
+  const profile = profileSnap.exists()
+    ? profileSnap.data()
+    : ({} as DocumentData);
   return profile.patientId ?? "Pat-1";
 }
 
@@ -84,13 +98,17 @@ async function resolvePatientIdForUid(uid: string): Promise<string> {
  * can't join across collections). Updates automatically if a nurse/doctor
  * edits the record while this page is open.
  */
-export function useCurrentPatient(): { patient: CurrentPatient | null; loading: boolean } {
+export function useCurrentPatient(): {
+  patient: CurrentPatient | null;
+  loading: boolean;
+} {
   const [uid, setUid] = useState<string | null>(null);
   const [patientId, setPatientId] = useState<string | null>(null);
 
-  const [patientBase, setPatientBase] = useState<Record<string, any> | null>(null);
-  const [userData, setUserData] = useState<Record<string, any>>({});
-  const [mrData, setMrData] = useState<Record<string, any>>({});
+  const [patientBase, setPatientBase] = useState<DocumentData | null>(null);
+  const [userData, setUserData] = useState<DocumentData>({});
+  const [mrData, setMrData] = useState<DocumentData>({});
+  const [clinicData, setClinicData] = useState<DocumentData>({});
 
   const [patient, setPatient] = useState<CurrentPatient | null>(null);
   const [loading, setLoading] = useState(true);
@@ -151,9 +169,12 @@ export function useCurrentPatient(): { patient: CurrentPatient | null; loading: 
   // 4. Subscribe to the linked user + medical record docs.
   useEffect(() => {
     if (patientBase?.userId == null) return;
-    const unsubscribe = onSnapshot(doc(db, "users", String(patientBase.userId)), (snap) => {
-      setUserData(snap.exists() ? snap.data() : {});
-    });
+    const unsubscribe = onSnapshot(
+      doc(db, "users", String(patientBase.userId)),
+      (snap) => {
+        setUserData(snap.exists() ? snap.data() : {});
+      },
+    );
     return () => unsubscribe();
   }, [patientBase?.userId]);
 
@@ -167,6 +188,17 @@ export function useCurrentPatient(): { patient: CurrentPatient | null; loading: 
     );
     return () => unsubscribe();
   }, [patientBase?.medicalRecordNo]);
+
+  useEffect(() => {
+    if (patientBase?.clinicId == null) return;
+    const unsubscribe = onSnapshot(
+      doc(db, "clinics", String(patientBase.clinicId)),
+      (snap) => {
+        setClinicData(snap.exists() ? snap.data() : {});
+      },
+    );
+    return () => unsubscribe();
+  }, [patientBase?.clinicId]);
 
   // 5. Assemble the flattened CurrentPatient once the base doc has loaded.
   useEffect(() => {
@@ -191,9 +223,11 @@ export function useCurrentPatient(): { patient: CurrentPatient | null; loading: 
       bp: mr.bp,
       glucose: mr.glucose != null ? String(mr.glucose) : undefined,
       lastVisit: mr.lastVisit,
+      clinicId: patientBase.clinicId,
+      clinicName: clinicData.clinicName,
     });
     setLoading(false);
-  }, [patientId, patientBase, userData, mrData]);
+  }, [patientId, patientBase, userData, mrData, clinicData]);
 
   return { patient, loading };
 }
@@ -228,7 +262,8 @@ function toDisplayStatus(raw: string): string {
 const clinicianNameCache = new Map<string, string>();
 
 async function resolveClinicianName(clinicianId: string): Promise<string> {
-  if (clinicianNameCache.has(clinicianId)) return clinicianNameCache.get(clinicianId)!;
+  if (clinicianNameCache.has(clinicianId))
+    return clinicianNameCache.get(clinicianId)!;
 
   const isNurse = clinicianId.toLowerCase().startsWith("nur");
   const collectionName = isNurse ? "nurses" : "doctors";
@@ -240,7 +275,10 @@ async function resolveClinicianName(clinicianId: string): Promise<string> {
       return clinicianId;
     }
     const c = snap.data();
-    const uSnap = c.userId != null ? await getDoc(doc(db, "users", String(c.userId))) : null;
+    const uSnap =
+      c.userId != null
+        ? await getDoc(doc(db, "users", String(c.userId)))
+        : null;
     const u = uSnap?.exists() ? uSnap.data() : {};
     const fullName = [u.names, u.surname].filter(Boolean).join(" ");
     const display = fullName
@@ -256,7 +294,9 @@ async function resolveClinicianName(clinicianId: string): Promise<string> {
   }
 }
 
-export function usePatientAppointments(patientId: string | undefined): PatientAppointmentRow[] {
+export function usePatientAppointments(
+  patientId: string | undefined,
+): PatientAppointmentRow[] {
   const [appointments, setAppointments] = useState<PatientAppointmentRow[]>([]);
 
   useEffect(() => {
@@ -265,7 +305,10 @@ export function usePatientAppointments(patientId: string | undefined): PatientAp
       return;
     }
     let cancelled = false;
-    const q = query(collection(db, "appointments"), where("patientId", "==", patientId));
+    const q = query(
+      collection(db, "appointments"),
+      where("patientId", "==", patientId),
+    );
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const base = snapshot.docs
         .map((d) => {
@@ -286,7 +329,9 @@ export function usePatientAppointments(patientId: string | undefined): PatientAp
         setAppointments(base.map((a) => ({ ...a, clinician: a.clinicianId })));
       }
 
-      const uniqueIds = [...new Set(base.map((a) => a.clinicianId))].filter(Boolean);
+      const uniqueIds = [...new Set(base.map((a) => a.clinicianId))].filter(
+        Boolean,
+      );
       await Promise.all(uniqueIds.map((id) => resolveClinicianName(id)));
 
       if (!cancelled) {
@@ -333,7 +378,9 @@ export interface PatientNotification {
   isRead: boolean;
 }
 
-export function usePatientNotifications(userId: number | undefined): PatientNotification[] {
+export function usePatientNotifications(
+  userId: number | undefined,
+): PatientNotification[] {
   const [items, setItems] = useState<PatientNotification[]>([]);
 
   useEffect(() => {
@@ -341,7 +388,10 @@ export function usePatientNotifications(userId: number | undefined): PatientNoti
       setItems([]);
       return;
     }
-    const q = query(collection(db, "notifications"), where("userId", "==", userId));
+    const q = query(
+      collection(db, "notifications"),
+      where("userId", "==", userId),
+    );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const rows: PatientNotification[] = snapshot.docs
         .map((d) => {
@@ -367,8 +417,36 @@ export async function markNotificationRead(docId: string): Promise<void> {
   await updateDoc(doc(db, "notifications", docId), { isRead: true });
 }
 
-export async function markAllNotificationsRead(docIds: string[]): Promise<void> {
+export async function markAllNotificationsRead(
+  docIds: string[],
+): Promise<void> {
   await Promise.all(docIds.map((id) => markNotificationRead(id)));
+}
+
+/**
+ * Real write: sends the patient an immediate real notification nudging them
+ * to confirm/cancel a specific upcoming appointment.
+ *
+ * TODO(infra): this only fires when the patient clicks "Remind me" — there is
+ * no automatic "after N hours of no response" version yet. A truly automatic
+ * reminder needs a server-side scheduled job (e.g. Firebase Cloud Functions
+ * on a timer) checking unconfirmed appointments, which this stack doesn't
+ * have (no custom server — the browser talks directly to Firebase).
+ */
+export async function requestAppointmentReminder(
+  appt: { dateTime: string; type: string },
+  userId: number,
+): Promise<void> {
+  const dt = new Date(appt.dateTime);
+  const when = `${dt.toLocaleDateString("en-ZA", { day: "numeric", month: "short" })} at ${dt.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })}`;
+  await addDoc(collection(db, "notifications"), {
+    notifId: Date.now(),
+    userId,
+    title: "Appointment needs confirmation",
+    message: `You still haven't confirmed or cancelled your ${appt.type} appointment on ${when}.`,
+    isRead: false,
+    timeSent: new Date().toISOString(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -405,7 +483,7 @@ export function usePatientVisitHistory(
           description: d.data().description ?? "",
           historyId: Number(d.data().historyId ?? 0),
         }))
-        .sort((a: any, b: any) => b.historyId - a.historyId)
+        .sort((a, b) => b.historyId - a.historyId)
         .map(({ docId, description }) => ({ docId, description }));
       setVisits(rows);
     });
