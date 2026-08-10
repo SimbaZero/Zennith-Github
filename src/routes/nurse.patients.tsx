@@ -1,11 +1,20 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
-import { usePatientDirectory, useFindPatientById, useCurrentNurse, fetchAdherenceForToday, setAdherence, todayIso } from "@/lib/nurse-service";
+import {
+  usePatientDirectory,
+  useFindPatientById,
+  useCurrentNurse,
+  fetchAdherenceForToday,
+  setAdherence,
+  todayIso,
+} from "@/lib/nurse-service";
 import { useEffect, useState } from "react";
 import { useOnline } from "@/lib/offline"; // unchanged
-import { Wifi, WifiOff, CheckCircle2, Circle } from "lucide-react";
+import { Wifi, WifiOff, CheckCircle2, Circle, Syringe } from "lucide-react";
 
-export const Route = createFileRoute("/nurse/patients")({ component: NursePatients });
+export const Route = createFileRoute("/nurse/patients")({
+  component: NursePatients,
+});
 
 const MEDS_BY_CONDITION: Record<string, string[]> = {
   HIV: ["TLD", "Efavirenz"],
@@ -21,7 +30,15 @@ const MEDS_BY_CONDITION: Record<string, string[]> = {
 // hook). fetchAdherenceForToday/setAdherence are plain async Firestore
 // functions now, not a hook, so this component does its own small
 // load/refresh cycle instead.
-function AdherenceCell({ pid, condition, nurseId }: { pid: string; condition: string; nurseId: string | undefined }) {
+function AdherenceCell({
+  pid,
+  condition,
+  nurseId,
+}: {
+  pid: string;
+  condition: string;
+  nurseId: string | undefined;
+}) {
   const [forToday, setForToday] = useState<Record<string, boolean>>({});
   const meds = MEDS_BY_CONDITION[condition] ?? [];
 
@@ -31,7 +48,8 @@ function AdherenceCell({ pid, condition, nurseId }: { pid: string; condition: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pid]);
 
-  if (meds.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+  if (meds.length === 0)
+    return <span className="text-xs text-muted-foreground">—</span>;
 
   const toggle = async (med: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -68,38 +86,91 @@ function AdherenceCell({ pid, condition, nurseId }: { pid: string; condition: st
 
 function NursePatients() {
   const online = useOnline();
+  const { nurse, loading: nurseLoading, error: nurseError } = useCurrentNurse();
+
   return (
-    <AppShell role="nurse" title="Patient Files">
+    <AppShell
+      role="nurse"
+      title="Patient Files"
+      staffNameOverride={nurse?.fullName}
+      clinicNameOverride={nurse?.clinicName}
+    >
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}>
+        <span
+          className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}
+        >
           {online ? <Wifi size={12} /> : <WifiOff size={12} />}
-          {/* was "Offline — adherence saved locally" — no longer true, a
-              write while offline now fails rather than queueing locally,
-              unless Firestore's own offline persistence is enabled */}
           {online ? "Online" : "Offline"}
         </span>
-        <span className="text-xs text-muted-foreground">Tap a medication badge to log today's dose (chronic-care).</span>
+        <span className="text-xs text-muted-foreground">
+          Tap a medication badge to log today's dose (chronic-care).
+        </span>
       </div>
-      <PatientFilesTable recordBase="/nurse/patient-record" showAdherence />
+
+      {nurseError && (
+        <p className="text-sm text-destructive mb-4 border border-destructive/30 bg-destructive/5 rounded-md px-3 py-2">
+          {nurseError}
+        </p>
+      )}
+
+      {/* Don't mount the patient list until we know which clinic this nurse
+          belongs to — otherwise it would briefly fetch and show every
+          clinic's patients before the scoped query takes over. */}
+      {nurseLoading ? (
+        <div className="bg-white rounded-xl border p-8 text-center text-sm text-muted-foreground">
+          Loading your clinic's patients…
+        </div>
+      ) : (
+        <PatientFilesTable
+          recordBase="/nurse/patient-record"
+          showAdherence
+          clinicId={nurse?.clinicId}
+          nurseId={nurse?.nurseId}
+        />
+      )}
     </AppShell>
   );
 }
 
-export function PatientFilesTable({ recordBase = "/nurse/patient-record", showAdherence = false }: { recordBase?: string; showAdherence?: boolean }) {
+export function PatientFilesTable({
+  recordBase = "/nurse/patient-record",
+  showAdherence = false,
+  clinicId,
+  nurseId,
+}: {
+  recordBase?: string;
+  showAdherence?: boolean;
+  /** When set, both the browse list and Patient-ID search are scoped to
+   *  this clinic only. Omit to browse/search across all clinics. */
+  clinicId?: number;
+  nurseId?: string;
+}) {
   const [q, setQ] = useState("");
-  const { nurse } = useCurrentNurse();
 
   // was useQuery(fetchPatientPage) — now a live hook, updates automatically
-  const { patients: page, loading: pageLoading } = usePatientDirectory(30);
+  const {
+    patients: page,
+    loading: pageLoading,
+    error: pageError,
+  } = usePatientDirectory(30, clinicId);
 
-  const idQuery = /^pat-\d+$/i.test(q.trim()) ? `Pat-${q.trim().match(/\d+/)![0]}` : null;
-  const { patient: found, loading: findLoading } = useFindPatientById(idQuery);
+  const idQuery = /^pat-\d+$/i.test(q.trim())
+    ? `Pat-${q.trim().match(/\d+/)![0]}`
+    : null;
+  const { patient: found, loading: findLoading } = useFindPatientById(
+    idQuery,
+    clinicId,
+  );
 
   const loading = idQuery ? findLoading : pageLoading;
   const filtered = idQuery
-    ? (found ? [found] : [])
+    ? found
+      ? [found]
+      : []
     : page.filter(
-        (p) => p.name.toLowerCase().includes(q.toLowerCase()) || p.patientId.toLowerCase().includes(q.toLowerCase()),
+        (p) =>
+          p.name.toLowerCase().includes(q.toLowerCase()) ||
+          p.patientId.toLowerCase().includes(q.toLowerCase()),
       );
 
   return (
@@ -107,8 +178,14 @@ export function PatientFilesTable({ recordBase = "/nurse/patient-record", showAd
       <div className="flex items-center justify-between p-5 border-b">
         <div>
           <h3 className="font-semibold">Patient Files</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {pageLoading ? "Loading patients…" : "Browsing first 30 — search a Patient ID (e.g. Pat-828) for anyone else"}
+          <p
+            className={`text-xs mt-0.5 ${pageError ? "text-destructive" : "text-muted-foreground"}`}
+          >
+            {pageError
+              ? `Could not load patients: ${pageError}`
+              : pageLoading
+                ? "Loading patients…"
+                : "Browsing first 30 — search a Patient ID (e.g. Pat-828) for anyone else"}
           </p>
         </div>
         <input
@@ -125,7 +202,9 @@ export function PatientFilesTable({ recordBase = "/nurse/patient-record", showAd
               <th className="px-5 py-3 font-medium">Patient ID</th>
               <th className="px-5 py-3 font-medium">Name</th>
               <th className="px-5 py-3 font-medium">Condition</th>
-              {showAdherence && <th className="px-5 py-3 font-medium">Today's meds</th>}
+              {showAdherence && (
+                <th className="px-5 py-3 font-medium">Today's meds</th>
+              )}
               <th className="px-5 py-3 font-medium">Last Visit</th>
               <th className="px-5 py-3" />
             </tr>
@@ -133,29 +212,53 @@ export function PatientFilesTable({ recordBase = "/nurse/patient-record", showAd
           <tbody>
             {filtered.map((p) => (
               <tr key={p.patientId} className="border-t hover:bg-secondary/40">
-                <td className="px-5 py-3.5 text-muted-foreground">{p.patientId}</td>
+                <td className="px-5 py-3.5 text-muted-foreground">
+                  {p.patientId}
+                </td>
                 <td className="px-5 py-3.5 font-medium">{p.name}</td>
                 <td className="px-5 py-3.5">{p.condition}</td>
                 {showAdherence && (
                   <td className="px-5 py-3.5">
-                    <AdherenceCell pid={p.patientId} condition={p.condition} nurseId={nurse?.nurseId} />
+                    <AdherenceCell
+                      pid={p.patientId}
+                      condition={p.condition}
+                      nurseId={nurseId}
+                    />
                   </td>
                 )}
-                <td className="px-5 py-3.5 text-muted-foreground">{p.lastVisit}</td>
+                <td className="px-5 py-3.5 text-muted-foreground">
+                  {p.lastVisit}
+                </td>
                 <td className="px-5 py-3.5 text-right">
-                  <Link
-                    to={`${recordBase}/${p.patientId}` as any}
-                    className="border px-3 py-1 rounded-md text-xs hover:bg-secondary"
-                  >
-                    View
-                  </Link>
+                  <div className="flex justify-end gap-1.5">
+                    {showAdherence && (
+                      <Link
+                        to={`${recordBase}/${p.patientId}?dispense=1` as any}
+                        title="Dispense medication"
+                        className="flex items-center gap-1 border px-3 py-1 rounded-md text-xs hover:bg-secondary"
+                      >
+                        <Syringe size={12} /> Dispense
+                      </Link>
+                    )}
+                    <Link
+                      to={`${recordBase}/${p.patientId}` as any}
+                      className="border px-3 py-1 rounded-md text-xs hover:bg-secondary"
+                    >
+                      View
+                    </Link>
+                  </div>
                 </td>
               </tr>
             ))}
             {!loading && filtered.length === 0 && (
               <tr>
-                <td colSpan={showAdherence ? 6 : 5} className="px-5 py-8 text-center text-muted-foreground">
-                  {idQuery ? `No patient with ID "${idQuery}".` : "No matching patients in the loaded page — try an exact Pat-### ID."}
+                <td
+                  colSpan={showAdherence ? 6 : 5}
+                  className="px-5 py-8 text-center text-muted-foreground"
+                >
+                  {idQuery
+                    ? `No patient with ID "${idQuery}".`
+                    : "No matching patients in the loaded page — try an exact Pat-### ID."}
                 </td>
               </tr>
             )}
