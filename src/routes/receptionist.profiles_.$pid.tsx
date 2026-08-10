@@ -7,7 +7,12 @@ import { ArrowLeft, Save, Pencil, X, Loader2 } from "lucide-react";
 import { getDoc, doc } from "firebase/firestore";
 import { db } from "@/firebase";
 
-import { fetchPatientRecord, updatePatient, updateUser, updateMedicalRecord } from "@/lib/clinic-data";
+import {
+  fetchPatientRecord,
+  updatePatient,
+  updateUser,
+  updateMedicalRecord,
+} from "@/lib/clinic-data";
 
 export const Route = createFileRoute("/receptionist/profiles_/$pid")({
   component: PatientDetail,
@@ -19,7 +24,11 @@ function PatientDetail() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
 
-  const { data: record, isLoading, isError } = useQuery({
+  const {
+    data: record,
+    isLoading,
+    isError,
+  } = useQuery({
     queryKey: ["patient-record", pid],
     queryFn: () => fetchPatientRecord(pid),
   });
@@ -65,7 +74,7 @@ function PatientDetail() {
       // Fetch patient doc directly using imported db
       const patientSnap = await getDoc(doc(db, "patients", pid));
       if (!patientSnap.exists()) throw new Error("Patient not found");
-      
+
       const patientData = patientSnap.data();
       const userId = patientData.userId;
       const recordNo = patientData.medicalRecordNo;
@@ -92,9 +101,11 @@ function PatientDetail() {
           bp: form.bp,
           glucose: form.glucose !== "—" ? Number(form.glucose) : undefined,
           cd4: form.cd4 !== "—" ? Number(form.cd4) : undefined,
-          viralLoad: form.viralLoad !== "—" ? Number(form.viralLoad) : undefined,
+          viralLoad:
+            form.viralLoad !== "—" ? Number(form.viralLoad) : undefined,
           // Fixed Error 2: fallback to undefined instead of null
-          insurancePolicyNumber: form.insurance !== "None" ? form.insurance : undefined,
+          insurancePolicyNumber:
+            form.insurance !== "None" ? form.insurance : undefined,
         }),
       ]);
     },
@@ -127,7 +138,9 @@ function PatientDetail() {
     return (
       <AppShell role="receptionist" title="Patient Profile">
         <div className="p-8 text-center">
-          <p className="text-destructive mb-4">Failed to load patient record.</p>
+          <p className="text-destructive mb-4">
+            Failed to load patient record.
+          </p>
           <button
             onClick={() => navigate({ to: "/receptionist/profiles" })}
             className="border px-4 py-2 rounded-md text-sm hover:bg-secondary"
@@ -189,7 +202,11 @@ function PatientDetail() {
                 disabled={updateMutation.isPending}
                 className="flex items-center gap-1.5 bg-[oklch(0.55_0.18_245)] text-white px-3 py-1.5 rounded-md text-sm hover:bg-[oklch(0.5_0.18_245)] disabled:opacity-60"
               >
-                {updateMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                {updateMutation.isPending ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Save size={14} />
+                )}
                 Save
               </button>
             </>
@@ -209,22 +226,61 @@ function PatientDetail() {
         {/* Left column — Demographics */}
         <div className="space-y-6">
           <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">DEMOGRAPHICS</h3>
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              DEMOGRAPHICS
+            </h3>
             <div className="space-y-3">
               <FieldRow label="Patient ID" value={pid} disabled />
-              <FieldRow label="Full Name" value={form.name} editing={editing} onChange={setField("name")} />
-              <FieldRow label="ID Number" value={form.idNumber} editing={editing} onChange={setField("idNumber")} />
-              <FieldRow label="Cell" value={form.cell} editing={editing} onChange={setField("cell")} />
-              <FieldRow label="Email" value={form.email} editing={editing} onChange={setField("email")} />
-              <FieldRow label="Address" value={form.address} editing={editing} onChange={setField("address")} />
+              <FieldRow
+                label="Full Name"
+                value={form.name}
+                editing={editing}
+                onChange={setField("name")}
+              />
+              <FieldRow
+                label="ID Number"
+                value={form.idNumber}
+                editing={editing}
+                onChange={setField("idNumber")}
+              />
+              <FieldRow
+                label="Cell"
+                value={form.cell}
+                editing={editing}
+                onChange={setField("cell")}
+              />
+              <FieldRow
+                label="Email"
+                value={form.email}
+                editing={editing}
+                onChange={setField("email")}
+              />
+              <FieldRow
+                label="Address"
+                value={form.address}
+                editing={editing}
+                onChange={setField("address")}
+              />
             </div>
           </div>
 
           <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">EMERGENCY CONTACT</h3>
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              EMERGENCY CONTACT
+            </h3>
             <div className="space-y-3">
-              <FieldRow label="Name" value={form.emergencyContactName} editing={editing} onChange={setField("emergencyContactName")} />
-              <FieldRow label="Phone" value={form.emergencyContactNo} editing={editing} onChange={setField("emergencyContactNo")} />
+              <FieldRow
+                label="Name"
+                value={form.emergencyContactName}
+                editing={editing}
+                onChange={setField("emergencyContactName")}
+              />
+              <FieldRow
+                label="Phone"
+                value={form.emergencyContactNo}
+                editing={editing}
+                onChange={setField("emergencyContactNo")}
+              />
             </div>
           </div>
         </div>
@@ -232,23 +288,72 @@ function PatientDetail() {
         {/* Middle column — Medical */}
         <div className="space-y-6">
           <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">MEDICAL INFORMATION</h3>
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              MEDICAL INFORMATION
+            </h3>
             <div className="space-y-3">
-              <FieldRow label="Chronic Condition" value={form.condition} editing={editing} onChange={setField("condition")} />
-              <FieldRow label="Blood Type" value={form.bloodType} editing={editing} onChange={setField("bloodType")} />
-              <FieldRow label="Allergies" value={form.allergies} editing={editing} onChange={setField("allergies")} />
-              <FieldRow label="Prescription" value={form.prescription} editing={editing} onChange={setField("prescription")} />
-              <FieldRow label="Dosage" value={form.dosage} editing={editing} onChange={setField("dosage")} />
-              <FieldRow label="Blood Pressure" value={form.bp} editing={editing} onChange={setField("bp")} />
-              <FieldRow label="Glucose" value={form.glucose} editing={editing} onChange={setField("glucose")} />
+              <FieldRow
+                label="Chronic Condition"
+                value={form.condition}
+                editing={editing}
+                onChange={setField("condition")}
+              />
+              <FieldRow
+                label="Blood Type"
+                value={form.bloodType}
+                editing={editing}
+                onChange={setField("bloodType")}
+              />
+              <FieldRow
+                label="Allergies"
+                value={form.allergies}
+                editing={editing}
+                onChange={setField("allergies")}
+              />
+              <FieldRow
+                label="Prescription"
+                value={form.prescription}
+                editing={editing}
+                onChange={setField("prescription")}
+              />
+              <FieldRow
+                label="Dosage"
+                value={form.dosage}
+                editing={editing}
+                onChange={setField("dosage")}
+              />
+              <FieldRow
+                label="Blood Pressure"
+                value={form.bp}
+                editing={editing}
+                onChange={setField("bp")}
+              />
+              <FieldRow
+                label="Glucose"
+                value={form.glucose}
+                editing={editing}
+                onChange={setField("glucose")}
+              />
             </div>
           </div>
 
           <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">LAB VALUES</h3>
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              LAB VALUES
+            </h3>
             <div className="space-y-3">
-              <FieldRow label="CD4 Count" value={form.cd4} editing={editing} onChange={setField("cd4")} />
-              <FieldRow label="Viral Load" value={form.viralLoad} editing={editing} onChange={setField("viralLoad")} />
+              <FieldRow
+                label="CD4 Count"
+                value={form.cd4}
+                editing={editing}
+                onChange={setField("cd4")}
+              />
+              <FieldRow
+                label="Viral Load"
+                value={form.viralLoad}
+                editing={editing}
+                onChange={setField("viralLoad")}
+              />
             </div>
           </div>
         </div>
@@ -256,28 +361,48 @@ function PatientDetail() {
         {/* Right column — Insurance + History */}
         <div className="space-y-6">
           <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">INSURANCE</h3>
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              INSURANCE
+            </h3>
             <div className="space-y-3">
-              <FieldRow label="Policy" value={form.insurance} editing={editing} onChange={setField("insurance")} />
+              <FieldRow
+                label="Policy"
+                value={form.insurance}
+                editing={editing}
+                onChange={setField("insurance")}
+              />
             </div>
           </div>
 
           <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">VISITS</h3>
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              VISITS
+            </h3>
             <div className="space-y-3">
               <FieldRow label="Last Visit" value={form.lastVisit} disabled />
-              <FieldRow label="Next Appointment" value={form.nextAppointment} disabled />
+              <FieldRow
+                label="Next Appointment"
+                value={form.nextAppointment}
+                disabled
+              />
             </div>
           </div>
 
           <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">HISTORY</h3>
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              HISTORY
+            </h3>
             {record.history.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No history recorded.</p>
+              <p className="text-sm text-muted-foreground">
+                No history recorded.
+              </p>
             ) : (
               <ul className="space-y-2 max-h-64 overflow-y-auto">
                 {record.history.map((h) => (
-                  <li key={h.id} className="text-xs text-muted-foreground border-l-2 border-[oklch(0.55_0.18_245)] pl-2">
+                  <li
+                    key={h.id}
+                    className="text-xs text-muted-foreground border-l-2 border-[oklch(0.55_0.18_245)] pl-2"
+                  >
                     {h.description}
                   </li>
                 ))}
@@ -306,7 +431,9 @@ function FieldRow({
   if (disabled || !editing) {
     return (
       <div>
-        <label className="text-[10px] tracking-wider text-muted-foreground block mb-0.5">{label}</label>
+        <label className="text-[10px] tracking-wider text-muted-foreground block mb-0.5">
+          {label}
+        </label>
         <p className="text-sm font-medium">{value || "—"}</p>
       </div>
     );
@@ -314,7 +441,9 @@ function FieldRow({
 
   return (
     <div>
-      <label className="text-[10px] tracking-wider text-muted-foreground block mb-0.5">{label}</label>
+      <label className="text-[10px] tracking-wider text-muted-foreground block mb-0.5">
+        {label}
+      </label>
       <input
         type="text"
         value={value === "—" ? "" : value}

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { registerPatient } from "@/lib/clinic-data";
+import { registerPatient, resolveCurrentReceptionist } from "@/lib/clinic-data";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -11,7 +11,6 @@ export const Route = createFileRoute("/receptionist/registration")({
 
 const initial = {
   patientNo: "",
-  fileNo: "Auto-generated",
   patientName: "",
   district: "City of Johannesburg",
   town: "",
@@ -51,7 +50,48 @@ const initial = {
 
 function Registration() {
   const [f, setF] = useState(initial);
-  const set = (k: keyof typeof initial) => (v: any) => setF({ ...f, [k]: v });
+  const set =
+    <K extends keyof typeof initial>(k: K) =>
+    (v: (typeof initial)[K]) =>
+      setF({ ...f, [k]: v });
+
+  // Who's logged in + which real clinic (numeric clinicId) they belong to.
+  // Was previously hardcoded to "Hillbrow CHC" / "Logged-in user" regardless
+  // of who was actually signed in — see #16 in db-issues.md.
+  const { data: receptionist } = useQuery({
+    queryKey: ["current-receptionist"],
+    queryFn: resolveCurrentReceptionist,
+  });
+
+  // Fields below (employment, financial classification, person responsible
+  // for payment) have no backing Firestore collection at all — there's
+  // nowhere in the schema to store them yet (see #16 in db-issues.md, same
+  // situation as the Medical Aid section on the patient side, #10). Rather
+  // than silently discarding what the receptionist typed, it's folded into
+  // the registration note so it isn't lost — flag this for the team so a
+  // real field/collection can be added later.
+  const buildRemarks = () => {
+    const extra: string[] = [];
+    if (f.altIdType !== "Passport" || f.altIdNumber)
+      extra.push(`Alt ID: ${f.altIdType} ${f.altIdNumber}`.trim());
+    if (f.marital !== "Single") extra.push(`Marital status: ${f.marital}`);
+    if (f.occupation !== "Unemployed" || f.employer)
+      extra.push(
+        `Occupation: ${f.occupation}${f.employer ? ` at ${f.employer}` : ""}${f.employerTel ? ` (${f.employerTel})` : ""}`,
+      );
+    if (f.finClass !== "Self-pay" || f.scheme)
+      extra.push(
+        `Financial: ${f.finClass}${f.scheme ? `, ${f.scheme} ${f.schemeNo}` : ""}, dependents: ${f.deps}, income: R${f.income}, assets: R${f.assets}`,
+      );
+    if (f.payerName)
+      extra.push(
+        `Bill payer: ${f.payerName} (${f.payerRel}) ${f.payerTel} — ${f.payerAddr}`,
+      );
+    if (f.headman) extra.push(`Headman/Ward councillor: ${f.headman}`);
+    if (f.signature) extra.push(`Consent signed by: ${f.signature}`);
+    const combined = [f.remarks.trim(), ...extra].filter(Boolean).join(" | ");
+    return combined;
+  };
 
   const register = useMutation({
     mutationFn: () =>
@@ -66,16 +106,18 @@ function Registration() {
         insurance: f.scheme
           ? `${f.scheme}${f.schemeNo ? ` · ${f.schemeNo}` : ""}`
           : "",
-        remarks: f.remarks,
+        remarks: buildRemarks(),
+        clinicId: receptionist?.clinicId ?? null,
+        dob: f.dob,
+        gender: f.gender,
       }),
     onSuccess: (patientId) => {
       toast.success(
-        `${f.patientName} registered successfully ”” Patient ID ${patientId}`,
+        `${f.patientName} registered successfully — Patient ID ${patientId}`,
       );
       setF(initial);
     },
-    onError: () =>
-      toast.error("Could not register patient ”” please try again"),
+    onError: () => toast.error("Could not register patient — please try again"),
   });
 
   const submit = (e: React.FormEvent) => {
@@ -92,12 +134,19 @@ function Registration() {
   };
 
   return (
-    <AppShell role="receptionist" title="Patient Registration">
+    <AppShell
+      role="receptionist"
+      title="Patient Registration"
+      clinicNameOverride={receptionist?.clinicName}
+      staffNameOverride={receptionist?.name}
+    >
       <form onSubmit={submit} className="space-y-6">
         <div className="rounded-xl bg-[oklch(0.18_0.06_260)] text-white p-6 flex items-start justify-between">
           <div>
             <p className="text-[10px] tracking-[0.2em] text-white/60">
-              HILLBROW COMMUNITY HEALTH CENTRE
+              {receptionist?.clinicName
+                ? receptionist.clinicName.toUpperCase()
+                : "LOADING CLINIC…"}
             </p>
             <h2 className="text-2xl font-bold mt-1">
               Patient Registration Form
@@ -380,7 +429,7 @@ function Registration() {
           <textarea
             value={f.remarks}
             onChange={(e) => set("remarks")(e.target.value)}
-            placeholder="Any additional notes from the receptionist”¦"
+            placeholder="Any additional notes from the receptionist…"
             className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] min-h-28"
           />
         </div>
@@ -417,7 +466,7 @@ function Registration() {
               className="mt-1"
             />
             <span>
-              <strong>Patient / Guardian confirms consent</strong> ”” verbal
+              <strong>Patient / Guardian confirms consent</strong> — verbal
               authorisation captured by clerk.
             </span>
           </label>
@@ -425,8 +474,8 @@ function Registration() {
 
         <div className="flex flex-wrap items-center justify-between gap-3 sticky bottom-0 bg-[oklch(0.97_0.01_240)] py-3 border-t">
           <p className="text-xs text-muted-foreground">
-            Clerk: <strong>Logged-in user</strong>. All fields above will be
-            saved to the patient master record.
+            Clerk: <strong>{receptionist?.name ?? "Loading…"}</strong>. All
+            fields above will be saved to the patient master record.
           </p>
           <div className="flex gap-2">
             <button
@@ -441,7 +490,7 @@ function Registration() {
               disabled={register.isPending}
               className="bg-[oklch(0.55_0.18_245)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.5_0.18_245)] disabled:opacity-60"
             >
-              {register.isPending ? "Registering”¦" : "Register Patient"}
+              {register.isPending ? "Registering…" : "Register Patient"}
             </button>
           </div>
         </div>
@@ -491,7 +540,15 @@ function Field({
   type = "text",
   required,
   disabled,
-}: any) {
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  required?: boolean;
+  disabled?: boolean;
+}) {
   return (
     <div>
       <label className="text-[11px] tracking-wider text-muted-foreground block mb-1.5">

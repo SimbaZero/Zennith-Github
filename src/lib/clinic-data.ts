@@ -19,11 +19,14 @@ import {
   updateDoc,
   where,
   serverTimestamp,
+  type DocumentData,
+  type Timestamp,
 } from "firebase/firestore";
 import { initializeApp, deleteApp } from "firebase/app";
 import {
   createUserWithEmailAndPassword,
   getAuth as getFbAuth,
+  signInAnonymously,
 } from "firebase/auth";
 import { auth, db, firebaseConfig } from "@/firebase";
 import type { AppointmentStatus } from "@/components/AppShell";
@@ -59,6 +62,12 @@ function toBadgeStatus(s: string): AppointmentStatus {
   if (v.includes("progress")) return "In-progress";
   if (v.includes("no-show") || v.includes("no show") || v.includes("cancel"))
     return "No-show";
+  // Was previously the unconditional fallback for EVERYTHING else,
+  // including perfectly normal "Scheduled"/"Confirmed" appointments — they
+  // displayed as "Incomplete" even though nothing was wrong. See #20 in
+  // docs/db-issues.md.
+  if (v.includes("confirm")) return "Confirmed";
+  if (v.includes("schedul")) return "Scheduled";
   return "Incomplete";
 }
 
@@ -81,6 +90,35 @@ async function patientNames(
         name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
         condition: p.chronicCondition ?? "",
       });
+    }),
+  );
+  return out;
+}
+
+// Resolves raw clinician IDs (e.g. "Doc-2", "Nur-1") to real display names,
+// checking doctors then nurses. Same pattern as patientNames() above.
+async function clinicianNames(
+  clinicianIds: string[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(clinicianIds.filter(Boolean))];
+  const out = new Map<string, string>();
+  await Promise.all(
+    unique.map(async (cid) => {
+      const isNurse = cid.startsWith("Nur");
+      const cSnap = await getDoc(doc(db, isNurse ? "nurses" : "doctors", cid));
+      if (!cSnap.exists()) {
+        out.set(cid, cid);
+        return;
+      }
+      const c = cSnap.data();
+      if (c.userId == null) {
+        out.set(cid, cid);
+        return;
+      }
+      const uSnap = await getDoc(doc(db, "users", String(c.userId)));
+      const u = uSnap.exists() ? uSnap.data() : {};
+      const full = [u.names, u.surname].filter(Boolean).join(" ").trim();
+      out.set(cid, full ? (isNurse ? full : `Dr. ${full}`) : cid);
     }),
   );
   return out;
@@ -154,7 +192,7 @@ export const TRIAGE_MAX_WAIT_MINUTES: Record<TriageLevel, number> = {
   green: 60,
 };
 
-const toQueueEntry = (id: string, x: any): QueueEntry => ({
+const toQueueEntry = (id: string, x: DocumentData): QueueEntry => ({
   id,
   patientId: x.patientId ?? "",
   patientName: x.patientName ?? x.patientId ?? "",
@@ -200,17 +238,30 @@ function sortQueue(rows: QueueEntry[]): QueueEntry[] {
 export function subscribeQueue(
   onChange: (rows: QueueEntry[]) => void,
   onError?: (e: unknown) => void,
+  facilityId?: string | null,
 ): () => void {
+  // Previously always subscribed to the WHOLE queue collection with no
+  // facility filter — every clinic saw every other clinic's walk-in queue,
+  // even though each entry already stores facilityId. See #17 in
+  // docs/db-issues.md.
+  const q = facilityId
+    ? query(collection(db, "queue"), where("facilityId", "==", facilityId))
+    : collection(db, "queue");
   return onSnapshot(
-    collection(db, "queue"),
+    q,
     (snap) =>
       onChange(sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())))),
     (err) => onError?.(err),
   );
 }
 
-export async function fetchQueue(): Promise<QueueEntry[]> {
-  const snap = await getDocs(collection(db, "queue"));
+export async function fetchQueue(
+  facilityId?: string | null,
+): Promise<QueueEntry[]> {
+  const q = facilityId
+    ? query(collection(db, "queue"), where("facilityId", "==", facilityId))
+    : collection(db, "queue");
+  const snap = await getDocs(q);
   return sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())));
 }
 
@@ -276,6 +327,7 @@ export async function addToQueue(input: {
     triage: input.triage ?? "yellow",
     by: auth.currentUser?.uid ?? "system",
     details: `Added to queue: ${input.reason || "Walk-in"}`,
+    facilityId: input.facilityId ?? null,
   });
 
   return { ok: true };
@@ -312,6 +364,7 @@ export async function callPatient(
     triage: entry.triage,
     by: auth.currentUser?.uid ?? "system",
     details: `Called by ${entry.clinician || "reception"}`,
+    facilityId: entry.facilityId,
   });
 }
 
@@ -319,7 +372,7 @@ export async function setQueueStatus(
   id: string,
   status: QueueStatus,
 ): Promise<void> {
-  const updates: Record<string, any> = { status };
+  const updates: Record<string, unknown> = { status };
   if (status === "called") updates.calledAt = new Date().toISOString();
   if (status === "in-room") updates.inRoomAt = new Date().toISOString();
   if (status === "done") updates.doneAt = new Date().toISOString();
@@ -335,6 +388,7 @@ export async function setQueueStatus(
       triage: entry.triage,
       by: auth.currentUser?.uid ?? "system",
       details: `Status changed to ${status}`,
+      facilityId: entry.facilityId,
     });
   }
 }
@@ -363,11 +417,15 @@ export async function handoffPatient(
       triage: entry?.triage ?? "yellow",
       by: auth.currentUser?.uid ?? "system",
       details: `Handed off from ${entry?.clinician ?? "reception"} to ${targetClinician}`,
+      facilityId: entry?.facilityId ?? null,
     });
 
     return { ok: true };
-  } catch (err: any) {
-    return { ok: false, error: err.message ?? "Handoff failed" };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Handoff failed",
+    };
   }
 }
 
@@ -395,11 +453,15 @@ export async function acceptHandoff(
       triage: entry?.triage ?? "yellow",
       by: auth.currentUser?.uid ?? "system",
       details: `${newClinician} accepted handoff from ${entry?.handedOffBy ?? "unknown"}`,
+      facilityId: entry?.facilityId ?? null,
     });
 
     return { ok: true };
-  } catch (err: any) {
-    return { ok: false, error: err.message ?? "Accept handoff failed" };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Accept handoff failed",
+    };
   }
 }
 
@@ -417,6 +479,7 @@ export async function removeFromQueue(id: string): Promise<void> {
       triage: entry.triage,
       by: auth.currentUser?.uid ?? "system",
       details: "Removed from queue",
+      facilityId: entry.facilityId,
     });
   }
 }
@@ -433,7 +496,11 @@ export interface QueueAuditEvent {
   triage: TriageLevel;
   by: string;
   details: string;
-  timestamp: any; // serverTimestamp
+  timestamp: Timestamp;
+  // Was previously never recorded, so the audit log had no way to be
+  // scoped by clinic even after the queue itself was fixed — every
+  // receptionist saw every clinic's history mixed together.
+  facilityId?: string | null;
 }
 
 export async function logQueueEvent(
@@ -445,16 +512,25 @@ export async function logQueueEvent(
   });
 }
 
-/** Fetch audit trail for a specific queue entry or all recent events. */
+/** Fetch audit trail for a specific queue entry, or all recent events at a
+ *  given facility (or system-wide if facilityId is omitted entirely). */
 export async function fetchQueueAudit(
   entryId?: string,
   limitCount = 50,
+  facilityId?: string | null,
 ): Promise<QueueAuditEvent[]> {
   let q;
   if (entryId) {
     q = query(
       collection(db, "queueAudit"),
       where("entryId", "==", entryId),
+      orderBy("timestamp", "desc"),
+      limit(limitCount),
+    );
+  } else if (facilityId != null) {
+    q = query(
+      collection(db, "queueAudit"),
+      where("facilityId", "==", facilityId),
       orderBy("timestamp", "desc"),
       limit(limitCount),
     );
@@ -604,12 +680,14 @@ export interface PatientSummary {
 
 async function toPatientSummary(
   pid: string,
-  p: Record<string, any>,
+  p: Record<string, unknown>,
 ): Promise<PatientSummary> {
+  const userId = p.userId as string | number | undefined;
+  const medicalRecordNo = p.medicalRecordNo as string | number | undefined;
   const [uSnap, mrSnap] = await Promise.all([
-    getDoc(doc(db, "users", String(p.userId))),
-    p.medicalRecordNo != null
-      ? getDoc(doc(db, "medicalRecords", String(p.medicalRecordNo)))
+    getDoc(doc(db, "users", String(userId))),
+    medicalRecordNo != null
+      ? getDoc(doc(db, "medicalRecords", String(medicalRecordNo)))
       : Promise.resolve(null),
   ]);
   const u = uSnap.exists() ? uSnap.data() : {};
@@ -617,15 +695,33 @@ async function toPatientSummary(
   return {
     patientId: pid,
     name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
-    condition: p.chronicCondition ?? "—",
-    lastVisit: (mr.lastVisit ?? "").slice(0, 10) || "—",
+    condition: (p.chronicCondition as string) ?? "—",
+    lastVisit: ((mr.lastVisit as string) ?? "").slice(0, 10) || "—",
   };
 }
 
-export async function fetchPatientPage(): Promise<PatientSummary[]> {
-  const snap = await getDocs(
-    query(collection(db, "patients"), orderBy("userId"), limit(30)),
-  );
+/** Was previously always the first 30 `patients` docs system-wide (ordered by
+ *  userId, no clinic filter) — receptionists saw a mixed bag from every
+ *  clinic, and anything past #30 was invisible with no way to reach it via
+ *  search (the search box only filtered what had already loaded). See #17
+ *  in docs/db-issues.md.
+ *
+ *  Now scoped to the receptionist's own clinic when clinicId is passed.
+ *  Caveat: any `patients` doc written before clinicId existed on the schema
+ *  (or via a flow that still doesn't set it) won't match and won't show up
+ *  here — that's a data-backfill problem, not something this query can fix. */
+export async function fetchPatientPage(
+  clinicId?: number | null,
+): Promise<PatientSummary[]> {
+  const q =
+    clinicId != null
+      ? query(
+          collection(db, "patients"),
+          where("clinicId", "==", clinicId),
+          limit(200),
+        )
+      : query(collection(db, "patients"), orderBy("userId"), limit(200));
+  const snap = await getDocs(q);
   return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
 }
 
@@ -855,6 +951,8 @@ const FROM_BADGE: Record<AppointmentStatus, string> = {
   "In-progress": "In Progress",
   Incomplete: "Scheduled",
   "No-show": "No-Show",
+  Scheduled: "Scheduled",
+  Confirmed: "Confirmed",
 };
 
 export async function setAppointmentStatus(
@@ -908,6 +1006,14 @@ export async function createAppointment(input: {
     clinician,
     patientId: input.patientId,
     status: "Scheduled",
+    // Was previously omitted — appointments had no clinic scoping at all,
+    // so any "recent appointments" view showed every clinic's bookings
+    // mixed together. Sourced from the patient's own real clinicId, not the
+    // booking receptionist's, since that's the clinic this appointment
+    // actually belongs to. See #19 in docs/db-issues.md.
+    ...(patient.data()?.clinicId != null
+      ? { clinicId: patient.data()?.clinicId }
+      : {}),
   });
 }
 
@@ -919,16 +1025,35 @@ export interface ClinicWideAppointment extends ClinicAppointment {
   clinician: string;
 }
 
-export async function fetchRecentAppointments(): Promise<
-  ClinicWideAppointment[]
-> {
-  const snap = await getDocs(
-    query(
-      collection(db, "appointments"),
-      orderBy("appointDateTime", "desc"),
-      limit(25),
-    ),
-  );
+// Was previously always the 25 most recent appointments across the ENTIRE
+// database with no clinic filter at all, despite the UI label claiming
+// "clinic-wide" — see #19 in docs/db-issues.md. Now scoped by clinicId when
+// provided. Two real caveats to flag to the team:
+//  1. Only appointments booked AFTER this fix carry a clinicId (sourced from
+//     the patient's own record) — older appointments predate the field and
+//     won't match, so they simply won't appear in the scoped view. Backfill
+//     is a separate data task, not something this query can fix.
+//  2. This combines a `where` filter with `orderBy` on a different field,
+//     which Firestore requires a composite index for. If this throws an
+//     index-required error in the console, follow the link Firestore prints
+//     in that error to auto-create it — can't be done from code.
+export async function fetchRecentAppointments(
+  clinicId?: number | null,
+): Promise<ClinicWideAppointment[]> {
+  const q =
+    clinicId != null
+      ? query(
+          collection(db, "appointments"),
+          where("clinicId", "==", clinicId),
+          orderBy("appointDateTime", "desc"),
+          limit(25),
+        )
+      : query(
+          collection(db, "appointments"),
+          orderBy("appointDateTime", "desc"),
+          limit(25),
+        );
+  const snap = await getDocs(q);
   const raw = snap.docs.map((d) => {
     const a = d.data();
     const dt = new Date(a.appointDateTime);
@@ -944,11 +1069,52 @@ export async function fetchRecentAppointments(): Promise<
     };
   });
   const names = await patientNames(raw.map((a) => a.patientId));
+  const clinicianDisplay = await clinicianNames(raw.map((a) => a.clinician));
   return raw.map((a) => ({
     ...a,
     patientName: names.get(a.patientId)?.name ?? a.patientId,
     condition: names.get(a.patientId)?.condition ?? "",
+    clinician: clinicianDisplay.get(a.clinician) ?? a.clinician,
   }));
+}
+
+/** Resolves the currently logged-in receptionist's real clinic (numeric
+ *  clinicId + name) and display name, via:
+ *  profiles/{authUid}.legacyUserId → receptionists.userId → receptionists.clinicId → clinics.clinicId
+ *  Same join pattern as resolveClinicianId() above, applied to receptionists. */
+export interface CurrentReceptionist {
+  name: string;
+  clinicId: number | null;
+  clinicName: string | null;
+}
+export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return { name: "Receptionist", clinicId: null, clinicName: null };
+  const profileSnap = await getDoc(doc(db, "profiles", uid));
+  const profile = profileSnap.exists() ? profileSnap.data() : {};
+  const name = profile.fullName || "Receptionist";
+  if (profile.legacyUserId == null)
+    return { name, clinicId: null, clinicName: null };
+
+  const recSnap = await getDocs(
+    query(
+      collection(db, "receptionists"),
+      where("userId", "==", Number(profile.legacyUserId)),
+    ),
+  );
+  if (recSnap.empty) return { name, clinicId: null, clinicName: null };
+  const clinicId = Number(recSnap.docs[0].data().clinicId);
+
+  const clinicSnap = await getDoc(doc(db, "clinics", String(clinicId)));
+  const clinicName = clinicSnap.exists()
+    ? (clinicSnap.data().clinicName ?? null)
+    : null;
+
+  return {
+    name,
+    clinicId: Number.isFinite(clinicId) ? clinicId : null,
+    clinicName,
+  };
 }
 
 export interface RegistrationInput {
@@ -960,6 +1126,14 @@ export interface RegistrationInput {
   emergencyContactName: string;
   emergencyContactNo: string;
   insurance: string;
+  /** Real numeric clinic the receptionist is registering this patient at.
+   *  Was previously always omitted, so walk-in-registered patients had no
+   *  clinicId at all — see docs/db-issues.md #16. */
+  clinicId?: number | null;
+  /** users.DOB — was collected on the form but never sent, see #16. */
+  dob?: string;
+  /** users.Gender — was collected on the form but never sent, see #16. */
+  gender?: string;
   remarks: string;
 }
 
@@ -985,6 +1159,23 @@ export async function registerPatient(
   const [names, ...rest] = input.fullName.trim().split(/\s+/);
   const surname = rest.join(" ");
 
+  // Age is derived from DOB (schema stores both — see #16 in db-issues.md).
+  let age: number | null = null;
+  if (input.dob) {
+    const dobDate = new Date(input.dob);
+    if (!Number.isNaN(dobDate.getTime())) {
+      const today = new Date();
+      age = today.getFullYear() - dobDate.getFullYear();
+      const monthDiff = today.getMonth() - dobDate.getMonth();
+      if (
+        monthDiff < 0 ||
+        (monthDiff === 0 && today.getDate() < dobDate.getDate())
+      ) {
+        age -= 1;
+      }
+    }
+  }
+
   await Promise.all([
     setDoc(doc(db, "users", String(ids.userNo)), {
       userId: ids.userNo,
@@ -996,6 +1187,9 @@ export async function registerPatient(
       city: input.city,
       suburb: input.suburb,
       email: "",
+      DOB: input.dob || null,
+      Gender: input.gender || null,
+      Age: age,
     }),
     setDoc(doc(db, "medicalRecords", String(ids.recordNo)), {
       medicalRecordNo: ids.recordNo,
@@ -1012,6 +1206,8 @@ export async function registerPatient(
       chronicCondition: "Not yet assessed",
       emergencyContactName: input.emergencyContactName,
       emergencyContactNo: input.emergencyContactNo,
+      // Was previously omitted entirely — see #16 in db-issues.md.
+      ...(input.clinicId != null ? { clinicId: input.clinicId } : {}),
     }),
   ]);
 
@@ -1043,6 +1239,15 @@ export interface RealClinic {
   type?: string;
 }
 export async function fetchRealClinics(): Promise<RealClinic[]> {
+  // Firestore rules require request.auth != null for ANY read, but this
+  // runs on the signup page before any account/session exists — without
+  // this, the read is silently denied and the dropdown shows nothing.
+  // Anonymous Auth is enabled in the Firebase project for local testing.
+  // Long-term fix: a public `allow read` rule scoped to just the `clinics`
+  // collection in the Firebase Console (clinic names aren't sensitive).
+  if (!auth.currentUser) {
+    await signInAnonymously(auth);
+  }
   const snap = await getDocs(collection(db, "clinics"));
   return snap.docs
     .map((d) => {
@@ -1136,22 +1341,28 @@ export async function signUpPatient(
     ]);
 
     return { ok: true, patientId };
-  } catch (err: any) {
-    if (err.code === "auth/email-already-in-use")
+  } catch (err: unknown) {
+    // Firebase Auth errors always carry a .code string; narrow instead of any.
+    const code =
+      err instanceof Object && "code" in err
+        ? String((err as { code: unknown }).code)
+        : undefined;
+    const message = err instanceof Error ? err.message : undefined;
+    if (code === "auth/email-already-in-use")
       return { ok: false, error: "An account with this email already exists" };
-    if (err.code === "auth/weak-password")
+    if (code === "auth/weak-password")
       return { ok: false, error: "Password must be at least 6 characters" };
-    if (err.code === "auth/invalid-email")
+    if (code === "auth/invalid-email")
       return { ok: false, error: "Enter a valid email address" };
-    if (err.code === "auth/operation-not-allowed")
+    if (code === "auth/operation-not-allowed")
       return {
         ok: false,
         error: "Email/Password sign-in is not enabled in Firebase",
       };
-    console.error("signUpPatient failed:", err.code, err.message);
+    console.error("signUpPatient failed:", code, message);
     return {
       ok: false,
-      error: `Could not create account (${err.code ?? err.message ?? "unknown"})`,
+      error: `Could not create account (${code ?? message ?? "unknown"})`,
     };
   } finally {
     await deleteApp(secondary);
@@ -1192,9 +1403,9 @@ export async function fetchDoctorDashboard(): Promise<DoctorDashboardData> {
   };
 }
 
-// Paste these functions at the bottom of your existing src/lib/clinic-data.ts
-
-
+// ---------------------------------------------------------------------------
+// Patient record editing (Receptionist "View" -> prefilled edit page)
+// ---------------------------------------------------------------------------
 
 export interface PatientUpdateInput {
   chronicCondition?: string;
@@ -1244,24 +1455,44 @@ export interface MedicalRecordUpdateInput {
   insurancePolicyNumber?: string;
 }
 
-export async function updatePatient(patientId: string, input: PatientUpdateInput): Promise<void> {
+// Firestore's updateDoc() rejects any field explicitly set to `undefined` —
+// it throws instead of just skipping it — so any blank/unset form field
+// (e.g. a patient with no dosage recorded yet) would crash the whole save.
+// Strip undefined-valued keys before every write instead.
+function stripUndefined<T extends object>(input: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined) (out as Record<string, unknown>)[key] = value;
+  }
+  return out;
+}
+
+export async function updatePatient(
+  patientId: string,
+  input: PatientUpdateInput,
+): Promise<void> {
   await updateDoc(doc(db, "patients", patientId), {
-    ...input,
+    ...stripUndefined(input),
     lastUpdated: new Date().toISOString(),
   });
 }
 
-export async function updateUser(userId: string | number, input: UserUpdateInput): Promise<void> {
+export async function updateUser(
+  userId: string | number,
+  input: UserUpdateInput,
+): Promise<void> {
   await updateDoc(doc(db, "users", String(userId)), {
-    ...input,
+    ...stripUndefined(input),
     lastUpdated: new Date().toISOString(),
   });
 }
 
-export async function updateMedicalRecord(recordNo: string | number, input: MedicalRecordUpdateInput): Promise<void> {
+export async function updateMedicalRecord(
+  recordNo: string | number,
+  input: MedicalRecordUpdateInput,
+): Promise<void> {
   await updateDoc(doc(db, "medicalRecords", String(recordNo)), {
-    ...input,
+    ...stripUndefined(input),
     lastUpdated: new Date().toISOString(),
   });
 }
-

@@ -1,6 +1,30 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { ZennithStar } from "./ZennithStar";
-import { Bell, LogOut, Search, ChevronLeft, LayoutDashboard, Calendar, ScanLine, Users, CalendarDays, UserCircle2, FileText, BellRing, Boxes, Activity, Share2, LineChart, ClipboardList, UserPlus, ShieldCheck, X, Building2, ShieldQuestion } from "lucide-react";
+import {
+  Bell,
+  LogOut,
+  Search,
+  ChevronLeft,
+  LayoutDashboard,
+  Calendar,
+  ScanLine,
+  Users,
+  CalendarDays,
+  UserCircle2,
+  FileText,
+  BellRing,
+  Boxes,
+  Activity,
+  Share2,
+  LineChart,
+  ClipboardList,
+  UserPlus,
+  ShieldCheck,
+  X,
+  Building2,
+  ShieldQuestion,
+  type LucideIcon,
+} from "lucide-react";
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { getRoleSearchIndex, type SearchEntry } from "@/lib/search-index";
@@ -8,7 +32,7 @@ import { getNotifications, type Notification } from "@/lib/notifications";
 import { useActiveClinic, CLINICS, type ClinicId } from "@/lib/clinic";
 import { useCurrentPatient } from "@/lib/patient-service";
 
-export type NavItem = { to: string; label: string; icon: any };
+export type NavItem = { to: string; label: string; icon: LucideIcon };
 
 const navByRole: Record<Role, NavItem[]> = {
   nurse: [
@@ -33,15 +57,31 @@ const navByRole: Record<Role, NavItem[]> = {
   pharmacist: [
     { to: "/pharmacist", label: "Dashboard", icon: LayoutDashboard },
     { to: "/pharmacist/stock", label: "Stock Levels", icon: Boxes },
-    { to: "/pharmacist/diagnostics", label: "Prescription Lookup", icon: Search },
+    {
+      to: "/pharmacist/diagnostics",
+      label: "Prescription Lookup",
+      icon: Search,
+    },
     { to: "/pharmacist/distribution", label: "Distribution", icon: Share2 },
-    { to: "/pharmacist/analytics", label: "Medication Overview", icon: LineChart },
+    {
+      to: "/pharmacist/analytics",
+      label: "Medication Overview",
+      icon: LineChart,
+    },
   ],
   receptionist: [
     { to: "/receptionist", label: "Dashboard", icon: LayoutDashboard },
     { to: "/receptionist/appointments", label: "Appointments", icon: Calendar },
-    { to: "/receptionist/registration", label: "Registration", icon: ClipboardList },
-    { to: "/receptionist/profiles", label: "Patient Profiles", icon: UserCircle2 },
+    {
+      to: "/receptionist/registration",
+      label: "Registration",
+      icon: ClipboardList,
+    },
+    {
+      to: "/receptionist/profiles",
+      label: "Patient Profiles",
+      icon: UserCircle2,
+    },
   ],
   admin: [
     { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
@@ -66,11 +106,27 @@ export function AppShell({
   title,
   showBack = true,
   children,
+  clinicNameOverride,
+  staffNameOverride,
 }: {
   role: Role;
   title: string;
   showBack?: boolean;
   children: ReactNode;
+  // Real clinic name resolved from Firestore (e.g. via
+  // resolveCurrentReceptionist()), for roles that have a real per-user
+  // clinic lookup already. When omitted, falls back to the old fake
+  // localStorage clinic switcher — see lib/clinic.ts. Roles that can
+  // legitimately switch between clinics (pharmacist, super_admin) keep
+  // using the switchable fake system for now; this is scoped to fixing
+  // the receptionist disconnect without touching modules not yet audited.
+  clinicNameOverride?: string | null;
+  // Real staff name resolved from Firestore (e.g. via
+  // resolveCurrentReceptionist().name). Without this the sidebar falls back
+  // to capitalizing the LOGIN USERNAME, which is meaningless when the
+  // username is generic/shared (e.g. "receptionist") rather than a real
+  // person's name.
+  staffNameOverride?: string | null;
 }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -87,7 +143,7 @@ export function AppShell({
   const display =
     role === "patient" && sidebarPatient?.fullName
       ? sidebarPatient.fullName
-      : displayNameFor(role, username);
+      : (staffNameOverride ?? displayNameFor(role, username));
   const initial = display.charAt(0).toUpperCase();
   const clinic = useActiveClinic();
   const canSwitch = !!staffCanSwitch[role];
@@ -96,7 +152,7 @@ export function AppShell({
       ? "Zennith Platform · All facilities"
       : role === "patient"
         ? "Patient Portal"
-        : clinic.name;
+        : (clinicNameOverride ?? clinic.name);
 
   return (
     <div className="min-h-screen flex bg-[oklch(0.97_0.01_240)]">
@@ -109,7 +165,9 @@ export function AppShell({
           <ZennithStar size={36} />
           <div className="leading-tight">
             <div className="font-bold text-lg">Zennith</div>
-            <div className="text-[10px] tracking-[0.2em] text-white/50">{role.toUpperCase()}</div>
+            <div className="text-[10px] tracking-[0.2em] text-white/50">
+              {role.toUpperCase()}
+            </div>
           </div>
         </div>
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
@@ -122,7 +180,9 @@ export function AppShell({
                 to={item.to}
                 onClick={() => setOpen(false)}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors ${
-                  active ? "bg-[oklch(0.55_0.18_245)] text-white" : "text-white/70 hover:bg-white/5"
+                  active
+                    ? "bg-[oklch(0.55_0.18_245)] text-white"
+                    : "text-white/70 hover:bg-white/5"
                 }`}
               >
                 <Icon size={18} />
@@ -142,11 +202,20 @@ export function AppShell({
         </div>
       </aside>
 
-      {open && <div className="fixed inset-0 bg-black/40 z-30 lg:hidden" onClick={() => setOpen(false)} />}
+      {open && (
+        <div
+          className="fixed inset-0 bg-black/40 z-30 lg:hidden"
+          onClick={() => setOpen(false)}
+        />
+      )}
 
       <main className="flex-1 flex flex-col min-w-0">
         <header className="bg-white border-b px-4 lg:px-6 h-16 flex items-center gap-3 sticky top-0 z-20">
-          <button className="lg:hidden p-2" onClick={() => setOpen(true)} aria-label="Menu">
+          <button
+            className="lg:hidden p-2"
+            onClick={() => setOpen(true)}
+            aria-label="Menu"
+          >
             <span className="block w-5 h-0.5 bg-foreground mb-1" />
             <span className="block w-5 h-0.5 bg-foreground mb-1" />
             <span className="block w-5 h-0.5 bg-foreground" />
@@ -160,10 +229,17 @@ export function AppShell({
               <ChevronLeft size={20} />
             </button>
           )}
-          <h1 className="font-semibold text-base lg:text-lg truncate">{title}</h1>
+          <h1 className="font-semibold text-base lg:text-lg truncate">
+            {title}
+          </h1>
           <div className="flex-1" />
           {role !== "patient" && (
-            <ClinicChip clinicId={clinic.id} clinicName={clinic.name} canSwitch={canSwitch} onSwitch={clinic.setId} />
+            <ClinicChip
+              clinicId={clinic.id}
+              clinicName={clinicNameOverride ?? clinic.name}
+              canSwitch={canSwitch && clinicNameOverride == null}
+              onSwitch={clinic.setId}
+            />
           )}
           <ScopedSearch role={role} />
           <NotificationsButton role={role} />
@@ -193,13 +269,18 @@ function ScopedSearch({ role }: { role: Role }) {
     const term = q.trim().toLowerCase();
     if (!term) return [];
     return index
-      .filter((e) => e.label.toLowerCase().includes(term) || e.keywords.some((k) => k.toLowerCase().includes(term)))
+      .filter(
+        (e) =>
+          e.label.toLowerCase().includes(term) ||
+          e.keywords.some((k) => k.toLowerCase().includes(term)),
+      )
       .slice(0, 8);
   }, [q, index]);
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpenList(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpenList(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
@@ -208,7 +289,13 @@ function ScopedSearch({ role }: { role: Role }) {
   const go = (r: SearchEntry) => {
     setQ("");
     setOpenList(false);
-    (navigate as any)({ to: r.path, hash: r.hash });
+    // TanStack Router's navigate() is strictly typed to a known route union,
+    // but search results can link to any role's routes dynamically — cast
+    // through unknown instead of any to keep the escape hatch lint-clean.
+    (navigate as unknown as (opts: { to: string; hash?: string }) => void)({
+      to: r.path,
+      hash: r.hash,
+    });
     if (r.hash && typeof window !== "undefined") {
       setTimeout(() => {
         const el = document.getElementById(r.hash!);
@@ -223,9 +310,14 @@ function ScopedSearch({ role }: { role: Role }) {
         <Search size={16} className="text-muted-foreground" />
         <input
           value={q}
-          onChange={(e) => { setQ(e.target.value); setOpenList(true); }}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setOpenList(true);
+          }}
           onFocus={() => setOpenList(true)}
-          onKeyDown={(e) => { if (e.key === "Enter" && results[0]) go(results[0]); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && results[0]) go(results[0]);
+          }}
           type="text"
           placeholder="Search this dashboard..."
           className="bg-transparent outline-none text-sm flex-1"
@@ -234,7 +326,9 @@ function ScopedSearch({ role }: { role: Role }) {
       {openList && q.trim() && (
         <div className="absolute right-0 mt-1 w-80 bg-white border rounded-md shadow-lg z-50 max-h-80 overflow-y-auto">
           {results.length === 0 ? (
-            <div className="p-3 text-sm text-muted-foreground">No matches in your dashboard.</div>
+            <div className="p-3 text-sm text-muted-foreground">
+              No matches in your dashboard.
+            </div>
           ) : (
             results.map((r, i) => (
               <button
@@ -243,7 +337,9 @@ function ScopedSearch({ role }: { role: Role }) {
                 className="w-full text-left px-3 py-2 hover:bg-secondary border-b last:border-b-0"
               >
                 <div className="text-sm font-medium">{r.label}</div>
-                <div className="text-[11px] text-muted-foreground truncate">{r.section}</div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {r.section}
+                </div>
               </button>
             ))
           )}
@@ -258,10 +354,13 @@ function NotificationsButton({ role }: { role: Role }) {
   const [items, setItems] = useState<Notification[]>([]);
   const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { setItems(getNotifications(role)); }, [role]);
+  useEffect(() => {
+    setItems(getNotifications(role));
+  }, [role]);
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
@@ -290,7 +389,9 @@ function NotificationsButton({ role }: { role: Role }) {
             {items.length > 0 && (
               <button
                 className="text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => setItems(items.map((i) => ({ ...i, unread: false })))}
+                onClick={() =>
+                  setItems(items.map((i) => ({ ...i, unread: false })))
+                }
               >
                 Mark all read
               </button>
@@ -299,12 +400,20 @@ function NotificationsButton({ role }: { role: Role }) {
           <div className="max-h-80 overflow-y-auto">
             {items.length === 0 ? (
               <div className="p-8 text-center">
-                <Bell size={28} className="mx-auto text-muted-foreground/50 mb-2" />
-                <p className="text-sm text-muted-foreground">No notifications</p>
+                <Bell
+                  size={28}
+                  className="mx-auto text-muted-foreground/50 mb-2"
+                />
+                <p className="text-sm text-muted-foreground">
+                  No notifications
+                </p>
               </div>
             ) : (
               items.map((n, i) => (
-                <div key={i} className={`p-3 border-b last:border-b-0 ${n.unread ? "bg-[oklch(0.97_0.03_245)]" : ""}`}>
+                <div
+                  key={i}
+                  className={`p-3 border-b last:border-b-0 ${n.unread ? "bg-[oklch(0.97_0.03_245)]" : ""}`}
+                >
                   <div className="flex items-start justify-between gap-2">
                     <div className="font-medium text-sm">{n.title}</div>
                     <button
@@ -315,8 +424,12 @@ function NotificationsButton({ role }: { role: Role }) {
                       <X size={14} />
                     </button>
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1">{n.body}</div>
-                  <div className="text-[10px] text-muted-foreground mt-1">{n.time}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {n.body}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-1">
+                    {n.time}
+                  </div>
                 </div>
               ))
             )}
@@ -327,11 +440,24 @@ function NotificationsButton({ role }: { role: Role }) {
   );
 }
 
-function ClinicChip({ clinicId, clinicName, canSwitch, onSwitch }: { clinicId: ClinicId; clinicName: string; canSwitch: boolean; onSwitch: (id: ClinicId) => void }) {
+function ClinicChip({
+  clinicId,
+  clinicName,
+  canSwitch,
+  onSwitch,
+}: {
+  clinicId: ClinicId;
+  clinicName: string;
+  canSwitch: boolean;
+  onSwitch: (id: ClinicId) => void;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const on = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const on = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
+    };
     document.addEventListener("mousedown", on);
     return () => document.removeEventListener("mousedown", on);
   }, []);
@@ -348,16 +474,22 @@ function ClinicChip({ clinicId, clinicName, canSwitch, onSwitch }: { clinicId: C
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border bg-white hover:bg-secondary/60"
       >
-        <Building2 size={12} /> <span className="font-medium">{clinicName}</span>
+        <Building2 size={12} />{" "}
+        <span className="font-medium">{clinicName}</span>
         <span className="text-muted-foreground">▾</span>
       </button>
       {open && (
         <div className="absolute right-0 mt-1 w-56 bg-white border rounded-md shadow-lg z-50">
-          <div className="text-[10px] tracking-wider text-muted-foreground p-2 border-b">SWITCH CLINIC</div>
+          <div className="text-[10px] tracking-wider text-muted-foreground p-2 border-b">
+            SWITCH CLINIC
+          </div>
           {CLINICS.map((c) => (
             <button
               key={c.id}
-              onClick={() => { onSwitch(c.id); setOpen(false); }}
+              onClick={() => {
+                onSwitch(c.id);
+                setOpen(false);
+              }}
               className={`w-full text-left px-3 py-2 hover:bg-secondary text-sm border-b last:border-b-0 ${c.id === clinicId ? "bg-[oklch(0.97_0.03_245)]" : ""}`}
             >
               <div className="font-medium">{c.name}</div>
@@ -370,14 +502,22 @@ function ClinicChip({ clinicId, clinicName, canSwitch, onSwitch }: { clinicId: C
   );
 }
 
-
 export type StockStatus = "OK" | "Low" | "Out";
-export type AppointmentStatus = "Complete" | "Incomplete" | "No-show" | "In-progress";
+export type AppointmentStatus =
+  | "Complete"
+  | "Incomplete"
+  | "No-show"
+  | "In-progress"
+  | "Scheduled"
+  | "Confirmed";
 export type AnyStatus = StockStatus | AppointmentStatus;
 
 /** Compute status from current units vs threshold:
  *  Out: 0 · Low: <= 20% above threshold (i.e., units <= threshold * 1.2) · OK: above */
-export function computeStockStatus(units: number, threshold: number): StockStatus {
+export function computeStockStatus(
+  units: number,
+  threshold: number,
+): StockStatus {
   if (units <= 0) return "Out";
   if (units < threshold * 1.2) return "Low";
   return "OK";
@@ -392,10 +532,25 @@ export function StatusBadge({ status }: { status: AnyStatus }) {
     "In-progress": "bg-[oklch(0.6_0.16_165)] text-white",
     Incomplete: "bg-[oklch(0.82_0.19_95)] text-white",
     "No-show": "bg-[oklch(0.55_0.22_25)] text-white",
+    Scheduled: "bg-[oklch(0.94_0.05_245)] text-[oklch(0.4_0.15_245)]",
+    Confirmed: "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]",
   };
   const labels: Record<AnyStatus, string> = {
-    OK: "OK", Low: "Low", Out: "Out of stock",
-    Complete: "Complete", "In-progress": "In-progress", Incomplete: "Incomplete", "No-show": "No-show",
+    OK: "OK",
+    Low: "Low",
+    Out: "Out of stock",
+    Complete: "Complete",
+    "In-progress": "In-progress",
+    Incomplete: "Incomplete",
+    "No-show": "No-show",
+    Scheduled: "Scheduled",
+    Confirmed: "Confirmed",
   };
-  return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${map[status]}`}>{labels[status]}</span>;
+  return (
+    <span
+      className={`px-2.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${map[status]}`}
+    >
+      {labels[status]}
+    </span>
+  );
 }
