@@ -29,6 +29,23 @@ import {
   signInAnonymously,
 } from "firebase/auth";
 import { auth, db, firebaseConfig } from "@/firebase";
+import { onAuthStateChanged, type User } from "firebase/auth";
+
+// Same fix already proven in doctor-service.ts's waitForAuthReady(): on a
+// hard page load, auth.currentUser can still be null for a brief moment
+// while Firebase restores the session, even though the user really is
+// signed in. Anything that reads auth.currentUser directly at that moment
+// falls back to a wrong/empty default — this waits for the real answer
+// before querying anything.
+function waitForAuthReady(): Promise<User | null> {
+  if (auth.currentUser) return Promise.resolve(auth.currentUser);
+  return new Promise((resolve) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      unsubscribe();
+      resolve(user);
+    });
+  });
+}
 import type { AppointmentStatus } from "@/components/AppShell";
 
 export interface ClinicAppointment {
@@ -725,9 +742,17 @@ export async function fetchPatientPage(
   return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
 }
 
-export async function findPatient(pid: string): Promise<PatientSummary | null> {
+export async function findPatient(
+  pid: string,
+  clinicId?: number | null,
+): Promise<PatientSummary | null> {
   const snap = await getDoc(doc(db, "patients", pid));
   if (!snap.exists()) return null;
+  // Direct-ID lookup bypasses the clinic-scoped browse list (fetchPatientPage,
+  // see #19 in docs/db-issues.md) — this closes that gap. A patient outside
+  // this clinic is treated as not found, same as if they didn't exist.
+  if (clinicId != null && Number(snap.data().clinicId) !== clinicId)
+    return null;
   return toPatientSummary(snap.id, snap.data());
 }
 
@@ -1088,7 +1113,8 @@ export interface CurrentReceptionist {
   clinicName: string | null;
 }
 export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist> {
-  const uid = auth.currentUser?.uid;
+  const user = await waitForAuthReady();
+  const uid = user?.uid;
   if (!uid) return { name: "Receptionist", clinicId: null, clinicName: null };
   const profileSnap = await getDoc(doc(db, "profiles", uid));
   const profile = profileSnap.exists() ? profileSnap.data() : {};

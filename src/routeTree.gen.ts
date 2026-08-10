@@ -44,7 +44,6 @@ import { Route as PatientAlertsRouteImport } from './routes/patient.alerts'
 import { Route as NursePatientsRouteImport } from './routes/nurse.patients'
 import { Route as NurseDigitizeRouteImport } from './routes/nurse.digitize'
 import { Route as NurseAppointmentsRouteImport } from './routes/nurse.appointments'
-import { Route as DoctorScheduleRouteImport } from './routes/doctor.schedule'
 import { Route as DoctorPatientsRouteImport } from './routes/doctor.patients'
 import { Route as DoctorAppointmentsRouteImport } from './routes/doctor.appointments'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
@@ -231,11 +230,6 @@ const NurseAppointmentsRoute = NurseAppointmentsRouteImport.update({
   path: '/appointments',
   getParentRoute: () => NurseRoute,
 } as any)
-const DoctorScheduleRoute = DoctorScheduleRouteImport.update({
-  id: '/schedule',
-  path: '/schedule',
-  getParentRoute: () => DoctorRoute,
-} as any)
 const DoctorPatientsRoute = DoctorPatientsRouteImport.update({
   id: '/patients',
   path: '/patients',
@@ -295,7 +289,6 @@ export interface FileRoutesByFullPath {
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
   '/doctor/patients': typeof DoctorPatientsRoute
-  '/doctor/schedule': typeof DoctorScheduleRoute
   '/nurse/appointments': typeof NurseAppointmentsRoute
   '/nurse/digitize': typeof NurseDigitizeRoute
   '/nurse/patients': typeof NursePatientsRoute
@@ -334,7 +327,6 @@ export interface FileRoutesByTo {
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
   '/doctor/patients': typeof DoctorPatientsRoute
-  '/doctor/schedule': typeof DoctorScheduleRoute
   '/nurse/appointments': typeof NurseAppointmentsRoute
   '/nurse/digitize': typeof NurseDigitizeRoute
   '/nurse/patients': typeof NursePatientsRoute
@@ -381,7 +373,6 @@ export interface FileRoutesById {
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
   '/doctor/patients': typeof DoctorPatientsRoute
-  '/doctor/schedule': typeof DoctorScheduleRoute
   '/nurse/appointments': typeof NurseAppointmentsRoute
   '/nurse/digitize': typeof NurseDigitizeRoute
   '/nurse/patients': typeof NursePatientsRoute
@@ -429,7 +420,6 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/doctor/appointments'
     | '/doctor/patients'
-    | '/doctor/schedule'
     | '/nurse/appointments'
     | '/nurse/digitize'
     | '/nurse/patients'
@@ -468,7 +458,6 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/doctor/appointments'
     | '/doctor/patients'
-    | '/doctor/schedule'
     | '/nurse/appointments'
     | '/nurse/digitize'
     | '/nurse/patients'
@@ -514,7 +503,6 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/doctor/appointments'
     | '/doctor/patients'
-    | '/doctor/schedule'
     | '/nurse/appointments'
     | '/nurse/digitize'
     | '/nurse/patients'
@@ -805,13 +793,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NurseAppointmentsRouteImport
       parentRoute: typeof NurseRoute
     }
-    '/doctor/schedule': {
-      id: '/doctor/schedule'
-      path: '/schedule'
-      fullPath: '/doctor/schedule'
-      preLoaderRoute: typeof DoctorScheduleRouteImport
-      parentRoute: typeof DoctorRoute
-    }
     '/doctor/patients': {
       id: '/doctor/patients'
       path: '/patients'
@@ -890,7 +871,6 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 interface DoctorRouteChildren {
   DoctorAppointmentsRoute: typeof DoctorAppointmentsRoute
   DoctorPatientsRoute: typeof DoctorPatientsRoute
-  DoctorScheduleRoute: typeof DoctorScheduleRoute
   DoctorIndexRoute: typeof DoctorIndexRoute
   DoctorPatientRecordPidRoute: typeof DoctorPatientRecordPidRoute
 }
@@ -898,7 +878,6 @@ interface DoctorRouteChildren {
 const DoctorRouteChildren: DoctorRouteChildren = {
   DoctorAppointmentsRoute: DoctorAppointmentsRoute,
   DoctorPatientsRoute: DoctorPatientsRoute,
-  DoctorScheduleRoute: DoctorScheduleRoute,
   DoctorIndexRoute: DoctorIndexRoute,
   DoctorPatientRecordPidRoute: DoctorPatientRecordPidRoute,
 }

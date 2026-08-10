@@ -1,19 +1,30 @@
 ﻿import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatusBadge } from "@/components/AppShell";
-import { useDoctorDashboard } from "@/lib/doctor-service";
+import { useDoctorDashboard, useCurrentDoctor } from "@/lib/doctor-service";
 import { FileText, CalendarPlus, CalendarDays } from "lucide-react";
 
-export const Route = createFileRoute("/doctor/")({ component: DoctorDashboard });
+export const Route = createFileRoute("/doctor/")({
+  component: DoctorDashboard,
+});
 
 function DoctorDashboard() {
+  const { doctor } = useCurrentDoctor();
   const { data, loading, error } = useDoctorDashboard();
 
   const today = new Date().toISOString().slice(0, 10);
   const scheduleLabel =
-    !data || data.scheduleDate === today ? "Today's Schedule" : `Schedule · ${data.scheduleDate}`;
+    !data || data.scheduleDate === today
+      ? "Today's Schedule"
+      : `Schedule · ${data.scheduleDate}`;
 
   return (
-    <AppShell role="doctor" title="Doctor Dashboard" showBack={false}>
+    <AppShell
+      role="doctor"
+      title="Doctor Dashboard"
+      showBack={false}
+      staffNameOverride={doctor?.fullName}
+      clinicNameOverride={doctor?.clinicName}
+    >
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <Stat
           label="APPOINTMENTS"
@@ -23,7 +34,7 @@ function DoctorDashboard() {
         <Stat
           label="PENDING REVIEWS"
           value={data ? String(data.stats.pendingReviews) : "—"}
-          sub="Review appointments open"
+          sub="Review appts, last 30 days, not yet Complete"
         />
         <Stat
           label="PATIENTS THIS WEEK"
@@ -41,16 +52,44 @@ function DoctorDashboard() {
         <div className="lg:col-span-2 bg-white rounded-xl border p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold">{scheduleLabel}</h3>
-            <Link to="/doctor/schedule" className="text-sm text-[oklch(0.55_0.18_245)] hover:underline">View all →</Link>
+            <Link
+              to="/doctor/appointments"
+              className="text-sm text-[oklch(0.55_0.18_245)] hover:underline"
+            >
+              View all →
+            </Link>
           </div>
           <div className="space-y-2">
-            {loading && <p className="text-sm text-muted-foreground py-6 text-center">Loading schedule…</p>}
-            {error && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
+            {loading && (
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                Loading schedule…
+              </p>
+            )}
+            {error && (
+              <p className="text-sm text-destructive py-6 text-center">
+                Could not load appointments.
+              </p>
+            )}
             {data?.schedule.map((a) => (
-              <div key={a.docId} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2" style={{ borderColor: a.status === "Complete" || a.status === "In-progress" ? "oklch(0.6 0.15 160)" : a.status === "No-show" ? "oklch(0.55 0.22 25)" : "oklch(0.75 0.15 70)" }}>
-                <div className="font-mono text-sm font-semibold w-12">{a.time}</div>
+              <div
+                key={a.docId}
+                className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2"
+                style={{
+                  borderColor:
+                    a.status === "Complete" || a.status === "In-progress"
+                      ? "oklch(0.6 0.15 160)"
+                      : a.status === "No-show"
+                        ? "oklch(0.55 0.22 25)"
+                        : "oklch(0.75 0.15 70)",
+                }}
+              >
+                <div className="font-mono text-sm font-semibold w-12">
+                  {a.time}
+                </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">{a.patientName}</div>
+                  <div className="font-medium text-sm truncate">
+                    {a.patientName}
+                  </div>
                   <div className="text-xs text-muted-foreground truncate">
                     {[a.condition, a.type].filter(Boolean).join(" · ")}
                   </div>
@@ -59,7 +98,9 @@ function DoctorDashboard() {
               </div>
             ))}
             {data && data.schedule.length === 0 && (
-              <p className="text-sm text-muted-foreground py-6 text-center">No appointments found for {data.doctorId}.</p>
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                No appointments found for {data.doctorId}.
+              </p>
             )}
           </div>
         </div>
@@ -67,20 +108,37 @@ function DoctorDashboard() {
         <div className="bg-white rounded-xl border p-5">
           <h3 className="font-semibold mb-4">Quick Actions</h3>
           <div className="space-y-2">
-            <Link to="/doctor/patients" className="flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)]">
+            <Link
+              to="/doctor/patients"
+              className="flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)]"
+            >
               <FileText size={16} /> View Patient Files
             </Link>
-            <Link to="/doctor/appointments" className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary">
+            <Link
+              to="/doctor/appointments"
+              className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary"
+            >
               <CalendarPlus size={16} /> New Appointment
             </Link>
-            <Link to="/doctor/schedule" className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary">
-              <CalendarDays size={16} /> My Full Schedule
+            <Link
+              to="/doctor/appointments"
+              className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary"
+            >
+              <CalendarDays size={16} /> Full Appointments
             </Link>
           </div>
           <div className="mt-5 pt-5 border-t">
-            <p className="text-[11px] tracking-wider text-muted-foreground mb-2">THIS WEEK</p>
-            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "—"} />
-            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "—"} />
+            <p className="text-[11px] tracking-wider text-muted-foreground mb-2">
+              THIS WEEK
+            </p>
+            <Row
+              label="Patients seen"
+              value={data ? String(data.stats.weekPatients) : "—"}
+            />
+            <Row
+              label="Appointments"
+              value={data ? String(data.stats.weekPatients) : "—"}
+            />
             <Row label="Clinician" value={data?.doctorId ?? "—"} />
           </div>
         </div>
@@ -89,10 +147,20 @@ function DoctorDashboard() {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {
+function Stat({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+}) {
   return (
     <div className="bg-white rounded-xl border p-5">
-      <p className="text-[11px] tracking-wider text-muted-foreground">{label}</p>
+      <p className="text-[11px] tracking-wider text-muted-foreground">
+        {label}
+      </p>
       <p className="text-3xl font-bold mt-1">{value}</p>
       <p className="text-xs text-muted-foreground mt-1">{sub}</p>
     </div>

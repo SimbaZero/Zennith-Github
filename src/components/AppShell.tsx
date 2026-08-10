@@ -29,8 +29,12 @@ import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { getRoleSearchIndex, type SearchEntry } from "@/lib/search-index";
 import { getNotifications, type Notification } from "@/lib/notifications";
+import {
+  useCurrentPatient,
+  usePatientNotifications,
+  markNotificationRead,
+} from "@/lib/patient-service";
 import { useActiveClinic, CLINICS, type ClinicId } from "@/lib/clinic";
-import { useCurrentPatient } from "@/lib/patient-service";
 
 export type NavItem = { to: string; label: string; icon: LucideIcon };
 
@@ -43,7 +47,6 @@ const navByRole: Record<Role, NavItem[]> = {
   ],
   doctor: [
     { to: "/doctor", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/doctor/schedule", label: "Schedule", icon: CalendarDays },
     { to: "/doctor/appointments", label: "Appointments", icon: Calendar },
     { to: "/doctor/patients", label: "Patient Files", icon: UserCircle2 },
   ],
@@ -354,9 +357,34 @@ function NotificationsButton({ role }: { role: Role }) {
   const [items, setItems] = useState<Notification[]>([]);
   const ref = useRef<HTMLDivElement>(null);
 
+  // Real for Patient (same Firestore source the Alerts page uses) — still
+  // the old static fake list for every other role. Those roles' bell
+  // dropdowns are a known, flagged gap, not silently "also fixed" by this.
+  const { patient } = useCurrentPatient();
+  const realPatientNotifs = usePatientNotifications(
+    role === "patient" ? patient?.userId : undefined,
+  );
+
   useEffect(() => {
-    setItems(getNotifications(role));
-  }, [role]);
+    if (role === "patient") {
+      setItems(
+        realPatientNotifs.map((n) => ({
+          title: n.title,
+          body: n.message,
+          time: new Date(n.timeSent).toLocaleString("en-ZA", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          unread: !n.isRead,
+          docId: n.docId,
+        })),
+      );
+    } else {
+      setItems(getNotifications(role));
+    }
+  }, [role, realPatientNotifs]);
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node))
@@ -389,9 +417,14 @@ function NotificationsButton({ role }: { role: Role }) {
             {items.length > 0 && (
               <button
                 className="text-xs text-muted-foreground hover:text-foreground"
-                onClick={() =>
-                  setItems(items.map((i) => ({ ...i, unread: false })))
-                }
+                onClick={() => {
+                  if (role === "patient") {
+                    items.forEach((i) => {
+                      if (i.unread && i.docId) markNotificationRead(i.docId);
+                    });
+                  }
+                  setItems(items.map((i) => ({ ...i, unread: false })));
+                }}
               >
                 Mark all read
               </button>

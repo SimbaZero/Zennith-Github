@@ -28,7 +28,17 @@ function ReceptionAppointments() {
     isRefetching,
   } = useQuery({
     queryKey: ["recent-appointments", receptionist?.clinicId],
-    queryFn: () => fetchRecentAppointments(receptionist?.clinicId),
+    queryFn: async () => {
+      try {
+        return await fetchRecentAppointments(receptionist?.clinicId);
+      } catch (err) {
+        // Was failing completely silently before — isError flipped true but
+        // the real Firestore error never printed anywhere, so there was no
+        // way to tell a missing index apart from any other failure.
+        console.error("fetchRecentAppointments failed:", err);
+        throw err;
+      }
+    },
     enabled: receptionist !== undefined,
     // A composite Firestore index (clinicId + appointDateTime) is required
     // for this query. Right after that index is created it can take a

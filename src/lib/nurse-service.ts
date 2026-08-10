@@ -509,17 +509,22 @@ export async function saveDigitizedFile(
       );
 
       // diagnosis has nowhere else to live except patients.chronicCondition
-      // (medicalRecords has no diagnosis field — confirmed from the real
-      // export's field list). dateOfBirth is a new field on `patients` —
-      // confirmed no equivalent exists anywhere in your real schema today.
+      // (medicalRecords has no diagnosis field). dateOfBirth was previously
+      // also written here onto `patients` — but that collection has no such
+      // field in the real schema, it belongs on `users` (as `DOB`, same
+      // field registerPatient() already writes for new patients below).
       await setDoc(
         doc(db, "patients", patientId),
-        {
-          chronicCondition: data.diagnosis || patientData.chronicCondition,
-          dateOfBirth: data.dateOfBirth,
-        },
+        { chronicCondition: data.diagnosis || patientData.chronicCondition },
         { merge: true },
       );
+      if (data.dateOfBirth && patientData.userId != null) {
+        await setDoc(
+          doc(db, "users", String(patientData.userId)),
+          { DOB: data.dateOfBirth },
+          { merge: true },
+        );
+      }
     }
   }
 
@@ -545,16 +550,26 @@ export async function saveDigitizedFile(
     medicalRecordNo = patientData?.medicalRecordNo;
 
     // registerPatient's own fields (chronicCondition, etc.) are already
-    // set — this just adds dateOfBirth, which registerPatient doesn't
-    // currently accept as a parameter.
+    // set — this just adds DOB onto the real users doc it just created,
+    // since registerPatient() doesn't currently accept DOB as a parameter
+    // on this path. (Previously wrote dateOfBirth onto `patients` instead —
+    // wrong collection, patients has no such field.)
     await setDoc(
       doc(db, "patients", patientId!),
-      {
-        chronicCondition: data.diagnosis || "Not yet assessed",
-        dateOfBirth: data.dateOfBirth,
-      },
+      { chronicCondition: data.diagnosis || "Not yet assessed" },
       { merge: true },
     );
+    if (data.dateOfBirth) {
+      const newUserSnap = await getDoc(doc(db, "patients", patientId!));
+      const newUserId = newUserSnap.data()?.userId;
+      if (newUserId != null) {
+        await setDoc(
+          doc(db, "users", String(newUserId)),
+          { DOB: data.dateOfBirth },
+          { merge: true },
+        );
+      }
+    }
   }
 
   // Everything digitize-specific goes into the patient's existing
@@ -668,6 +683,13 @@ export async function dispenseMedication(input: DispenseInput): Promise<void> {
   if (invSnap.empty) throw new Error("Medication not found in inventory");
   const invDocRef = invSnap.docs[0].ref;
 
+  // Look up the real userId so we can notify the actual patient — needed
+  // for the notifications write below, not used anywhere else here.
+  const patientSnap = await getDoc(doc(db, "patients", input.patientId));
+  const patientUserId = patientSnap.exists()
+    ? Number(patientSnap.data().userId)
+    : null;
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(invDocRef);
     if (!snap.exists()) throw new Error("Medication not found in inventory");
@@ -698,6 +720,18 @@ export async function dispenseMedication(input: DispenseInput): Promise<void> {
         { lastVisit: new Date().toISOString().slice(0, 10) },
         { merge: true },
       );
+    }
+    // Real notification for the patient — same collection/shape Receptionist's
+    // callPatient() already writes to, not a new mechanism.
+    if (patientUserId != null && !Number.isNaN(patientUserId)) {
+      tx.set(doc(collection(db, "notifications")), {
+        notifId: Date.now(),
+        userId: patientUserId,
+        title: "Medication dispensed",
+        message: `You were given ${input.unitsGiven}× ${input.medName}.`,
+        isRead: false,
+        timeSent: new Date().toISOString(),
+      });
     }
   });
 }

@@ -57,7 +57,7 @@ function Profiles() {
     if (alreadyLoaded) return;
     const normalized = /^pat-/i.test(t) ? t : `Pat-${t.replace(/^pat/i, "")}`;
     setIdLookupTried(t);
-    findPatient(normalized).then((p) => setIdLookup(p));
+    findPatient(normalized, receptionist?.clinicId).then((p) => setIdLookup(p));
   }, [q, all, idLookupTried]);
 
   const filtered = useMemo(() => {

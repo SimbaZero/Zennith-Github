@@ -123,7 +123,6 @@ function NursePatients() {
       ) : (
         <PatientFilesTable
           recordBase="/nurse/patient-record"
-          showAdherence
           clinicId={nurse?.clinicId}
           nurseId={nurse?.nurseId}
         />
@@ -134,12 +133,10 @@ function NursePatients() {
 
 export function PatientFilesTable({
   recordBase = "/nurse/patient-record",
-  showAdherence = false,
   clinicId,
   nurseId,
 }: {
   recordBase?: string;
-  showAdherence?: boolean;
   /** When set, both the browse list and Patient-ID search are scoped to
    *  this clinic only. Omit to browse/search across all clinics. */
   clinicId?: number;
@@ -148,11 +145,16 @@ export function PatientFilesTable({
   const [q, setQ] = useState("");
 
   // was useQuery(fetchPatientPage) — now a live hook, updates automatically
+  // Firestore has no real "contains" text search — this loads the whole
+  // clinic roster so name search actually covers everyone, not just an
+  // arbitrary first-30 cutoff. Fine at real-clinic scale (~30-35 patients
+  // seen so far); would need real search infrastructure (not just a bigger
+  // number here) if a clinic ever grows into the hundreds/thousands.
   const {
     patients: page,
     loading: pageLoading,
     error: pageError,
-  } = usePatientDirectory(30, clinicId);
+  } = usePatientDirectory(500, clinicId);
 
   const idQuery = /^pat-\d+$/i.test(q.trim())
     ? `Pat-${q.trim().match(/\d+/)![0]}`
@@ -185,7 +187,7 @@ export function PatientFilesTable({
               ? `Could not load patients: ${pageError}`
               : pageLoading
                 ? "Loading patients…"
-                : "Browsing first 30 — search a Patient ID (e.g. Pat-828) for anyone else"}
+                : `${page.length} patients at this clinic — search by name or exact Patient ID`}
           </p>
         </div>
         <input
@@ -202,9 +204,6 @@ export function PatientFilesTable({
               <th className="px-5 py-3 font-medium">Patient ID</th>
               <th className="px-5 py-3 font-medium">Name</th>
               <th className="px-5 py-3 font-medium">Condition</th>
-              {showAdherence && (
-                <th className="px-5 py-3 font-medium">Today's meds</th>
-              )}
               <th className="px-5 py-3 font-medium">Last Visit</th>
               <th className="px-5 py-3" />
             </tr>
@@ -217,21 +216,12 @@ export function PatientFilesTable({
                 </td>
                 <td className="px-5 py-3.5 font-medium">{p.name}</td>
                 <td className="px-5 py-3.5">{p.condition}</td>
-                {showAdherence && (
-                  <td className="px-5 py-3.5">
-                    <AdherenceCell
-                      pid={p.patientId}
-                      condition={p.condition}
-                      nurseId={nurseId}
-                    />
-                  </td>
-                )}
                 <td className="px-5 py-3.5 text-muted-foreground">
                   {p.lastVisit}
                 </td>
                 <td className="px-5 py-3.5 text-right">
                   <div className="flex justify-end gap-1.5">
-                    {showAdherence && (
+                    {nurseId && (
                       <Link
                         to={`${recordBase}/${p.patientId}?dispense=1` as any}
                         title="Dispense medication"
@@ -253,7 +243,7 @@ export function PatientFilesTable({
             {!loading && filtered.length === 0 && (
               <tr>
                 <td
-                  colSpan={showAdherence ? 6 : 5}
+                  colSpan={5}
                   className="px-5 py-8 text-center text-muted-foreground"
                 >
                   {idQuery

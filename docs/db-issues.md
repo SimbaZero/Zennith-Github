@@ -3,7 +3,7 @@
 Running log of things found while wiring the backend to real Firestore data.
 Update this file as we go — don't lose track of anything before raising it with Simba/the DB owner.
 
-_Last major update: Aug 2026, after the Nurse module (OCR digitize, appointments, patient records, Dispense Medication) was wired to real Firestore._
+_Last major update: Aug 2026. Two things happened in this pass: (1) the Nurse module work below, and (2) a numbering fix — several code comments across the Receptionist module already pointed to entries #16/#17/#18 in this file that had never actually been written here. Backfilled them from what the code itself shows was fixed, and moved the Nurse items that had accidentally reused those same numbers up to #20+. If you wrote the original #16/#17/#18 fixes and the backfilled description below doesn't match what you actually intended, please correct it — it's reconstructed from code comments, not from your original notes._
 
 ---
 
@@ -12,20 +12,24 @@ _Last major update: Aug 2026, after the Nurse module (OCR digitize, appointments
 Quick summary for anyone catching up — full detail stays in the sections below where relevant.
 
 - Nurse profile resolution silently fell back to a hardcoded **"Nur-1"** — a different real nurse's name/clinic — whenever a signed-in nurse's own profile link was missing or broken. Now throws a clear error instead of borrowing someone else's identity. (`src/lib/nurse-service.ts`)
-- Digitize (OCR) flow: saving a scan with a blank medication field crashed outright — Firestore rejects `undefined` field values, and the write wasn't guarding against that. Fixed.
-- Digitize flow: new patients created via OCR scan were written with **no `clinicId`** — same bug class as an earlier Receptionist fix (`registerPatient`'s `clinicId` was available but never passed through on this path). Fixed.
-- Nurse Patients page and Patient-ID search were **not scoped to clinic at all** — fetched across every clinic in the DB, and a nurse could look up any patient's full record by guessing/typing a `Pat-###` ID from a different clinic. Both the browse list and the ID search are now scoped to the signed-in nurse's own `clinicId`. **Needed a new Firestore composite index** (`patients`: `clinicId` Asc + `userId` Asc) — created and confirmed Enabled.
-- That same list had **no error handling at all** on its live query — a failed query (e.g. the missing index above) just hung on "Loading patients…" forever with nothing shown. Now surfaces a real error message in the UI, and clears it automatically once the query succeeds.
-- Sidebar/header on all Nurse pages showed a hardcoded "Hillbrow CHC" and a placeholder name instead of the real signed-in nurse's name and real clinic (pulled from `nurses` → `clinics` join, same pattern already used for Receptionist).
-- OCR extraction quality was very poor on handwritten forms using Tesseract.js (confidence as low as 24%) — replaced with a Gemini Vision prototype for OCR + field extraction. **See the new "AI / OCR" section below — this is explicitly a placeholder, not a finished decision.**
-- Real in-browser camera capture (desktop + mobile, via `getUserMedia`) added to Digitize — previously only opened a native file picker.
-- Patient Record page (`PatientRecordView.tsx`, shared by Nurse + Doctor) was 100% read-only. Nurse now has:
-  - **Edit Record** — clinical fields only (condition, blood type, allergies, prescription, dosage, BP, glucose, CD4, viral load). Identity/registration fields (name, ID number, contact, address, emergency contact, insurance) stay locked — that's Receptionist/Admin territory.
-  - **Append-only Clinical Notes** — a nurse can add a new note, never edit/delete an old one (matches how `handoverEntries` already works elsewhere).
-  - **Dispense Medication** — see new collection `patientDispensing` below.
-  - Doctor's version of the same shared page is untouched — still read-only.
+- Digitize (OCR) flow: saving a scan with a blank medication field crashed outright — Firestore rejects `undefined` field values. Fixed.
+- Digitize flow: new patients created via OCR scan were written with **no `clinicId`** — same bug class as #16 below, just on a different write path. Fixed.
+- Nurse Patients page and Patient-ID search were **not scoped to clinic at all**. Both now scoped to the signed-in nurse's own `clinicId`. Needed a new Firestore composite index (`patients`: `clinicId` Asc + `userId` Asc) — created and confirmed Enabled.
+- That same list had **no error handling at all** on its live query — a failed query just hung on "Loading patients…" forever with nothing shown. Now surfaces a real error message, and clears it automatically once the query succeeds.
+- Sidebar/header on all Nurse pages showed a hardcoded "Hillbrow CHC" and a placeholder name instead of the real signed-in nurse's name and real clinic.
+- OCR extraction quality was very poor on handwritten forms using Tesseract.js — replaced with a Gemini Vision prototype. **See #23 below — explicitly a placeholder, not a finished decision.**
+- Real in-browser camera capture (desktop + mobile) added to Digitize.
+- Patient Record page (`PatientRecordView.tsx`, shared by Nurse + Doctor) was 100% read-only. Nurse now has Edit Record (clinical fields only — identity stays locked), append-only Clinical Notes, and Dispense Medication (new `patientDispensing` collection, see #20).
 - Real, downloadable PDF for the Medical Record page (`src/lib/pdf-export.ts`, via `jsPDF`) — previously "Download PDF" just called `window.print()`.
-- Nurse Appointments page rebuilt: real Sunday–Saturday week view (separate from the shared Monday-start week logic Doctor's pages still use — deliberately not touched), a real calendar date picker, Prev/Next week navigation, and days with zero appointments now show visually grayed-out instead of requiring a click to find out they're empty.
+- Nurse Appointments page rebuilt: real Sunday–Saturday week view, calendar date picker, Prev/Next week navigation, empty days grayed out.
+
+## ✅ Also checked this pass: Receptionist and Patient modules
+
+You asked whether Receptionist had the same class of issues Nurse did — mostly good news:
+
+- **Receptionist's patient browsing (`Profiles` page) and live walk-in queue are both already properly clinic/facility-scoped, and both already have real error handling** (TanStack Query's `isError` on Profiles; a visible error message on the queue). Nothing to fix there.
+- **But the Patient-ID search box (`findPatient()`) has no clinic check at all** — see new #24 below. Same gap Nurse's ID search had before it was fixed.
+- **Patient module (`patient-service.ts`)** — at least 8 live Firestore subscriptions (patient doc, linked user, medical record, clinic, appointments, notifications, visit history, and one more) have **no error handling at all**. None of them are compound queries, so they're unlikely to hit the missing-index problem specifically, but they will fail silently (permission errors, network issues) with zero feedback to the patient using the app. See new #25 below.
 
 ---
 
@@ -33,10 +37,10 @@ Quick summary for anyone catching up — full detail stays in the sections below
 
 ### 1. `inventory.quantity` is stored as a string, not a number
 
-- **Where:** `inventory` collection, `quantity` field
-- **Problem:** Some/most documents have `quantity: "120"` (string) instead of `quantity: 120` (number), while `threshold` is correctly stored as a number. This breaks any math done directly on the field.
-- **Current workaround:** `pharmacist-service.ts` and the new `nurse-service.ts` (`dispenseMedication`, `useClinicInventory`) both force `quantity` through a `Number(...)` conversion before use. Safe permanent workaround, applied consistently in both places now — but the underlying data should still be standardized at the source.
-- **Ask the team:** Standardize `quantity` (and double check `threshold` and similar numeric fields across other collections) to always be written as a real Firestore **number** type.
+- **Where:** `inventory` collection, `quantity` field.
+- **Problem:** Some/most documents have `quantity: "120"` (string) instead of a real number, while `threshold` is correctly numeric.
+- **Current workaround:** Forced through `Number(...)`/`toNumber()` everywhere it's used — `pharmacist-service.ts` and now `nurse-service.ts` (`dispenseMedication`, `useClinicInventory`) both do this consistently.
+- **Ask the team:** Standardize `quantity` (and similar numeric fields) to always be written as a real Firestore **number**.
 
 ---
 
@@ -44,73 +48,104 @@ Quick summary for anyone catching up — full detail stays in the sections below
 
 ### 2. `inventory.clinicId` — **the documented decision no longer matches the real data**
 
-- **Where:** `inventory` collection
-- **What this doc used to say:** "Confirmed with the team — inventory is a single central pharmacist stock, no `clinicId` field, clinic-level breakdown only exists via `distributions` records."
-- **What's actually in Firestore now (confirmed directly in Firebase Console, Aug 2026):** Real inventory documents **do** have a `clinicId` field (e.g. `clinicId: 1` on Hillbrow's antihistamine/Lamivudine stock). Either this changed since the original decision, or the original "central pool" read of the schema was wrong.
-- **What was built on top of this (Nurse Dispense Medication):** `useClinicInventory(clinicId)` in `nurse-service.ts` queries `inventory` filtered by `clinicId`, on the assumption that this field is real and populated. It works today — but it directly contradicts the design decision recorded in this file.
-- **Ask the team, urgently — this needs a real decision, not another workaround:** Is `inventory` actually per-clinic now, or was `clinicId` added to some documents inconsistently? If it's genuinely per-clinic, **`pharmacist-service.ts`'s `useInventory()` should be updated to filter by clinic too** — right now it still fetches the _entire_ collection with no clinic filter at all, which is the same "fetch everything" problem the Nurse module just spent a lot of effort fixing elsewhere. Not touched yet because the Pharmacist module isn't in scope this sprint — flagging so it isn't missed when that module starts.
+- **Where:** `inventory` collection.
+- **What this doc used to say:** "Confirmed with the team — inventory is a single central pharmacist stock, no `clinicId` field."
+- **What's actually in Firestore now (confirmed directly in Firebase Console, Aug 2026):** Real inventory documents **do** have a `clinicId` field, and it's what the new Nurse Dispense Medication feature relies on (`useClinicInventory(clinicId)`).
+- **Ask the team, urgently:** Is `inventory` genuinely per-clinic now? If so, `pharmacist-service.ts`'s `useInventory()` should be updated to filter by clinic too — it still fetches the _entire_ collection with no filter, same "fetch everything" problem Nurse just spent real effort fixing elsewhere. Not touched yet — Pharmacist module isn't in scope this sprint.
 
 ### 3. No `avgDay` (average daily usage) field on `inventory`
 
-- **Where:** `inventory` collection
-- **Context:** `pharmacist.stock.tsx` displays an "Avg/day" figure per medication. Doesn't exist in Firestore yet.
-- **Current workaround:** Temporarily faked/hardcoded with a `// TODO(db):` comment — see `pharmacist-service.ts`.
-- **Ask the team:** Decide whether this should be (a) a real stored field, or (b) calculated from `distributions`/`patientDispensing` history.
+- Unchanged — see prior note.
 
 ### 4. No ID counter for `distributions` — and now also for `patientDispensing`
 
-- **Where:** `counters` collection only tracks `patientNo`, `recordNo`, `userNo` — nothing for distributions, and nothing for the new `patientDispensing` collection either.
-- **Current workaround:** Both `distributions.distributionId` and the new `patientDispensing.dispenseId` use `Date.now()` (a timestamp) instead of a clean sequential number. Works fine functionally.
-- **Ask the team:** Decide if a real sequential counter is wanted for either/both — would need a Firestore transaction to increment safely, same pattern as `registerPatient`'s use of the `counters` collection.
+- **Where:** `counters` collection has no entry for either collection's IDs.
+- Both use `Date.now()` as a placeholder ID. Works, just not as tidy as the sequential IDs elsewhere.
+- **Ask the team:** Decide if either needs a real sequential counter (same transaction pattern `registerPatient` already uses).
 
 ### 5. No "pending / awaiting confirmation" state for distributions
 
-- Unchanged from before — see prior note. Not touched by the Nurse module work.
+- Unchanged — see prior note.
 
 ### 6. Clinics matched by name string, not ID
 
-- Unchanged from before — see prior note. Not touched by the Nurse module work.
+- Unchanged — see prior note.
 
 ### 12. `pharmacists` has no `clinicId` — unlike `nurses`
 
-- Unchanged from before. Worth re-reading alongside #2 above — if inventory really is per-clinic now, this becomes more urgent, not less.
+- Unchanged. Worth re-reading alongside #2 — if inventory really is per-clinic now, this is more urgent, not less.
 
 ### 13. New distribution writes are missing the `inventId` field
 
-- Unchanged from before — not touched by the Nurse module work.
+- Unchanged — see prior note.
 
-### 16. **New collection: `patientDispensing`** — nurse dispenses medication directly to a patient
+### 16. Receptionist registration was silently dropping `clinicId`, `DOB`, and `Gender` — **FIXED**
 
-- **Where:** brand-new collection, added by the Nurse module (Dispense Medication feature on the Patient Record page).
-- **Why it's separate from `distributions`:** `distributions` is a _different_ real-world workflow — pharmacist gives central/clinic stock to a **nurse** (no `patientId` field exists on it at all, confirmed by reading `pharmacist-service.ts`). `patientDispensing` is nurse → **patient**, a genuinely different event. Reusing `distributions` for this would have conflated two different things.
-- **Fields written:** `dispenseId` (placeholder, see #4 above), `patientId`, `clinicId`, `medName`, `inventId`, `unitsGiven`, `nurseId`, `note` (optional free text — e.g. "scheduled appointment" vs "acute/walk-in"; deliberately left as free text rather than a hardcoded enum, since the real clinical workflow distinction wasn't fully confirmed), `createdAt`.
-- **Safety:** Decrements `inventory.quantity` and writes the log entry in a single Firestore transaction, so two nurses dispensing the same medication at the same moment can't both succeed past the real stock level (`distributions`' existing `recordDistribution()` does the same two writes _without_ a transaction — worth knowing if that one ever needs to be bulletproof too).
-- **Ask the team:** Decide if `note` should become a real structured field (e.g. `visitType: "appointment" | "acute"`) once the actual clinical workflow is confirmed, rather than staying free text.
+- **Where:** `registerPatient()` in `clinic-data.ts`, and the `RegistrationInput` type.
+- **What was wrong:** Three separate fields were collected on the registration form but never actually written to Firestore — walk-in-registered patients ended up with no `clinicId` at all (meaning they'd vanish from any clinic-scoped view — the exact bug class that also hit Nurse's Digitize flow separately, see the Nurse section above), and `users.DOB` / `users.Gender` were captured on the form and silently discarded.
+- **Status: fixed.** `RegistrationInput` now carries `clinicId`, `dob`, and `gender`, and `registerPatient()` writes all three.
+- _(Backfilled from code comments — the fix predates this doc entry existing.)_
 
-### 17. `medicalRecordUpdateInput` doesn't declare `lastVisit`, even though real documents have it
+### 17. Walk-in queue wasn't filtered by facility — every clinic saw every other clinic's queue — **FIXED**
 
-- **Where:** `clinic-data.ts`, `MedicalRecordUpdateInput` interface.
-- **Context:** Editing a patient's chart (Edit Record) or dispensing medication to them are both real visit-equivalent events, so both now stamp `medicalRecords.lastVisit` to today's date — but the TypeScript type for `updateMedicalRecord()`'s input doesn't list `lastVisit` as a field, so the code currently reaches around it with an `as any` cast rather than a proper typed field.
-- **Ask the team / fix (small, low-risk):** Add `lastVisit?: string;` to `MedicalRecordUpdateInput` and remove the `as any` cast in `PatientRecordView.tsx`.
+- **Where:** `subscribeQueue()` / `fetchQueue()` in `clinic-data.ts`.
+- **What was wrong:** The live queue subscription always queried the _entire_ `queue` collection with no facility filter, even though every entry already stores a `facilityId`.
+- **Status: fixed.** Both functions now accept an optional `facilityId` and filter by it; `receptionist.index.tsx` passes the receptionist's real facility.
+- _(Backfilled from code comments — the fix predates this doc entry existing.)_
 
-### 18. Edits made via Edit Record / Dispense Medication don't live-refresh the Patients list
+### 18. Queue audit log had the same unfiltered-by-facility problem — **FIXED**
+
+- **Where:** `fetchQueueAudit()` in `clinic-data.ts`, used by the Receptionist dashboard's activity log.
+- **Status: fixed**, same pattern and same fix as #17, paired together in the same commit per the code comments.
+- _(Backfilled from code comments — the fix predates this doc entry existing.)_
+
+### 19. Receptionist's patient browse list wasn't scoped to clinic either — **FIXED, separate from #17/#18**
+
+- **Where:** `fetchPatientPage()` in `clinic-data.ts`, used by `receptionist.profiles.tsx`.
+- **Note:** the in-code comment on this fix also cites "#17," which is why this looked like the same issue as the queue fix above at first glance — it isn't; it's a different collection/query (`patients`, not `queue`), fixed the same way (an optional `clinicId` filter). Giving it its own number here so future code comments can be precise about which one they mean.
+- **Status: fixed.** Scoped to `clinicId`, with a proper `isError`/`isLoading` state already wired into the UI.
+
+### 20. **`patientDispensing`** — new collection, nurse dispenses medication directly to a patient
+
+- **Where:** brand-new collection, added by the Nurse module (Dispense Medication).
+- **Why it's separate from `distributions`:** `distributions` is pharmacist → **nurse** (no `patientId` field exists on it at all). `patientDispensing` is nurse → **patient**, a genuinely different event.
+- **Fields:** `dispenseId` (placeholder, see #4), `patientId`, `clinicId`, `medName`, `inventId`, `unitsGiven`, `nurseId`, `note` (optional free text, deliberately not a hardcoded enum yet), `createdAt`.
+- **Safety:** decrements `inventory.quantity` and writes the log entry in a single Firestore transaction — two nurses dispensing the same medication at the same moment can't both succeed past real stock. (`distributions`' existing `recordDistribution()` does its two writes _without_ a transaction, for comparison.)
+- **Ask the team:** decide if `note` should become a structured field (e.g. `visitType`) once the real clinical workflow is confirmed.
+
+### 21. `MedicalRecordUpdateInput` doesn't declare `lastVisit`, even though real documents have it
+
+- **Where:** `clinic-data.ts`.
+- **Context:** Editing a patient's chart or dispensing medication now both stamp `medicalRecords.lastVisit` — but the type doesn't list that field, so the code uses `as any` to reach around it in `PatientRecordView.tsx`.
+- **Ask the team / fix (small, low-risk):** add `lastVisit?: string;` to the interface, remove the cast.
+
+### 22. Edits via Edit Record / Dispense Medication don't live-refresh the Nurse Patients list
 
 - **Where:** Nurse → Patients page.
-- **Context:** After editing a chart or dispensing medication on the Patient Record page, going back to the Patients list still shows stale data (e.g. old "Last Visit") until a manual page refresh. Most other Nurse data (appointments, handover log, digitize) already uses Firestore's live `onSnapshot` listeners and updates automatically — this specific path doesn't yet.
-- **Confirmed acceptable for now** (per team decision, Aug 2026) — not blocking, but real. Worth tightening later if it becomes a demo/usability issue.
+- **Context:** after editing a chart or dispensing, the Patients list shows stale data until a manual refresh — unlike most other Nurse data, which already uses live `onSnapshot` listeners.
+- **Confirmed acceptable for now** (team decision, Aug 2026) — not blocking, worth tightening later.
 
----
+### 24. **Receptionist's Patient-ID search has no clinic check** — same gap Nurse had, not yet fixed here
+
+- **Where:** `findPatient()` in `clinic-data.ts`, used by `receptionist.profiles.tsx`'s search box.
+- **Problem:** unlike the browse list (#19, properly scoped), this direct-ID lookup fetches by document ID with no clinic filter at all. A receptionist can type any exact `Pat-###` ID — including one from a different clinic — and it loads that patient's summary regardless.
+- **Status: open.** Same fix pattern already applied to Nurse's `useFindPatientById()` — check the fetched doc's `clinicId` against the receptionist's own, treat a mismatch as not-found.
+
+### 25. Patient module: 8 live Firestore listeners have no error handling at all
+
+- **Where:** `patient-service.ts` — subscriptions covering the patient's own doc, linked user doc, medical record, clinic, appointments, notifications, and visit history.
+- **Problem:** none of them pass an error callback to `onSnapshot`. A failed subscription (permission error, network issue) fails completely silently — no error shown, data just never appears or never updates, with nothing telling the patient something's wrong.
+- **Status: open.** None of these are compound queries, so they're unlikely to need a Firestore index the way the Nurse patient list did — this is purely about adding visible error handling, same pattern as the fix already applied to `usePatientDirectory()`.
 
 ## 🤖 AI / OCR — Nurse Digitize
 
-### 19. Gemini Vision is a **prototype**, not a finished decision — two real gaps, not one
+### 23. Gemini Vision is a **prototype**, not a finished decision — two real gaps, not one
 
-- **Where:** `src/lib/gemini-ocr.ts`
-- **Why it replaced Tesseract.js:** Tesseract (a printed-text OCR engine) performed very poorly on handwritten clinic files in real testing — as low as 24% confidence, most fields left blank. Gemini's multimodal vision handled the same handwritten sample meaningfully better. `src/lib/ocr.ts` (the old Tesseract-based module) is now dead code — unused anywhere in the app, confirmed by a full-repo search — and can be deleted once the team is comfortable Gemini is staying.
-- **Gap 1 — data privacy / free tier:** Gemini's **free tier** terms allow Google to use submitted prompts/images (including patient photos) to improve their products — that protection only applies on the **paid** tier. Real patient health data should not go through the free tier. **Current mitigation:** explicitly tested with fake/synthetic patients only, never real ones, and the code is marked `TODO(compliance)` at the top of the file as a loud reminder.
-- **Gap 2 — API key exposure:** the app has no backend (browser talks directly to Firebase), so the Gemini API key has to ship inside the client JS bundle (`VITE_GEMINI_API_KEY`) — same exposure class as the Firebase web key, but unlike `RESEND_API_KEY` there's no server to hide it behind. Anyone with DevTools can read and reuse the key. Marked `TODO(security)` in the code.
-- **Ask the team, before any real patient data goes through this:** (a) move the Gemini call behind a real backend (a Firebase Cloud Function would work and also solves the key-exposure problem), and/or (b) move to Gemini's paid tier so free-tier data-use terms no longer apply. Either alone helps; both together closes the gap properly.
-- **Cost note, since it came up:** Gemini's free tier itself costs nothing (no card required) — the concern above is about _data handling_, not price. If a paid tier is used instead purely to get the stronger data-use terms, current published rates put Gemini Flash-class models at roughly $0.30–$2.50 per million tokens depending on model — cheap at this app's likely volume, but confirm current pricing before committing, since Google's terms/pricing here have changed more than once in 2026 already.
+- **Where:** `src/lib/gemini-ocr.ts`.
+- **Why it replaced Tesseract.js:** Tesseract performed very poorly on handwritten clinic files in real testing (as low as 24% confidence). Gemini's multimodal vision handled the same sample meaningfully better. `src/lib/ocr.ts` (the old Tesseract module) has been deleted — confirmed unused anywhere in the app.
+- **Gap 1 — data privacy / free tier:** Gemini's free tier allows Google to use submitted prompts/images to improve their products — real patient data should not go through it. **Current mitigation:** tested with fake/synthetic patients only, code marked `TODO(compliance)`.
+- **Gap 2 — API key exposure:** no backend exists, so the key ships in the client bundle (`VITE_GEMINI_API_KEY`). Marked `TODO(security)`.
+- **Ask the team, before any real patient data goes through this:** move the call behind a real backend (a Cloud Function would solve both gaps at once), and/or move to Gemini's paid tier.
 
 ---
 
@@ -118,16 +153,15 @@ Quick summary for anyone catching up — full detail stays in the sections below
 
 ### 7. 2FA is still a demo placeholder, not real
 
-- Unchanged — see prior note. Not touched by the Nurse module work.
+- Unchanged — see prior note.
 
 ### 8. No age, gender, or patient "status" field
 
-- Unchanged — see prior note.
+- **Partially resolved for Gender/DOB on new registrations** — see #16 above; `users.DOB` and `users.Gender` are now actually written for new patients registered through Receptionist. Older/pre-existing patient records may still be missing these. A patient "status" field is still fully undecided.
 
 ### 9. `medicalRecordsHistory` has no date field
 
-- **Partially addressed for new Nurse-written notes:** new Clinical Notes added via the Nurse Patient Record page, and new Digitize entries, now include a `visitDate` field. Older/pre-existing history rows still don't have one — display still falls back to ordering by `historyId`. A backfill or a "no date recorded" fallback label is worth considering for old rows.
-- **Ask the team:** as before, plus: should old rows get a best-guess backfilled date, or just display as "date unknown"?
+- **Partially addressed for new Nurse-written notes** — new Clinical Notes and Digitize entries now include a `visitDate`. Older rows still don't.
 
 ### 10. Medical Aid details have no backing collection
 
@@ -139,7 +173,7 @@ Quick summary for anyone catching up — full detail stays in the sections below
 
 ### 14. "Reset 2FA" button is a deliberate dev-only bypass
 
-- Unchanged — see prior note. **Repeating the warning since this doc is being widely re-read right now:** this must be removed or gated before any real deployment.
+- Unchanged. **Repeating the warning:** must be removed or gated before any real deployment.
 
 ### 15. Password reset emails use Firebase's default (unbranded) template
 
@@ -151,19 +185,23 @@ Quick summary for anyone catching up — full detail stays in the sections below
 
 - Firestore connection, config, and security rules (`allow read, write: if request.auth != null`) all work correctly.
 - Collections are otherwise sensibly modeled and match real clinical/pharmacist workflows.
-- Anonymous Auth is currently enabled for local testing only — **must be disabled before production**, since the current security rule allows any authenticated (including anonymous) user to read/write everything, including `medicalRecords` and `patients`. Repeating this loudly since it's the single biggest gap in the whole app right now, and it's easy to forget once individual features start working.
-- New composite Firestore index (`patients`: `clinicId` Asc + `userId` Asc) confirmed created and **Enabled** — required for the Nurse clinic-scoping work above.
+- Anonymous Auth is currently enabled for local testing only — **must be disabled before production**. Repeating this loudly since it's the single biggest gap in the whole app right now.
+- New composite Firestore index (`patients`: `clinicId` Asc + `userId` Asc) confirmed created and **Enabled** — required for the Nurse clinic-scoping work.
+- Receptionist's walk-in queue and patient-browse list: real clinic/facility scoping, real error handling, nothing to fix.
 
 ---
 
 ## 🧭 Open decisions summary (quick-scan for a team meeting)
 
 1. Is `inventory` really per-clinic now? (#2 — blocks a clean answer on Pharmacist scoping)
-2. Should `patientDispensing.note` become a structured field? (#16)
-3. Move Gemini OCR behind a backend and/or to paid tier before any real patient photo goes through it (#19) — **do this before any real deployment, not optional**
+2. Should `patientDispensing.note` become a structured field? (#20)
+3. Move Gemini OCR behind a backend and/or to paid tier before any real patient photo goes through it (#23) — **do this before any real deployment, not optional**
 4. Disable Anonymous Auth and tighten Firestore security rules before real deployment (repeated from "Confirmed working" — it's not actually "working," it's a known open gap being tracked loosely)
 5. Remove/gate the "Reset 2FA" dev bypass before real deployment (#14)
+6. **`doctors.clinicId` and `pharmacists.clinicId` are both a single value, not a list** — the schema currently assumes one staff member belongs to exactly one clinic. Team confirmed a doctor (and separately, a pharmacist) may realistically need to work across more than one clinic — the login page's "Active Clinic" selector and the header's clinic switcher (currently used by Pharmacist/Super Admin) are both non-functional placeholders sitting on top of this same gap. Needs a real schema decision (e.g. `clinicIds: number[]`, or a separate join collection) before any real "switch clinic" feature can be built — not something to fake on top of a single-clinic field.
+7. Fix Receptionist's `findPatient()` clinic-scoping gap (#24) — same class of fix already applied to Nurse
+8. Add error handling to Patient module's 8 unguarded Firestore listeners (#25)
 
 ---
 
-_(Keep adding to this as we find more — nothing gets fixed silently, everything goes here first.)_
+_(Keep adding to this as we find more — nothing gets fixed silently, everything goes here first. If you're adding a new numbered entry, grep the codebase first for `db-issues.md #<number>` to make sure nothing's already secretly pointing at that number — that's exactly the mistake that needed fixing this time.)_

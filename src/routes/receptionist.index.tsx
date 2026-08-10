@@ -71,6 +71,8 @@ function ReceptionDashboard() {
   const [queueError, setQueueError] = useState(false);
   const [clinicReady, setClinicReady] = useState(false);
   const [auditLog, setAuditLog] = useState<LogEntry[]>([]);
+  const [auditLogLoading, setAuditLogLoading] = useState(true);
+  const [auditLogError, setAuditLogError] = useState(false);
 
   useEffect(() => {
     getClinicData().then(() => setClinicReady(true));
@@ -95,10 +97,21 @@ function ReceptionDashboard() {
 
   // Fetch recent audit events on load — now scoped to the real clinic
   // instead of pulling every clinic's history.
+  //
+  // This resets to [] on every mount (navigating away and back to this
+  // page remounts it), so without a loading state a normal in-flight
+  // refetch looked identical to "broken and gone" — nothing rendered at
+  // all while it was empty, whether that emptiness was "still loading" or
+  // "genuinely nothing here." Now those are visibly different states.
   useEffect(() => {
     if (!clinicReady) return;
-    getClinicData().then(({ fetchQueueAudit }) => {
-      fetchQueueAudit(undefined, 20, realFacilityId).then((events) => {
+    setAuditLogLoading(true);
+    setAuditLogError(false);
+    getClinicData()
+      .then(({ fetchQueueAudit }) =>
+        fetchQueueAudit(undefined, 20, realFacilityId),
+      )
+      .then((events) => {
         setAuditLog(
           events.map((e) => ({
             ts: e.timestamp?.toDate?.()
@@ -113,8 +126,13 @@ function ReceptionDashboard() {
                   : "info",
           })),
         );
+        setAuditLogLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to load audit log:", err);
+        setAuditLogError(true);
+        setAuditLogLoading(false);
       });
-    });
   }, [clinicReady, realFacilityId]);
 
   const [adding, setAdding] = useState(false);
@@ -610,7 +628,7 @@ function ReceptionDashboard() {
           </ul>
 
           {/* Activity log */}
-          {auditLog.length > 0 && (
+          {(auditLogLoading || auditLogError || auditLog.length > 0) && (
             <div className="mt-4 pt-4 border-t">
               <div className="flex items-center gap-2 mb-2">
                 <ClipboardList size={12} className="text-muted-foreground" />
@@ -618,28 +636,38 @@ function ReceptionDashboard() {
                   AUDIT LOG (persisted to Firestore)
                 </p>
               </div>
-              <ul className="text-xs space-y-1 max-h-64 overflow-y-auto">
-                {auditLog.map((l, i) => (
-                  <li
-                    key={i}
-                    className={`${
-                      l.type === "critical"
-                        ? "text-red-600 font-medium"
-                        : l.type === "warn"
-                          ? "text-orange-600"
-                          : "text-muted-foreground"
-                    }`}
-                  >
-                    <span className="font-mono mr-2">
-                      {new Date(l.ts).toLocaleTimeString("en-ZA", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                    {l.msg}
-                  </li>
-                ))}
-              </ul>
+              {auditLogLoading && (
+                <p className="text-xs text-muted-foreground">Loading…</p>
+              )}
+              {auditLogError && (
+                <p className="text-xs text-destructive">
+                  Could not load audit log.
+                </p>
+              )}
+              {!auditLogLoading && !auditLogError && (
+                <ul className="text-xs space-y-1 max-h-64 overflow-y-auto">
+                  {auditLog.map((l, i) => (
+                    <li
+                      key={i}
+                      className={`${
+                        l.type === "critical"
+                          ? "text-red-600 font-medium"
+                          : l.type === "warn"
+                            ? "text-orange-600"
+                            : "text-muted-foreground"
+                      }`}
+                    >
+                      <span className="font-mono mr-2">
+                        {new Date(l.ts).toLocaleTimeString("en-ZA", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                      {l.msg}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </div>

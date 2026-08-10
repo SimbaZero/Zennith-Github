@@ -49,6 +49,8 @@ export function waitForAuthReady(): Promise<User | null> {
 export interface CurrentDoctor {
   doctorId: string; // e.g. "Doc-1"
   userId?: number;
+  clinicId?: number;
+  clinicName?: string;
   fullName: string;
   email?: string;
   contactNum?: string;
@@ -64,8 +66,14 @@ async function resolveCurrentDoctorForUid(uid: string): Promise<CurrentDoctor> {
     ? profileSnap.data()
     : ({} as Record<string, any>);
 
+  // Previously fell back to hardcoded "Doc-1" here — a different real
+  // doctor's identity and clinic, shown silently with no error. Same fix
+  // already applied to Nurse: fail loudly instead of borrowing someone
+  // else's identity.
   if (profile.legacyUserId == null) {
-    return fetchDoctorByDoctorId("Doc-1");
+    throw new Error(
+      "Your staff profile has no linked doctor record — contact whoever set up your account.",
+    );
   }
 
   const docSnap = await getDocs(
@@ -74,16 +82,14 @@ async function resolveCurrentDoctorForUid(uid: string): Promise<CurrentDoctor> {
       where("userId", "==", Number(profile.legacyUserId)),
     ),
   );
-  if (docSnap.empty) return fetchDoctorByDoctorId("Doc-1");
+  if (docSnap.empty) {
+    throw new Error(
+      "Your staff profile has no linked doctor record — contact whoever set up your account.",
+    );
+  }
 
   const docData = docSnap.docs[0].data();
   return buildCurrentDoctor(docData.doctorId, docData);
-}
-
-async function fetchDoctorByDoctorId(doctorId: string): Promise<CurrentDoctor> {
-  const snap = await getDoc(doc(db, "doctors", doctorId));
-  const data = snap.exists() ? snap.data() : { doctorId };
-  return buildCurrentDoctor(doctorId, data);
 }
 
 async function buildCurrentDoctor(
@@ -104,9 +110,17 @@ async function buildCurrentDoctor(
     }
   }
 
+  let clinicName: string | undefined;
+  if (doctorData.clinicId != null) {
+    const cSnap = await getDoc(doc(db, "clinics", String(doctorData.clinicId)));
+    if (cSnap.exists()) clinicName = cSnap.data().clinicName;
+  }
+
   return {
     doctorId,
     userId: doctorData.userId,
+    clinicId: doctorData.clinicId,
+    clinicName,
     fullName,
     email,
     contactNum,
@@ -114,7 +128,6 @@ async function buildCurrentDoctor(
     licenseNo: doctorData.licenseNo,
   };
 }
-
 /** Still available if you want to force a fresh lookup for some reason. */
 export function clearDoctorCache(): void {
   doctorCacheByUid.clear();
@@ -347,10 +360,22 @@ export function useDoctorDashboard(): {
     stats: {
       dayTotal: day.length,
       dayCompleted: day.filter((a) => a.status === "Complete").length,
-      pendingReviews: appointments.filter(
-        (a) =>
-          a.type.toLowerCase().includes("review") && a.status !== "Complete",
-      ).length,
+      // Previously counted every review-type appointment ever, no time
+      // bound — a review from months ago counted the same as one from
+      // yesterday, which is why this felt arbitrary. Now scoped to the
+      // last 30 days: genuinely overdue paperwork, not a lifetime tally.
+      // This 30-day window is a judgment call, not a confirmed spec —
+      // worth confirming with the team if a different window makes more
+      // clinical sense.
+      pendingReviews: appointments.filter((a) => {
+        const daysAgo = (Date.now() - new Date(a.date).getTime()) / 86_400_000;
+        return (
+          a.type.toLowerCase().includes("review") &&
+          a.status !== "Complete" &&
+          daysAgo >= 0 &&
+          daysAgo <= 30
+        );
+      }).length,
       weekPatients: new Set(week.map((a) => a.patientId)).size,
       upcoming: appointments.filter((a) => a.date > scheduleDate).length,
     },
