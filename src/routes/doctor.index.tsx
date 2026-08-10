@@ -25,16 +25,11 @@ function DoctorDashboard() {
       staffNameOverride={doctor?.fullName}
       clinicNameOverride={doctor?.clinicName}
     >
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat
           label="APPOINTMENTS"
           value={data ? String(data.stats.dayTotal) : "—"}
           sub={data ? `${data.stats.dayCompleted} completed` : "loading…"}
-        />
-        <Stat
-          label="PENDING REVIEWS"
-          value={data ? String(data.stats.pendingReviews) : "—"}
-          sub="Review appts, last 30 days, not yet Complete"
         />
         <Stat
           label="PATIENTS THIS WEEK"
