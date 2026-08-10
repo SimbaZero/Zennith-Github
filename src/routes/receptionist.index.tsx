@@ -10,7 +10,7 @@ import {
   CheckCircle,
   ClipboardList,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNow } from "@/lib/store";
@@ -21,6 +21,7 @@ import type {
   ClinicWideAppointment,
 } from "@/lib/clinic-data";
 import { resolveCurrentReceptionist } from "@/lib/clinic-data";
+import { usePatientDirectory } from "@/lib/doctor-service";
 
 export const Route = createFileRoute("/receptionist/")({
   component: ReceptionDashboard,
@@ -68,7 +69,56 @@ function ReceptionDashboard() {
     receptionist?.clinicId != null ? String(receptionist.clinicId) : null;
 
   const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [walkInQuery, setWalkInQuery] = useState("");
+  const { patients: clinicPatients } = usePatientDirectory(
+    500,
+    receptionist?.clinicId,
+  );
+  const walkInMatches = walkInQuery.trim()
+    ? clinicPatients
+        .filter(
+          (p) =>
+            p.name.toLowerCase().includes(walkInQuery.toLowerCase()) ||
+            p.patientId.toLowerCase().includes(walkInQuery.toLowerCase()),
+        )
+        .slice(0, 6)
+    : [];
   const [queueError, setQueueError] = useState(false);
+
+  // Pace indicator — compares real completed visits today against each
+  // one's own triage max-wait target, not a fixed number. Needs at least
+  // 2 completed visits today to say anything meaningful; otherwise shows
+  // "Not enough data yet" rather than guessing.
+  const queuePace = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const doneToday = queue.filter(
+      (q) =>
+        q.status === "done" && q.calledAt && q.joinedAt.slice(0, 10) === today,
+    );
+    if (doneToday.length < 2) return null;
+    const ratios = doneToday.map((q) => {
+      const waited =
+        (new Date(q.calledAt!).getTime() - new Date(q.joinedAt).getTime()) /
+        60000;
+      const target = TRIAGE_MAX_WAIT_MINUTES[q.triage] || 30;
+      return waited / target;
+    });
+    const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+    if (avg < 0.7)
+      return {
+        label: "Fast today",
+        cls: "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]",
+      };
+    if (avg <= 1.2)
+      return {
+        label: "Normal pace",
+        cls: "bg-[oklch(0.96_0.1_85)] text-[oklch(0.4_0.15_70)]",
+      };
+    return {
+      label: "Running slow",
+      cls: "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]",
+    };
+  }, [queue]);
   const [clinicReady, setClinicReady] = useState(false);
   const [auditLog, setAuditLog] = useState<LogEntry[]>([]);
   const [auditLogLoading, setAuditLogLoading] = useState(true);
@@ -352,7 +402,16 @@ function ReceptionDashboard() {
         <div className="lg:col-span-2 bg-white rounded-xl border p-5">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h3 className="font-semibold">Acute Care Queue</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-semibold">Acute Care Queue</h3>
+                {queuePace && (
+                  <span
+                    className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${queuePace.cls}`}
+                  >
+                    {queuePace.label}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">
                 Triage-based priority with handoff tracking
               </p>
@@ -380,14 +439,43 @@ function ReceptionDashboard() {
               onSubmit={addWalkIn}
               className="mb-3 p-3 rounded-md bg-secondary/40 border space-y-2"
             >
-              <input
-                value={draft.patientId}
-                onChange={(e) =>
-                  setDraft({ ...draft, patientId: e.target.value })
-                }
-                placeholder="Patient ID (e.g. Pat-3)"
-                className="w-full border rounded-md px-2.5 py-1.5 text-sm font-mono"
-              />
+              <div className="relative">
+                <input
+                  value={walkInQuery}
+                  onChange={(e) => {
+                    setWalkInQuery(e.target.value);
+                    setDraft({ ...draft, patientId: "" }); // typing again clears any prior selection
+                  }}
+                  placeholder="Search patient name or ID…"
+                  className="w-full border rounded-md px-2.5 py-1.5 text-sm"
+                />
+                {walkInQuery.trim() && !draft.patientId && (
+                  <div className="absolute z-10 mt-1 w-full bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                    {walkInMatches.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-muted-foreground">
+                        No match — try the exact Patient ID instead.
+                      </div>
+                    ) : (
+                      walkInMatches.map((p) => (
+                        <button
+                          key={p.patientId}
+                          type="button"
+                          onClick={() => {
+                            setDraft({ ...draft, patientId: p.patientId });
+                            setWalkInQuery(`${p.name} (${p.patientId})`);
+                          }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-secondary border-b last:border-b-0"
+                        >
+                          <div className="font-medium">{p.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {p.patientId}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
               <input
                 value={draft.reason}
                 onChange={(e) => setDraft({ ...draft, reason: e.target.value })}

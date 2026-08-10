@@ -222,7 +222,7 @@ const CLINICS = [
 
 for (const c of CLINICS) {
   const patientIds = [];
-  for (let i = 1; i <= 30; i++) {
+  for (let i = 1; i <= 45; i++) {
     const uid = c.userBase + i;
     const patId = `Pat-${c.patientBase + i}`;
     const recNo = c.recordBase + i;

@@ -398,6 +398,27 @@ export async function setQueueStatus(
   const entrySnap = await getDoc(doc(db, "queue", id));
   if (entrySnap.exists()) {
     const entry = toQueueEntry(id, entrySnap.data());
+
+    // The per-row "Call" button was silently NOT notifying the patient —
+    // only "Call Next" (callPatient(), above) did. Same real notification
+    // now fires from both paths.
+    if (status === "called") {
+      const pSnap = await getDoc(doc(db, "patients", entry.patientId));
+      const userId = pSnap.exists() ? Number(pSnap.data().userId) : null;
+      if (userId != null && !Number.isNaN(userId)) {
+        await addDoc(collection(db, "notifications"), {
+          notifId: Date.now(),
+          userId,
+          title: "You're being called",
+          message: entry.clinician
+            ? `Please proceed to ${entry.clinician}. ${entry.reason}`.trim()
+            : `Please proceed to the consulting room. ${entry.reason}`.trim(),
+          isRead: false,
+          timeSent: new Date().toISOString(),
+        });
+      }
+    }
+
     await logQueueEvent({
       entryId: id,
       patientId: entry.patientId,

@@ -74,11 +74,36 @@ function NurseAppointments() {
   // update comes from the live hook re-querying, not this flag.
   const [pendingId, setPendingId] = useState<string | null>(null);
 
-  const changeStatus = async (docId: string, status: AppointmentStatus) => {
+  // Same stage-then-confirm pattern already applied to Doctor's appointments
+  // page — a click no longer instantly writes to Firestore, it only stages
+  // the change; a separate Confirm click actually saves it.
+  const [staged, setStaged] = useState<Record<string, AppointmentStatus>>({});
+
+  const stageStatus = (
+    docId: string,
+    status: AppointmentStatus,
+    currentStatus: AppointmentStatus,
+  ) => {
+    setStaged((s) => {
+      const next = { ...s };
+      if (status === currentStatus) delete next[docId];
+      else next[docId] = status;
+      return next;
+    });
+  };
+
+  const confirmStatus = async (docId: string) => {
+    const status = staged[docId];
+    if (!status) return;
     setPendingId(docId);
     try {
       await setAppointmentStatus(docId, status);
       toast.success(`Marked as ${status}`);
+      setStaged((s) => {
+        const next = { ...s };
+        delete next[docId];
+        return next;
+      });
     } catch {
       toast.error("Could not update status");
     } finally {
@@ -320,22 +345,47 @@ function NurseAppointments() {
                       <StatusBadge status={a.status} />
                     </td>
                     <td className="px-5 py-3.5">
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         {actions.map(({ status, icon: Icon, cls }) => {
-                          const active = a.status === status;
+                          const isCurrent = a.status === status;
+                          const isStaged = staged[a.docId] === status;
                           return (
                             <button
                               key={status}
                               disabled={isPending}
-                              onClick={() => changeStatus(a.docId, status)}
-                              title={status}
-                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 ${active ? cls + " ring-2 ring-offset-1 ring-foreground/20" : "border bg-white hover:bg-secondary text-foreground"}`}
+                              onClick={() =>
+                                stageStatus(a.docId, status, a.status)
+                              }
+                              title={
+                                isCurrent
+                                  ? `Currently ${status}`
+                                  : `Stage: ${status}`
+                              }
+                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 ${
+                                isStaged
+                                  ? cls +
+                                    " ring-2 ring-offset-1 ring-[oklch(0.55_0.18_245)]"
+                                  : isCurrent
+                                    ? cls + " opacity-60"
+                                    : "border bg-white hover:bg-secondary text-foreground"
+                              }`}
                             >
                               <Icon size={12} />
                               <span className="hidden xl:inline">{status}</span>
                             </button>
                           );
                         })}
+                        {staged[a.docId] && (
+                          <button
+                            onClick={() => confirmStatus(a.docId)}
+                            disabled={isPending}
+                            className="text-xs px-2 py-1 rounded-md bg-[oklch(0.18_0.06_260)] text-white hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
+                          >
+                            {isPending
+                              ? "Saving…"
+                              : `Confirm → ${staged[a.docId]}`}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

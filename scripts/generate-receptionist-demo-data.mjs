@@ -1,10 +1,9 @@
-// Reassigns the base `receptionist` account to Hillbrow (clinicId 1) — it
-// had no clinicId set at all, so it was landing on a random clinic from
-// the generic seed script. Once on clinicId 1, it automatically inherits
-// the 30 patients + real appointment spread already seeded by
-// generate-nurse-demo-data.mjs — nothing new needed for those. The only
-// genuinely new thing here is real walk-in queue entries, since nothing
-// has populated that collection yet.
+// Reassigns the base `receptionist` account to Hillbrow (clinicId 1) and
+// seeds a busier, more realistic walk-in queue — a mix of waiting/called/
+// in-room entries PLUS several already-completed ("done") visits earlier
+// today, so the Fast/Slow pace badge has real data to calculate from
+// immediately, without needing anyone to click through statuses live.
+// Additive, safe to re-run — fixed IDs.
 //
 //   node scripts/generate-receptionist-demo-data.mjs
 //
@@ -48,38 +47,36 @@ const batch = writeBatch(db);
 const now = new Date();
 const minsAgo = (m) => new Date(now.getTime() - m * 60000).toISOString();
 
-// The ONE mutation of existing data — same pattern/warning as nurse2 before.
+// The ONE mutation of existing data.
 batch.set(
   doc(db, "receptionists", "Rec-1"),
   { receptionistId: "Rec-1", userId: 9, clinicId: 1 },
   { merge: true },
 );
 
-// Real walk-in queue entries at Hillbrow — mix of triage levels and
-// statuses so the Dashboard actually looks like a working clinic, not an
-// empty shell, for demo purposes.
-const entries = [
+// Still-active entries — mix of triage levels and statuses.
+const active = [
   {
     patientId: "Pat-2001",
     reason: "Chest pain",
     triage: "red",
     status: "waiting",
-    joinedAt: minsAgo(4),
+    joinedAt: minsAgo(3),
   },
   {
     patientId: "Pat-2005",
     reason: "Follow-up review",
     triage: "yellow",
     status: "waiting",
-    joinedAt: minsAgo(12),
+    joinedAt: minsAgo(9),
   },
   {
     patientId: "Pat-2009",
     reason: "Fever, general malaise",
     triage: "orange",
     status: "called",
-    joinedAt: minsAgo(22),
-    calledAt: minsAgo(3),
+    joinedAt: minsAgo(18),
+    calledAt: minsAgo(2),
     clinician: "Nur-1",
   },
   {
@@ -87,24 +84,84 @@ const entries = [
     reason: "Medication renewal",
     triage: "green",
     status: "waiting",
-    joinedAt: minsAgo(8),
+    joinedAt: minsAgo(6),
   },
   {
     patientId: "Pat-2020",
     reason: "Wound dressing",
     triage: "yellow",
     status: "in-room",
-    joinedAt: minsAgo(35),
-    calledAt: minsAgo(15),
-    inRoomAt: minsAgo(10),
+    joinedAt: minsAgo(28),
+    calledAt: minsAgo(12),
+    inRoomAt: minsAgo(8),
     clinician: "Nur-1",
+  },
+  {
+    patientId: "Pat-2003",
+    reason: "Diabetic review",
+    triage: "yellow",
+    status: "waiting",
+    joinedAt: minsAgo(4),
+  },
+  {
+    patientId: "Pat-2011",
+    reason: "Skin rash",
+    triage: "green",
+    status: "waiting",
+    joinedAt: minsAgo(11),
   },
 ];
 
-entries.forEach((e, i) => {
-  batch.set(doc(collection(db, "queue"), `Q-demo-${i + 1}`), {
+// Already-completed visits earlier today — real wait-to-called history so
+// the pace badge (Fast/Normal/Slow) has something to average on load.
+const done = [
+  {
+    patientId: "Pat-2002",
+    reason: "Consultation",
+    triage: "yellow",
+    joinedAt: minsAgo(150),
+    calledAt: minsAgo(140),
+    doneAt: minsAgo(110),
+  },
+  {
+    patientId: "Pat-2006",
+    reason: "Follow-up",
+    triage: "green",
+    joinedAt: minsAgo(200),
+    calledAt: minsAgo(185),
+    doneAt: minsAgo(150),
+  },
+  {
+    patientId: "Pat-2010",
+    reason: "Medication renewal",
+    triage: "yellow",
+    joinedAt: minsAgo(240),
+    calledAt: minsAgo(232),
+    doneAt: minsAgo(200),
+  },
+  {
+    patientId: "Pat-2015",
+    reason: "Wound check",
+    triage: "orange",
+    joinedAt: minsAgo(90),
+    calledAt: minsAgo(83),
+    doneAt: minsAgo(70),
+  },
+  {
+    patientId: "Pat-2019",
+    reason: "Consultation",
+    triage: "green",
+    joinedAt: minsAgo(300),
+    calledAt: minsAgo(270),
+    doneAt: minsAgo(240),
+  },
+];
+
+let i = 1;
+for (const e of [...active]) {
+  batch.set(doc(collection(db, "queue"), `Q-demo-${i++}`), {
     patientId: e.patientId,
-    patientName: null, // resolved live from the patients collection by the app
+    patientName: null,
     reason: e.reason,
     clinician: e.clinician ?? null,
     triage: e.triage,
@@ -119,11 +176,30 @@ entries.forEach((e, i) => {
     inRoomAt: e.inRoomAt ?? null,
     doneAt: null,
   });
-});
+}
+for (const e of done) {
+  batch.set(doc(collection(db, "queue"), `Q-demo-${i++}`), {
+    patientId: e.patientId,
+    patientName: null,
+    reason: e.reason,
+    clinician: "Nur-1",
+    triage: e.triage,
+    priority: "normal",
+    status: "done",
+    joinedAt: e.joinedAt,
+    calledAt: e.calledAt,
+    facilityId: "1",
+    handedOffTo: null,
+    handedOffAt: null,
+    handedOffBy: null,
+    inRoomAt: e.calledAt,
+    doneAt: e.doneAt,
+  });
+}
 
 await retry(() => batch.commit());
 console.log(
-  "Done. receptionist account moved to clinicId 1 (Hillbrow CHC), 5 real walk-in queue entries added.",
+  `Done. receptionist -> Hillbrow CHC. ${active.length} active + ${done.length} completed queue entries.`,
 );
 console.log('Log in as "receptionist" / "password" to see it.');
 process.exit();

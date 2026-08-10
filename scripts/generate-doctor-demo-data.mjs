@@ -94,7 +94,7 @@ let apptId = 13000;
 for (let offset = -7; offset <= 7; offset++) {
   const dow = new Date(Date.now() + offset * 86400000).getDay();
   if ((dow === 0 || dow === 6) && rnd() < 0.6) continue; // mostly skip weekends
-  const perDay = 1 + Math.floor(rnd() * 3);
+  const perDay = 2 + Math.floor(rnd() * 4);
   for (let i = 0; i < perDay; i++) {
     const clinicId = rnd() < 0.5 ? 1 : 2;
     const patBase = clinicId === 1 ? 2000 : 2100;
@@ -104,6 +104,7 @@ for (let offset = -7; offset <= 7; offset++) {
       appointDateTime: dt(offset, hhmm()),
       appointType: pick(TYPES),
       clinician: clinicId === 1 ? "Doc-1" : "Doc-2",
+      clinicId,
       patientId: patId,
       status:
         offset < 0 ? pick(["Complete", "Incomplete", "No-show"]) : "Scheduled",

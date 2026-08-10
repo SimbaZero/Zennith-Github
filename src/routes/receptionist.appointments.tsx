@@ -16,6 +16,7 @@ export const Route = createFileRoute("/receptionist/appointments")({
 
 function ReceptionAppointments() {
   const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
   const { data: receptionist } = useQuery({
     queryKey: ["current-receptionist"],
     queryFn: resolveCurrentReceptionist,
@@ -103,6 +104,12 @@ function ReceptionAppointments() {
                 : `25 most recent at ${receptionist?.clinicName ?? "your clinic"}`}
             </p>
           </div>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name or Pat-###…"
+            className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-56 mr-2"
+          />
           <button
             onClick={() => setShowForm((v) => !v)}
             className="flex items-center gap-1.5 bg-[oklch(0.55_0.18_245)] text-white px-3 py-1.5 rounded-md text-sm hover:bg-[oklch(0.5_0.18_245)]"
@@ -193,24 +200,33 @@ function ReceptionAppointments() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((a) => (
-                <tr
-                  key={a.id}
-                  className="border-b last:border-0 hover:bg-secondary/40"
-                >
-                  <td className="px-5 py-3 font-mono">
-                    {a.date} {a.time}
-                  </td>
-                  <td className="px-5 py-3 font-medium">{a.patientName}</td>
-                  <td className="px-5 py-3 text-muted-foreground">
-                    {a.clinician}
-                  </td>
-                  <td className="px-5 py-3">{a.type}</td>
-                  <td className="px-5 py-3">
-                    <StatusBadge status={a.status} />
-                  </td>
-                </tr>
-              ))}
+              {rows
+                .filter(
+                  (a) =>
+                    !search.trim() ||
+                    a.patientName
+                      .toLowerCase()
+                      .includes(search.toLowerCase()) ||
+                    a.patientId.toLowerCase().includes(search.toLowerCase()),
+                )
+                .map((a) => (
+                  <tr
+                    key={a.id}
+                    className="border-b last:border-0 hover:bg-secondary/40"
+                  >
+                    <td className="px-5 py-3 font-mono">
+                      {a.date} {a.time}
+                    </td>
+                    <td className="px-5 py-3 font-medium">{a.patientName}</td>
+                    <td className="px-5 py-3 text-muted-foreground">
+                      {a.clinician}
+                    </td>
+                    <td className="px-5 py-3">{a.type}</td>
+                    <td className="px-5 py-3">
+                      <StatusBadge status={a.status} />
+                    </td>
+                  </tr>
+                ))}
               {!isLoading && rows.length === 0 && (
                 <tr>
                   <td
