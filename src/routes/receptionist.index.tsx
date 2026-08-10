@@ -72,7 +72,7 @@ function ReceptionDashboard() {
   const [walkInQuery, setWalkInQuery] = useState("");
   const { patients: clinicPatients } = usePatientDirectory(
     500,
-    receptionist?.clinicId,
+    receptionist?.clinicId ?? undefined,
   );
   const walkInMatches = walkInQuery.trim()
     ? clinicPatients
