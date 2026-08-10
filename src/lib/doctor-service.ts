@@ -60,14 +60,19 @@ const doctorCacheByUid = new Map<string, Promise<CurrentDoctor>>();
 
 async function resolveCurrentDoctorForUid(uid: string): Promise<CurrentDoctor> {
   const profileSnap = await getDoc(doc(db, "profiles", uid));
-  const profile = profileSnap.exists() ? profileSnap.data() : ({} as Record<string, any>);
+  const profile = profileSnap.exists()
+    ? profileSnap.data()
+    : ({} as Record<string, any>);
 
   if (profile.legacyUserId == null) {
     return fetchDoctorByDoctorId("Doc-1");
   }
 
   const docSnap = await getDocs(
-    query(collection(db, "doctors"), where("userId", "==", Number(profile.legacyUserId))),
+    query(
+      collection(db, "doctors"),
+      where("userId", "==", Number(profile.legacyUserId)),
+    ),
   );
   if (docSnap.empty) return fetchDoctorByDoctorId("Doc-1");
 
@@ -115,7 +120,11 @@ export function clearDoctorCache(): void {
   doctorCacheByUid.clear();
 }
 
-export function useCurrentDoctor(): { doctor: CurrentDoctor | null; loading: boolean; error: string | null } {
+export function useCurrentDoctor(): {
+  doctor: CurrentDoctor | null;
+  loading: boolean;
+  error: string | null;
+} {
   const [doctor, setDoctor] = useState<CurrentDoctor | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -191,7 +200,8 @@ export function toBadgeStatus(s: string): AppointmentStatus {
   const v = (s ?? "").toLowerCase();
   if (v.startsWith("complet")) return "Complete";
   if (v.includes("progress")) return "In-progress";
-  if (v.includes("no-show") || v.includes("no show") || v.includes("cancel")) return "No-show";
+  if (v.includes("no-show") || v.includes("no show") || v.includes("cancel"))
+    return "No-show";
   return "Incomplete";
 }
 
@@ -200,7 +210,9 @@ const patientNameCache = new Map<string, { name: string; condition: string }>();
 export async function resolvePatientNames(
   patientIds: string[],
 ): Promise<Map<string, { name: string; condition: string }>> {
-  const unique = [...new Set(patientIds)].filter((id) => !patientNameCache.has(id));
+  const unique = [...new Set(patientIds)].filter(
+    (id) => !patientNameCache.has(id),
+  );
   await Promise.all(
     unique.map(async (pid) => {
       const pSnap = await getDoc(doc(db, "patients", pid));
@@ -209,7 +221,10 @@ export async function resolvePatientNames(
         return;
       }
       const p = pSnap.data();
-      const uSnap = p.userId != null ? await getDoc(doc(db, "users", String(p.userId))) : null;
+      const uSnap =
+        p.userId != null
+          ? await getDoc(doc(db, "users", String(p.userId)))
+          : null;
       const u = uSnap?.exists() ? uSnap.data() : {};
       patientNameCache.set(pid, {
         name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
@@ -237,7 +252,10 @@ export function useDoctorAppointments(doctorId: string | undefined): {
     if (!doctorId) return;
     setLoading(true);
 
-    const q = query(collection(db, "appointments"), where("clinician", "==", doctorId));
+    const q = query(
+      collection(db, "appointments"),
+      where("clinician", "==", doctorId),
+    );
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const raw = snapshot.docs.map((d) => {
         const a = d.data();
@@ -297,7 +315,9 @@ export function useDoctorDashboard(): {
   error: string | null;
 } {
   const { doctor, loading: doctorLoading, error } = useCurrentDoctor();
-  const { appointments, loading: apptsLoading } = useDoctorAppointments(doctor?.doctorId);
+  const { appointments, loading: apptsLoading } = useDoctorAppointments(
+    doctor?.doctorId,
+  );
 
   const loading = doctorLoading || (!!doctor && apptsLoading);
 
@@ -316,7 +336,9 @@ export function useDoctorDashboard(): {
   const weekStart = new Date(scheduleDate);
   weekStart.setDate(weekStart.getDate() - 6);
   const weekStartIso = weekStart.toISOString().slice(0, 10);
-  const week = appointments.filter((a) => a.date >= weekStartIso && a.date <= scheduleDate);
+  const week = appointments.filter(
+    (a) => a.date >= weekStartIso && a.date <= scheduleDate,
+  );
 
   const data: DoctorDashboardData = {
     doctorId: doctor.doctorId,
@@ -326,7 +348,8 @@ export function useDoctorDashboard(): {
       dayTotal: day.length,
       dayCompleted: day.filter((a) => a.status === "Complete").length,
       pendingReviews: appointments.filter(
-        (a) => a.type.toLowerCase().includes("review") && a.status !== "Complete",
+        (a) =>
+          a.type.toLowerCase().includes("review") && a.status !== "Complete",
       ).length,
       weekPatients: new Set(week.map((a) => a.patientId)).size,
       upcoming: appointments.filter((a) => a.date > scheduleDate).length,
@@ -395,7 +418,9 @@ export function useDoctorWeekSchedule(): {
   error: string | null;
 } {
   const { doctor, loading: doctorLoading, error } = useCurrentDoctor();
-  const { appointments, loading: apptsLoading } = useDoctorAppointments(doctor?.doctorId);
+  const { appointments, loading: apptsLoading } = useDoctorAppointments(
+    doctor?.doctorId,
+  );
   const now = useMinuteTick();
 
   const { start, end, dates } = computeWeekBounds(now);
@@ -435,7 +460,10 @@ export interface PatientDirectoryEntry {
 // Name/last-visit rarely change, so cache lookups across snapshot updates
 // and across search queries — avoids re-fetching users/medicalRecords for
 // patients we've already resolved.
-const patientDetailCache = new Map<string, { name: string; lastVisit: string }>();
+const patientDetailCache = new Map<
+  string,
+  { name: string; lastVisit: string }
+>();
 
 async function enrichPatient(
   patientId: string,
@@ -452,7 +480,9 @@ async function enrichPatient(
   }
 
   const [uSnap, mrSnap] = await Promise.all([
-    p.userId != null ? getDoc(doc(db, "users", String(p.userId))) : Promise.resolve(null),
+    p.userId != null
+      ? getDoc(doc(db, "users", String(p.userId)))
+      : Promise.resolve(null),
     p.medicalRecordNo != null
       ? getDoc(doc(db, "medicalRecords", String(p.medicalRecordNo)))
       : Promise.resolve(null),
@@ -474,21 +504,51 @@ async function enrichPatient(
  */
 export function usePatientDirectory(
   pageSize = 30,
-): { patients: PatientDirectoryEntry[]; loading: boolean } {
+  clinicId?: number,
+): {
+  patients: PatientDirectoryEntry[];
+  loading: boolean;
+  error: string | null;
+} {
   const [patients, setPatients] = useState<PatientDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, "patients"), orderBy("userId"), limit(pageSize));
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const rows = await Promise.all(snapshot.docs.map((d) => enrichPatient(d.id, d.data())));
-      setPatients(rows);
-      setLoading(false);
-    });
+    setLoading(true);
+    setError(null);
+    const q =
+      clinicId != null
+        ? query(
+            collection(db, "patients"),
+            where("clinicId", "==", clinicId),
+            orderBy("userId"),
+            limit(pageSize),
+          )
+        : query(collection(db, "patients"), orderBy("userId"), limit(pageSize));
+    const unsubscribe = onSnapshot(
+      q,
+      async (snapshot) => {
+        const rows = await Promise.all(
+          snapshot.docs.map((d) => enrichPatient(d.id, d.data())),
+        );
+        setPatients(rows);
+        setLoading(false);
+        setError(null); // clear a stale error if an earlier attempt on this same listener had failed
+      },
+      (err) => {
+        // Previously had no error handler at all — a failed query (missing
+        // index, permission issue, etc.) just hung on "Loading..." forever
+        // with nothing in the UI to show for it.
+        console.error("Failed to load patient directory:", err);
+        setError(err.message ?? "Could not load patients");
+        setLoading(false);
+      },
+    );
     return () => unsubscribe();
-  }, [pageSize]);
+  }, [pageSize, clinicId]);
 
-  return { patients, loading };
+  return { patients, loading, error };
 }
 
 /**
@@ -497,6 +557,7 @@ export function usePatientDirectory(
  */
 export function useFindPatientById(
   patientId: string | null,
+  clinicId?: number,
 ): { patient: PatientDirectoryEntry | null; loading: boolean } {
   const [patient, setPatient] = useState<PatientDirectoryEntry | null>(null);
   const [loading, setLoading] = useState(false);
@@ -508,21 +569,33 @@ export function useFindPatientById(
       return;
     }
     setLoading(true);
-    const unsubscribe = onSnapshot(doc(db, "patients", patientId), async (snap) => {
-      if (!snap.exists()) {
-        setPatient(null);
+    const unsubscribe = onSnapshot(
+      doc(db, "patients", patientId),
+      async (snap) => {
+        if (!snap.exists()) {
+          setPatient(null);
+          setLoading(false);
+          return;
+        }
+        const data = snap.data();
+        // Direct-ID lookup bypasses the clinic-scoped list query above — this
+        // closes that gap. A patient outside this clinic is treated as not
+        // found, same as if they didn't exist, instead of being fetchable by
+        // anyone who guesses or types a Pat-### ID from another clinic.
+        if (clinicId != null && Number(data.clinicId) !== clinicId) {
+          setPatient(null);
+          setLoading(false);
+          return;
+        }
+        setPatient(await enrichPatient(snap.id, data));
         setLoading(false);
-        return;
-      }
-      setPatient(await enrichPatient(snap.id, snap.data()));
-      setLoading(false);
-    });
+      },
+    );
     return () => unsubscribe();
-  }, [patientId]);
+  }, [patientId, clinicId]);
 
   return { patient, loading };
 }
-
 // ---------------------------------------------------------------------------
 // Live patient record — used by the shared PatientRecordView (nurse + doctor).
 //
@@ -542,6 +615,7 @@ import type { PatientRecord } from "@/lib/clinic-data";
 
 export function usePatientRecord(pid: string | undefined): {
   record: PatientRecord | null;
+  medicalRecordNo: number | null;
   loading: boolean;
   error: string | null;
 } {
@@ -552,11 +626,17 @@ export function usePatientRecord(pid: string | undefined): {
   const [userId, setUserId] = useState<number | null>(null);
   const [medicalRecordNo, setMedicalRecordNo] = useState<number | null>(null);
 
-  const [patientBase, setPatientBase] = useState<Record<string, any> | null>(null);
+  const [patientBase, setPatientBase] = useState<Record<string, any> | null>(
+    null,
+  );
   const [userData, setUserData] = useState<Record<string, any>>({});
   const [mrData, setMrData] = useState<Record<string, any>>({});
-  const [history, setHistory] = useState<{ id: string; description: string; historyId: number }[]>([]);
-  const [nextAppt, setNextAppt] = useState<Record<string, any> | undefined>(undefined);
+  const [history, setHistory] = useState<
+    { id: string; description: string; historyId: number }[]
+  >([]);
+  const [nextAppt, setNextAppt] = useState<Record<string, any> | undefined>(
+    undefined,
+  );
 
   // 1. Wait for auth, then subscribe to the patient doc itself.
   useEffect(() => {
@@ -621,15 +701,21 @@ export function usePatientRecord(pid: string | undefined): {
 
   useEffect(() => {
     if (medicalRecordNo == null) return;
-    const unsubscribe = onSnapshot(doc(db, "medicalRecords", String(medicalRecordNo)), (snap) => {
-      setMrData(snap.exists() ? snap.data() : {});
-    });
+    const unsubscribe = onSnapshot(
+      doc(db, "medicalRecords", String(medicalRecordNo)),
+      (snap) => {
+        setMrData(snap.exists() ? snap.data() : {});
+      },
+    );
     return () => unsubscribe();
   }, [medicalRecordNo]);
 
   useEffect(() => {
     if (!pid) return;
-    const q = query(collection(db, "medicalRecordsHistory"), where("patientId", "==", pid));
+    const q = query(
+      collection(db, "medicalRecordsHistory"),
+      where("patientId", "==", pid),
+    );
     const unsubscribe = onSnapshot(q, (snap) => {
       const items = snap.docs
         .map((d) => ({
@@ -645,13 +731,18 @@ export function usePatientRecord(pid: string | undefined): {
 
   useEffect(() => {
     if (!pid) return;
-    const q = query(collection(db, "appointments"), where("patientId", "==", pid));
+    const q = query(
+      collection(db, "appointments"),
+      where("patientId", "==", pid),
+    );
     const unsubscribe = onSnapshot(q, (snap) => {
       const now = new Date().toISOString();
       const upcoming = snap.docs
         .map((d) => d.data())
         .filter((a) => (a.appointDateTime ?? "") > now)
-        .sort((a, b) => (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""))[0];
+        .sort((a, b) =>
+          (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""),
+        )[0];
       setNextAppt(upcoming);
     });
     return () => unsubscribe();
@@ -692,5 +783,5 @@ export function usePatientRecord(pid: string | undefined): {
     setLoading(false);
   }, [pid, patientBase, userData, mrData, history, nextAppt]);
 
-  return { record, loading, error };
+  return { record, medicalRecordNo, loading, error };
 }

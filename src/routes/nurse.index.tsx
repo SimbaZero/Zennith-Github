@@ -11,7 +11,15 @@ import {
   summarizeShift,
   type HandoverEntry,
 } from "@/lib/nurse-service";
-import { ScanLine, CalendarPlus, Users, Wifi, WifiOff, Trash2, Lock } from "lucide-react";
+import {
+  ScanLine,
+  CalendarPlus,
+  Users,
+  Wifi,
+  WifiOff,
+  Trash2,
+  Lock,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useOnline } from "@/lib/offline"; // unchanged — browser online/offline event, unrelated to this migration
 import { toast } from "sonner";
@@ -20,14 +28,23 @@ export const Route = createFileRoute("/nurse/")({ component: NurseDashboard });
 
 function NurseDashboard() {
   const navigate = useNavigate();
-  const { data, loading, error } = useNurseDashboard(); // was useQuery(fetchDoctorDashboard) — now a live hook, no manual refetch
+  const { nurse } = useCurrentNurse();
+  const { data, loading, error } = useNurseDashboard(); // was useQuery(fetchDoctorDashboard) — now a live hook, no manual refetch // was useQuery(fetchDoctorDashboard) — now a live hook, no manual refetch
 
   const today = new Date().toISOString().slice(0, 10);
   const scheduleLabel =
-    !data || data.scheduleDate === today ? "Today's Appointments" : `Appointments · ${data.scheduleDate}`;
+    !data || data.scheduleDate === today
+      ? "Today's Appointments"
+      : `Appointments · ${data.scheduleDate}`;
 
   return (
-    <AppShell role="nurse" title="Nurse Dashboard" showBack={false}>
+    <AppShell
+      role="nurse"
+      title="Nurse Dashboard"
+      showBack={false}
+      staffNameOverride={nurse?.fullName}
+      clinicNameOverride={nurse?.clinicName}
+    >
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat
           label="APPOINTMENTS"
@@ -58,16 +75,33 @@ function NurseDashboard() {
             </button>
           </div>
           <div className="space-y-2">
-            {loading && <p className="text-sm text-muted-foreground py-6 text-center">Loading appointments…</p>}
-            {error && <p className="text-sm text-destructive py-6 text-center">Could not load appointments.</p>}
+            {loading && (
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                Loading appointments…
+              </p>
+            )}
+            {error && (
+              <p className="text-sm text-destructive py-6 text-center">
+                Could not load appointments.
+              </p>
+            )}
             {data?.schedule.map((a) => (
               // was key={a.id} — DoctorAppointment (reused type) uses docId, not id
-              <div key={a.docId} className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md">
-                <div className="font-mono text-sm font-semibold w-12">{a.time}</div>
+              <div
+                key={a.docId}
+                className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md"
+              >
+                <div className="font-mono text-sm font-semibold w-12">
+                  {a.time}
+                </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">{a.patientName}</div>
+                  <div className="font-medium text-sm truncate">
+                    {a.patientName}
+                  </div>
                   <div className="text-xs text-muted-foreground truncate">
-                    {[a.patientId, a.condition, a.type].filter(Boolean).join(" · ")}
+                    {[a.patientId, a.condition, a.type]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </div>
                 </div>
                 <StatusBadge status={a.status} />
@@ -75,7 +109,9 @@ function NurseDashboard() {
             ))}
             {data && data.schedule.length === 0 && (
               // was data.doctorId — NurseDashboardData uses nurseId
-              <p className="text-sm text-muted-foreground py-6 text-center">No appointments found for {data.nurseId}.</p>
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                No appointments found for {data.nurseId}.
+              </p>
             )}
           </div>
         </div>
@@ -83,20 +119,37 @@ function NurseDashboard() {
         <div className="bg-white rounded-xl border p-5">
           <h3 className="font-semibold mb-4">Quick Actions</h3>
           <div className="space-y-2">
-            <Link to="/nurse/digitize" className="flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)]">
+            <Link
+              to="/nurse/digitize"
+              className="flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)]"
+            >
               <ScanLine size={16} /> Digitize File
             </Link>
-            <Link to="/nurse/appointments" className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary">
+            <Link
+              to="/nurse/appointments"
+              className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary"
+            >
               <CalendarPlus size={16} /> Schedule Appointment
             </Link>
-            <Link to="/nurse/patients" className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary">
+            <Link
+              to="/nurse/patients"
+              className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary"
+            >
               <Users size={16} /> View Patients
             </Link>
           </div>
           <div className="mt-5 pt-5 border-t">
-            <p className="text-[11px] tracking-wider text-muted-foreground mb-2">THIS WEEK</p>
-            <Row label="Patients seen" value={data ? String(data.stats.weekPatients) : "—"} />
-            <Row label="Appointments" value={data ? String(data.stats.dayTotal) : "—"} />
+            <p className="text-[11px] tracking-wider text-muted-foreground mb-2">
+              THIS WEEK
+            </p>
+            <Row
+              label="Patients seen"
+              value={data ? String(data.stats.weekPatients) : "—"}
+            />
+            <Row
+              label="Appointments"
+              value={data ? String(data.stats.dayTotal) : "—"}
+            />
             <Row label="Clinician" value={data?.nurseId ?? "—"} />
           </div>
         </div>
@@ -153,7 +206,11 @@ function HandoverLog() {
     if (finalized) return toast.error("This shift is already finalized");
     setSubmitting(true);
     try {
-      await addHandoverEntry({ nurseId: nurse.nurseId, patientId: patient.trim() || undefined, note: note.trim() });
+      await addHandoverEntry({
+        nurseId: nurse.nurseId,
+        patientId: patient.trim() || undefined,
+        note: note.trim(),
+      });
       toast.success("Handover logged");
       setPatient("");
       setNote("");
@@ -175,7 +232,11 @@ function HandoverLog() {
     if (entries.length === 0) return toast.error("No entries to finalize");
     try {
       // clinicId comes off the nurse's own record — confirmed real field.
-      await finalizeShift({ nurseId: nurse.nurseId, clinicId: nurse.clinicId ?? 0, shift });
+      await finalizeShift({
+        nurseId: nurse.nurseId,
+        clinicId: nurse.clinicId ?? 0,
+        shift,
+      });
       toast.success(`${shift} shift finalized`);
       await refresh();
     } catch {
@@ -188,10 +249,15 @@ function HandoverLog() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h3 className="font-semibold">Shift Handover Log</h3>
-          <p className="text-xs text-muted-foreground">{summary.count} entries · {summary.patients} patients this {shift.toLowerCase()} shift</p>
+          <p className="text-xs text-muted-foreground">
+            {summary.count} entries · {summary.patients} patients this{" "}
+            {shift.toLowerCase()} shift
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}>
+          <span
+            className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${online ? "bg-[oklch(0.97_0.06_160)] text-[oklch(0.4_0.15_160)]" : "bg-[oklch(0.97_0.05_60)] text-[oklch(0.45_0.17_60)]"}`}
+          >
             {online ? <Wifi size={12} /> : <WifiOff size={12} />}
             {online ? "Online" : "Offline"}
           </span>
@@ -216,7 +282,10 @@ function HandoverLog() {
         </div>
       </div>
 
-      <form onSubmit={submit} className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2 mb-4">
+      <form
+        onSubmit={submit}
+        className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2 mb-4"
+      >
         <input
           value={patient}
           onChange={(e) => setPatient(e.target.value)}
@@ -231,7 +300,10 @@ function HandoverLog() {
           disabled={finalized}
           className="px-3 py-2 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] disabled:opacity-50"
         />
-        <button disabled={submitting || finalized} className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50">
+        <button
+          disabled={submitting || finalized}
+          className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
+        >
           {submitting ? "Saving…" : "Log entry"}
         </button>
       </form>
@@ -239,22 +311,35 @@ function HandoverLog() {
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : entries.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No handover entries yet.</p>
+        <p className="text-sm text-muted-foreground">
+          No handover entries yet.
+        </p>
       ) : (
         <ul className="divide-y">
           {entries.slice(0, 8).map((e) => (
             <li key={e.id} className="py-2.5 flex items-start gap-3 text-sm">
               <span className="font-mono text-xs text-muted-foreground w-16 shrink-0 mt-0.5">
-                {e.createdAt?.toDate().toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })}
+                {e.createdAt?.toDate().toLocaleTimeString("en-ZA", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
               </span>
               <div className="flex-1 min-w-0">
                 {/* was e.nurse (a plain name string) — real schema only
                     stores nurseId, no denormalized name, so showing the ID */}
-                <div className="font-medium">{e.patientId ?? "General"} · <span className="text-muted-foreground font-normal">{e.nurseId}</span></div>
+                <div className="font-medium">
+                  {e.patientId ?? "General"} ·{" "}
+                  <span className="text-muted-foreground font-normal">
+                    {e.nurseId}
+                  </span>
+                </div>
                 <div className="text-muted-foreground">{e.note}</div>
               </div>
               {!finalized && (
-                <button onClick={() => remove(e.id)} className="text-muted-foreground hover:text-[oklch(0.55_0.2_25)]">
+                <button
+                  onClick={() => remove(e.id)}
+                  className="text-muted-foreground hover:text-[oklch(0.55_0.2_25)]"
+                >
                   <Trash2 size={14} />
                 </button>
               )}
@@ -266,10 +351,20 @@ function HandoverLog() {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {
+function Stat({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+}) {
   return (
     <div className="bg-white rounded-xl border p-5">
-      <p className="text-[11px] tracking-wider text-muted-foreground">{label}</p>
+      <p className="text-[11px] tracking-wider text-muted-foreground">
+        {label}
+      </p>
       <p className="text-3xl font-bold mt-1">{value}</p>
       <p className="text-xs text-muted-foreground mt-1">{sub}</p>
     </div>
