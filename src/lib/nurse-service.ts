@@ -466,10 +466,23 @@ export async function setAdherence(
 export interface DigitizedPatientData {
   fullName: string;
   idNumber: string;
-  dateOfBirth: string; // YYYY-MM-DD — not currently written anywhere; see note below
+  dateOfBirth: string; // YYYY-MM-DD
   cellphone: string;
+  email: string;
+  address: string; // one combined string — written into `users.suburb`, since
+  // that's the only free-text field the display actually reads
+  // ([suburb, city].join(", ") — see fetchPatientRecord). Not a
+  // real street/suburb/city split, just a practical approximation
+  // for what a handwritten form gives us.
+  emergencyContactName: string;
+  emergencyContactNo: string;
   diagnosis: string;
+  bloodType: string;
+  allergies: string;
   currentMedication: string;
+  dosage: string;
+  bloodPressure: string;
+  glucose: string;
   notes: string;
 }
 
@@ -499,49 +512,49 @@ export async function saveDigitizedFile(
       const patientData = pSnap.docs[0].data();
       medicalRecordNo = patientData.medicalRecordNo;
 
-      // Re-scan updates the existing user's contact info, per your
-      // decision — role written with the same casing convention your real
-      // data uses ("Patient", not "patient").
+      // Re-scan updates the existing user's contact/identity info — only
+      // fields that actually have a new value overwrite the old one.
       await setDoc(
         doc(db, "users", userDocId),
-        { contactNum: data.cellphone, role: "Patient" },
+        {
+          contactNum: data.cellphone,
+          role: "Patient",
+          ...(data.email ? { email: data.email } : {}),
+          ...(data.address ? { suburb: data.address } : {}),
+          ...(data.dateOfBirth ? { DOB: data.dateOfBirth } : {}),
+        },
         { merge: true },
       );
 
-      // diagnosis has nowhere else to live except patients.chronicCondition
-      // (medicalRecords has no diagnosis field). dateOfBirth was previously
-      // also written here onto `patients` — but that collection has no such
-      // field in the real schema, it belongs on `users` (as `DOB`, same
-      // field registerPatient() already writes for new patients below).
       await setDoc(
         doc(db, "patients", patientId),
-        { chronicCondition: data.diagnosis || patientData.chronicCondition },
+        {
+          chronicCondition: data.diagnosis || patientData.chronicCondition,
+          ...(data.emergencyContactName
+            ? { emergencyContactName: data.emergencyContactName }
+            : {}),
+          ...(data.emergencyContactNo
+            ? { emergencyContactNo: data.emergencyContactNo }
+            : {}),
+        },
         { merge: true },
       );
-      if (data.dateOfBirth && patientData.userId != null) {
-        await setDoc(
-          doc(db, "users", String(patientData.userId)),
-          { DOB: data.dateOfBirth },
-          { merge: true },
-        );
-      }
     }
   }
 
   if (!matchedExisting) {
-    // registerPatient already writes contactNum (from data.cellphone,
-    // passed in below) and role: "Patient" onto the new users doc — no
-    // separate write needed for those two on this path.
     patientId = await registerPatient({
       fullName: data.fullName,
       nationalId: data.idNumber,
       contactNum: data.cellphone,
+      email: data.email,
       city: "",
-      suburb: "",
-      emergencyContactName: "",
-      emergencyContactNo: "",
+      suburb: data.address,
+      emergencyContactName: data.emergencyContactName,
+      emergencyContactNo: data.emergencyContactNo,
       insurance: "",
       remarks: "",
+      dob: data.dateOfBirth || undefined,
       clinicId: clinicId ?? null,
     });
 
@@ -549,40 +562,30 @@ export async function saveDigitizedFile(
     const patientData = pSnap.data();
     medicalRecordNo = patientData?.medicalRecordNo;
 
-    // registerPatient's own fields (chronicCondition, etc.) are already
-    // set — this just adds DOB onto the real users doc it just created,
-    // since registerPatient() doesn't currently accept DOB as a parameter
-    // on this path. (Previously wrote dateOfBirth onto `patients` instead —
-    // wrong collection, patients has no such field.)
     await setDoc(
       doc(db, "patients", patientId!),
       { chronicCondition: data.diagnosis || "Not yet assessed" },
       { merge: true },
     );
-    if (data.dateOfBirth) {
-      const newUserSnap = await getDoc(doc(db, "patients", patientId!));
-      const newUserId = newUserSnap.data()?.userId;
-      if (newUserId != null) {
-        await setDoc(
-          doc(db, "users", String(newUserId)),
-          { DOB: data.dateOfBirth },
-          { merge: true },
-        );
-      }
-    }
   }
 
   // Everything digitize-specific goes into the patient's existing
-  // medicalRecords doc, not a separate table.
+  // medicalRecords doc, not a separate table. Firestore rejects `undefined`
+  // fields outright, so each optional value is only included when present.
   if (medicalRecordNo != null) {
+    const dosageNum = parseInt(data.dosage.replace(/\D/g, ""), 10);
+    const glucoseNum = parseFloat(data.glucose.replace(/[^\d.]/g, ""));
     await setDoc(
       doc(db, "medicalRecords", String(medicalRecordNo)),
       {
-        // Only include prescription when we actually have a value —
-        // Firestore throws on `undefined` fields, it doesn't just skip them.
         ...(data.currentMedication
           ? { prescription: data.currentMedication }
           : {}),
+        ...(data.bloodType ? { bloodType: data.bloodType } : {}),
+        ...(data.allergies ? { allergies: data.allergies } : {}),
+        ...(data.bloodPressure ? { bp: data.bloodPressure } : {}),
+        ...(!Number.isNaN(dosageNum) ? { dosage: dosageNum } : {}),
+        ...(!Number.isNaN(glucoseNum) ? { glucose: glucoseNum } : {}),
         lastVisit: todayIso(),
       },
       { merge: true },
@@ -598,7 +601,6 @@ export async function saveDigitizedFile(
 
   return { patientId: patientId!, matchedExisting };
 }
-
 // ---------------------------------------------------------------------------
 // Dispense medication to a patient
 //

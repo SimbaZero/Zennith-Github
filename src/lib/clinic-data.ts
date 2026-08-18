@@ -1168,6 +1168,7 @@ export interface RegistrationInput {
   fullName: string;
   nationalId: string;
   contactNum: string;
+  email?: string;
   city: string;
   suburb: string;
   emergencyContactName: string;
@@ -1233,7 +1234,7 @@ export async function registerPatient(
       contactNum: input.contactNum,
       city: input.city,
       suburb: input.suburb,
-      email: "",
+      email: input.email || "",
       DOB: input.dob || null,
       Gender: input.gender || null,
       Age: age,
