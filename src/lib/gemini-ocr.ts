@@ -15,18 +15,31 @@ import type { DigitizedPatientData } from "@/lib/nurse-service";
 // for the current free-tier model list and swap it in here.
 const GEMINI_MODEL = "gemini-2.5-flash";
 
+// Expanded to match the real Medical Record page's Personal Information +
+// Medical History sections, not just the original 7-field subset — so a
+// scan can populate a record as fully as the paper form allows.
 const PROMPT = `You are reading a scanned or photographed handwritten or
-printed clinic patient file. Extract the following fields as JSON only:
+printed clinic patient intake/history form. Extract the following fields
+as JSON only:
 
 {
   "fullName": string,
-  "idNumber": string,       // digits only, South African 13-digit ID if present
-  "dateOfBirth": string,    // YYYY-MM-DD if determinable, else ""
-  "cellphone": string,      // digits only
-  "diagnosis": string,
+  "idNumber": string,          // digits only, South African 13-digit ID if present
+  "dateOfBirth": string,       // YYYY-MM-DD if determinable, else ""
+  "cellphone": string,         // digits only
+  "email": string,
+  "address": string,           // whatever address is written, as one string
+  "emergencyContactName": string,
+  "emergencyContactNo": string,
+  "diagnosis": string,         // primary condition
+  "bloodType": string,
+  "allergies": string,
   "currentMedication": string,
-  "notes": string,          // anything else relevant that doesn't fit above
-  "confidence": number      // your own 0-100 estimate of extraction confidence
+  "dosage": string,            // as written, e.g. "500mg" — digits get extracted separately
+  "bloodPressure": string,     // e.g. "120/80"
+  "glucose": string,           // as written, digits get extracted separately
+  "notes": string,             // anything else relevant that doesn't fit above
+  "confidence": number         // your own 0-100 estimate of extraction confidence
 }
 
 If a field isn't visible in the image, use an empty string for it. Never
@@ -108,8 +121,17 @@ export async function extractPatientDataWithGemini(
       idNumber: str(parsed.idNumber).replace(/\D/g, ""),
       dateOfBirth: str(parsed.dateOfBirth),
       cellphone: str(parsed.cellphone).replace(/\D/g, ""),
+      email: str(parsed.email),
+      address: str(parsed.address),
+      emergencyContactName: str(parsed.emergencyContactName),
+      emergencyContactNo: str(parsed.emergencyContactNo).replace(/\D/g, ""),
       diagnosis: str(parsed.diagnosis),
+      bloodType: str(parsed.bloodType),
+      allergies: str(parsed.allergies),
       currentMedication: str(parsed.currentMedication),
+      dosage: str(parsed.dosage),
+      bloodPressure: str(parsed.bloodPressure),
+      glucose: str(parsed.glucose),
       notes: str(parsed.notes),
     },
     confidence: Math.round(num(parsed.confidence)),

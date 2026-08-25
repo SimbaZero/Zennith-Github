@@ -28,8 +28,6 @@ function Digitize() {
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
 
-  // Always release the camera when the page is left — otherwise the
-  // browser keeps the camera light on and the device "in use".
   useEffect(() => {
     return () => stopCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -43,10 +41,6 @@ function Digitize() {
 
   const openCamera = async () => {
     try {
-      // facingMode "environment" is a hint, not a requirement — on a
-      // phone/tablet it picks the rear camera; on a laptop with one
-      // (front-facing) camera it just falls back to that one. Same code
-      // path works on both.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" } },
         audio: false,
@@ -91,12 +85,11 @@ function Digitize() {
 
   const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-selecting the same file for a re-scan
+    e.target.value = "";
     if (!file) return;
     void runExtraction(file);
   };
 
-  // Shared by both the camera-capture path and the file-upload path.
   const runExtraction = async (file: File | Blob) => {
     cancelledRef.current = false;
     setPreview(URL.createObjectURL(file));
@@ -107,7 +100,7 @@ function Digitize() {
     try {
       const { data, confidence: conf } =
         await extractPatientDataWithGemini(file);
-      if (cancelledRef.current) return; // user hit Cancel while this was in flight
+      if (cancelledRef.current) return;
       setConfidence(conf);
       setResult(data);
     } catch (err) {
@@ -124,8 +117,6 @@ function Digitize() {
     }
   };
 
-  // Wipes everything and, if a scan is in flight, tells it to discard its
-  // result when it lands instead of overwriting whatever the nurse does next.
   const cancelScan = () => {
     cancelledRef.current = true;
     setScanning(false);
@@ -256,7 +247,7 @@ function Digitize() {
           )}
         </div>
 
-        <div className="bg-white rounded-xl border p-6">
+        <div className="bg-white rounded-xl border p-6 max-h-[calc(100vh-8rem)] overflow-y-auto">
           <h3 className="font-semibold mb-1">
             Extracted Data{" "}
             {confidence != null && (
@@ -273,50 +264,125 @@ function Digitize() {
                   : "text-muted-foreground"
               }`}
             >
-              AI-extracted — always double-check every field against the
-              original file before saving, especially names and ID numbers.
+              Always double-check every field against the original file before
+              saving — especially names and ID numbers.
             </p>
           )}
           {result ? (
-            <div className="space-y-3 text-sm">
-              <EditableField
-                label="Full Name"
-                value={result.fullName}
-                onChange={(v) => updateField("fullName", v)}
-              />
-              <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-5 text-sm">
+              <div>
+                <h4 className="text-xs font-semibold tracking-[0.15em] text-muted-foreground mb-2">
+                  PERSONAL INFORMATION
+                </h4>
+                <div className="space-y-3">
+                  <EditableField
+                    label="Full Name"
+                    value={result.fullName}
+                    onChange={(v) => updateField("fullName", v)}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <EditableField
+                      label="ID Number"
+                      value={result.idNumber}
+                      onChange={(v) => updateField("idNumber", v)}
+                    />
+                    <EditableField
+                      label="Date of Birth"
+                      value={result.dateOfBirth}
+                      onChange={(v) => updateField("dateOfBirth", v)}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <EditableField
+                      label="Cellphone"
+                      value={result.cellphone}
+                      onChange={(v) => updateField("cellphone", v)}
+                    />
+                    <EditableField
+                      label="Email"
+                      value={result.email}
+                      onChange={(v) => updateField("email", v)}
+                    />
+                  </div>
+                  <EditableField
+                    label="Address"
+                    value={result.address}
+                    onChange={(v) => updateField("address", v)}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <EditableField
+                      label="Emergency Contact"
+                      value={result.emergencyContactName}
+                      onChange={(v) => updateField("emergencyContactName", v)}
+                    />
+                    <EditableField
+                      label="Emergency Phone"
+                      value={result.emergencyContactNo}
+                      onChange={(v) => updateField("emergencyContactNo", v)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xs font-semibold tracking-[0.15em] text-muted-foreground mb-2">
+                  MEDICAL HISTORY
+                </h4>
+                <div className="space-y-3">
+                  <EditableField
+                    label="Primary Condition / Diagnosis"
+                    value={result.diagnosis}
+                    onChange={(v) => updateField("diagnosis", v)}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <EditableField
+                      label="Blood Type"
+                      value={result.bloodType}
+                      onChange={(v) => updateField("bloodType", v)}
+                    />
+                    <EditableField
+                      label="Blood Pressure"
+                      value={result.bloodPressure}
+                      onChange={(v) => updateField("bloodPressure", v)}
+                    />
+                  </div>
+                  <EditableField
+                    label="Allergies"
+                    value={result.allergies}
+                    onChange={(v) => updateField("allergies", v)}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <EditableField
+                      label="Current Medication"
+                      value={result.currentMedication}
+                      onChange={(v) => updateField("currentMedication", v)}
+                    />
+                    <EditableField
+                      label="Dosage"
+                      value={result.dosage}
+                      onChange={(v) => updateField("dosage", v)}
+                    />
+                  </div>
+                  <EditableField
+                    label="Glucose"
+                    value={result.glucose}
+                    onChange={(v) => updateField("glucose", v)}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xs font-semibold tracking-[0.15em] text-muted-foreground mb-2">
+                  CLINICAL NOTES
+                </h4>
                 <EditableField
-                  label="ID Number"
-                  value={result.idNumber}
-                  onChange={(v) => updateField("idNumber", v)}
-                />
-                <EditableField
-                  label="Date of Birth"
-                  value={result.dateOfBirth}
-                  onChange={(v) => updateField("dateOfBirth", v)}
+                  label="Notes"
+                  value={result.notes}
+                  onChange={(v) => updateField("notes", v)}
+                  multiline
                 />
               </div>
-              <EditableField
-                label="Cellphone"
-                value={result.cellphone}
-                onChange={(v) => updateField("cellphone", v)}
-              />
-              <EditableField
-                label="Diagnosis"
-                value={result.diagnosis}
-                onChange={(v) => updateField("diagnosis", v)}
-              />
-              <EditableField
-                label="Current Medication"
-                value={result.currentMedication}
-                onChange={(v) => updateField("currentMedication", v)}
-              />
-              <EditableField
-                label="Notes"
-                value={result.notes}
-                onChange={(v) => updateField("notes", v)}
-                multiline
-              />
+
               <div className="flex gap-2 pt-2">
                 <button
                   onClick={save}

@@ -451,10 +451,23 @@ export async function setAdherence(
 export interface DigitizedPatientData {
   fullName: string;
   idNumber: string;
-  dateOfBirth: string; // YYYY-MM-DD — not currently written anywhere; see note below
+  dateOfBirth: string; // YYYY-MM-DD
   cellphone: string;
+  email: string;
+  address: string; // one combined string — written into `users.suburb`, since
+  // that's the only free-text field the display actually reads
+  // ([suburb, city].join(", ") — see fetchPatientRecord). Not a
+  // real street/suburb/city split, just a practical approximation
+  // for what a handwritten form gives us.
+  emergencyContactName: string;
+  emergencyContactNo: string;
   diagnosis: string;
+  bloodType: string;
+  allergies: string;
   currentMedication: string;
+  dosage: string;
+  bloodPressure: string;
+  glucose: string;
   notes: string;
 }
 
@@ -480,24 +493,30 @@ export async function saveDigitizedFile(
       const patientData = pSnap.docs[0].data();
       medicalRecordNo = patientData.medicalRecordNo;
 
-      // Re-scan updates the existing user's contact info, per your
-      // decision — role written with the same casing convention your real
-      // data uses ("Patient", not "patient").
+      // Re-scan updates the existing user's contact/identity info — only
+      // fields that actually have a new value overwrite the old one.
       await setDoc(
         doc(db, "users", userDocId),
-        { contactNum: data.cellphone, role: "Patient" },
+        {
+          contactNum: data.cellphone,
+          role: "Patient",
+          ...(data.email ? { email: data.email } : {}),
+          ...(data.address ? { suburb: data.address } : {}),
+          ...(data.dateOfBirth ? { DOB: data.dateOfBirth } : {}),
+        },
         { merge: true },
       );
 
-      // diagnosis has nowhere else to live except patients.chronicCondition
-      // (medicalRecords has no diagnosis field — confirmed from the real
-      // export's field list). dateOfBirth is a new field on `patients` —
-      // confirmed no equivalent exists anywhere in your real schema today.
       await setDoc(
         doc(db, "patients", patientId),
         {
           chronicCondition: data.diagnosis || patientData.chronicCondition,
-          dateOfBirth: data.dateOfBirth,
+          ...(data.emergencyContactName
+            ? { emergencyContactName: data.emergencyContactName }
+            : {}),
+          ...(data.emergencyContactNo
+            ? { emergencyContactNo: data.emergencyContactNo }
+            : {}),
         },
         { merge: true },
       );
@@ -505,28 +524,25 @@ export async function saveDigitizedFile(
   }
 
   if (!matchedExisting) {
-    // registerPatient already writes contactNum (from data.cellphone,
-    // passed in below) and role: "Patient" onto the new users doc — no
-    // separate write needed for those two on this path.
     patientId = await registerPatient({
       fullName: data.fullName,
       nationalId: data.idNumber,
       contactNum: data.cellphone,
+      email: data.email,
       city: "",
-      suburb: "",
-      emergencyContactName: "",
-      emergencyContactNo: "",
+      suburb: data.address,
+      emergencyContactName: data.emergencyContactName,
+      emergencyContactNo: data.emergencyContactNo,
       insurance: "",
       remarks: "",
+      dob: data.dateOfBirth || undefined,
+      clinicId: clinicId ?? null,
     });
 
     const pSnap = await getDoc(doc(db, "patients", patientId!));
     const patientData = pSnap.data();
     medicalRecordNo = patientData?.medicalRecordNo;
 
-    // registerPatient's own fields (chronicCondition, etc.) are already
-    // set — this just adds dateOfBirth, which registerPatient doesn't
-    // currently accept as a parameter.
     await setDoc(
       doc(db, "patients", patientId!),
       {
@@ -538,12 +554,22 @@ export async function saveDigitizedFile(
   }
 
   // Everything digitize-specific goes into the patient's existing
-  // medicalRecords doc, not a separate table.
+  // medicalRecords doc, not a separate table. Firestore rejects `undefined`
+  // fields outright, so each optional value is only included when present.
   if (medicalRecordNo != null) {
+    const dosageNum = parseInt(data.dosage.replace(/\D/g, ""), 10);
+    const glucoseNum = parseFloat(data.glucose.replace(/[^\d.]/g, ""));
     await setDoc(
       doc(db, "medicalRecords", String(medicalRecordNo)),
       {
-        prescription: data.currentMedication || undefined,
+        ...(data.currentMedication
+          ? { prescription: data.currentMedication }
+          : {}),
+        ...(data.bloodType ? { bloodType: data.bloodType } : {}),
+        ...(data.allergies ? { allergies: data.allergies } : {}),
+        ...(data.bloodPressure ? { bp: data.bloodPressure } : {}),
+        ...(!Number.isNaN(dosageNum) ? { dosage: dosageNum } : {}),
+        ...(!Number.isNaN(glucoseNum) ? { glucose: glucoseNum } : {}),
         lastVisit: todayIso(),
       },
       { merge: true },
@@ -558,4 +584,140 @@ export async function saveDigitizedFile(
   }
 
   return { patientId: patientId!, matchedExisting };
+}
+// ---------------------------------------------------------------------------
+// Dispense medication to a patient
+//
+// New collection — `distributions` already exists in the schema but is a
+// DIFFERENT workflow (pharmacist -> clinic stock transfer, no patientId
+// field at all). This is nurse -> patient, so it needed its own table:
+// `patientDispensing`. Flagging that as a real schema addition, not
+// something quietly repurposed from an existing collection.
+// ---------------------------------------------------------------------------
+
+export interface ClinicInventoryItem {
+  docId: string;
+  inventId: number;
+  medName: string;
+  quantity: number;
+}
+
+/** Only meds with real stock (>0) at this specific clinic — deliberately
+ *  scoped, unlike the Pharmacist module's useInventory() which currently
+ *  fetches the entire inventory collection with no clinic filter at all. */
+export function useClinicInventory(clinicId: number | undefined): {
+  items: ClinicInventoryItem[];
+  loading: boolean;
+} {
+  const [items, setItems] = useState<ClinicInventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (clinicId == null) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const q = query(
+      collection(db, "inventory"),
+      where("clinicId", "==", clinicId),
+    );
+    const unsubscribe = onSnapshot(q, (snap) => {
+      const rows = snap.docs
+        .map((d) => {
+          const data = d.data();
+          return {
+            docId: d.id,
+            inventId: Number(data.inventId),
+            medName: data.medName ?? "Unknown medication",
+            quantity: Number(data.quantity) || 0,
+          };
+        })
+        .filter((i) => i.quantity > 0);
+      setItems(rows);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [clinicId]);
+
+  return { items, loading };
+}
+
+export interface DispenseInput {
+  patientId: string;
+  clinicId: number;
+  inventId: number;
+  medName: string;
+  unitsGiven: number;
+  nurseId: string;
+  note?: string;
+  /** When provided, also stamps this patient's Last Visit as today —
+   *  getting medication is a real visit, not just a Digitize scan. */
+  medicalRecordNo?: number;
+}
+
+/** Decrements real inventory and logs the dispense event, atomically —
+ *  wrapped in a transaction so two nurses dispensing the same medication
+ *  at the same moment can't both succeed past the real stock level. */
+export async function dispenseMedication(input: DispenseInput): Promise<void> {
+  if (input.unitsGiven <= 0) throw new Error("Units must be greater than 0");
+
+  const invSnap = await getDocs(
+    query(collection(db, "inventory"), where("inventId", "==", input.inventId)),
+  );
+  if (invSnap.empty) throw new Error("Medication not found in inventory");
+  const invDocRef = invSnap.docs[0].ref;
+
+  // Look up the real userId so we can notify the actual patient — needed
+  // for the notifications write below, not used anywhere else here.
+  const patientSnap = await getDoc(doc(db, "patients", input.patientId));
+  const patientUserId = patientSnap.exists()
+    ? Number(patientSnap.data().userId)
+    : null;
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(invDocRef);
+    if (!snap.exists()) throw new Error("Medication not found in inventory");
+    const current = Number(snap.data().quantity) || 0;
+    if (current < input.unitsGiven) {
+      throw new Error(
+        `Not enough stock — only ${current} unit${current === 1 ? "" : "s"} left`,
+      );
+    }
+    tx.update(invDocRef, {
+      quantity: current - input.unitsGiven,
+      lastUpdated: new Date().toISOString(),
+    });
+    tx.set(doc(collection(db, "patientDispensing")), {
+      dispenseId: Date.now(), // TODO(db): placeholder — no real sequential counter for this collection yet, same convention as distributions.distributionId
+      patientId: input.patientId,
+      clinicId: input.clinicId,
+      medName: input.medName,
+      inventId: input.inventId,
+      unitsGiven: input.unitsGiven,
+      nurseId: input.nurseId,
+      note: input.note || null,
+      createdAt: serverTimestamp(),
+    });
+    if (input.medicalRecordNo != null) {
+      tx.set(
+        doc(db, "medicalRecords", String(input.medicalRecordNo)),
+        { lastVisit: new Date().toISOString().slice(0, 10) },
+        { merge: true },
+      );
+    }
+    // Real notification for the patient — same collection/shape Receptionist's
+    // callPatient() already writes to, not a new mechanism.
+    if (patientUserId != null && !Number.isNaN(patientUserId)) {
+      tx.set(doc(collection(db, "notifications")), {
+        notifId: Date.now(),
+        userId: patientUserId,
+        title: "Medication dispensed",
+        message: `You were given ${input.unitsGiven}× ${input.medName}.`,
+        isRead: false,
+        timeSent: new Date().toISOString(),
+      });
+    }
+  });
 }
