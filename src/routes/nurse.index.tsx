@@ -178,17 +178,17 @@ function HandoverLog() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // NOTE: this now shows only the SIGNED-IN nurse's own entries, not a
-  // team-wide log — the real handoverEntries schema has no clinicId field
-  // to scope a shared view by, only nurseId. If you want a shared team log
-  // later, that needs a schema change (add clinicId to the entry), not a
-  // frontend one.
+  // Shared across ALL nurses at the clinic — scoped by clinicId, not
+  // nurseId. Each entry still records which nurse wrote it (shown per-line
+  // below), but the list itself is the whole clinic's log for today.
+  // Resets automatically each calendar day (not per session/login) via
+  // isToday() inside fetchHandoverEntries.
   const refresh = async () => {
-    if (!nurse) return;
+    if (!nurse?.clinicId) return;
     setLoading(true);
     const [entriesResult, statusResult] = await Promise.all([
-      fetchHandoverEntries(nurse.nurseId, shift),
-      fetchShiftStatus(nurse.nurseId, shift),
+      fetchHandoverEntries(nurse.clinicId, shift),
+      fetchShiftStatus(nurse.clinicId, shift),
     ]);
     setEntries(entriesResult);
     setFinalized(!!statusResult?.finalized);
@@ -202,18 +202,19 @@ function HandoverLog() {
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nurse?.nurseId, shift]);
+  }, [nurse?.clinicId, shift]);
 
   const summary = summarizeShift(entries);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nurse) return;
+    if (!nurse?.clinicId) return;
     if (!note.trim()) return toast.error("Add a handover note first");
     if (finalized) return toast.error("This shift is already finalized");
     setSubmitting(true);
     try {
       await addHandoverEntry({
+        clinicId: nurse.clinicId,
         nurseId: nurse.nurseId,
         patientId: patient.trim() || undefined,
         note: note.trim(),
@@ -235,16 +236,15 @@ function HandoverLog() {
   };
 
   const handleFinalize = async () => {
-    if (!nurse) return;
+    if (!nurse?.clinicId) return;
     if (entries.length === 0) return toast.error("No entries to finalize");
     try {
-      // clinicId comes off the nurse's own record — confirmed real field.
       await finalizeShift({
+        clinicId: nurse.clinicId,
         nurseId: nurse.nurseId,
-        clinicId: nurse.clinicId ?? 0,
         shift,
       });
-      toast.success(`${shift} shift finalized`);
+      toast.success(`${shift} shift finalized for the clinic`);
       await refresh();
     } catch {
       toast.error("Could not finalize shift");
@@ -332,8 +332,10 @@ function HandoverLog() {
                 })}
               </span>
               <div className="flex-1 min-w-0">
-                {/* was e.nurse (a plain name string) — real schema only
-                    stores nurseId, no denormalized name, so showing the ID */}
+                {/* Shared log now — this nurseId is how you tell WHICH
+                    nurse logged each note, since multiple nurses' entries
+                    appear together. No denormalized name field exists in
+                    the real schema, so it's the ID, not a display name. */}
                 <div className="font-medium">
                   {e.patientId ?? "General"} ·{" "}
                   <span className="text-muted-foreground font-normal">
@@ -342,7 +344,7 @@ function HandoverLog() {
                 </div>
                 <div className="text-muted-foreground">{e.note}</div>
               </div>
-              {!finalized && (
+              {!finalized && e.nurseId === nurse?.nurseId && (
                 <button
                   onClick={() => remove(e.id)}
                   className="text-muted-foreground hover:text-[oklch(0.55_0.2_25)]"
