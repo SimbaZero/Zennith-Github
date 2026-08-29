@@ -6,6 +6,7 @@ import {
   useFindPatientById,
   useCurrentDoctor,
 } from "@/lib/doctor-service";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 
 export const Route = createFileRoute("/doctor/patients")({
   component: DoctorPatients,
@@ -13,14 +14,14 @@ export const Route = createFileRoute("/doctor/patients")({
 
 function DoctorPatients() {
   const { doctor } = useCurrentDoctor();
+  const realClinic = useRealActiveClinic(doctor?.clinicIds, "doctor");
   return (
     <AppShell
       role="doctor"
       title="Patient Files"
       staffNameOverride={doctor?.fullName}
-      clinicNameOverride={doctor?.clinicName}
     >
-      <DoctorPatientFilesTable clinicId={doctor?.clinicId} />
+      <DoctorPatientFilesTable clinicId={realClinic.activeClinicId} />
     </AppShell>
   );
 }

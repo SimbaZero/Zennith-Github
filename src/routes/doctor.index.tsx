@@ -23,7 +23,6 @@ function DoctorDashboard() {
       title="Doctor Dashboard"
       showBack={false}
       staffNameOverride={doctor?.fullName}
-      clinicNameOverride={doctor?.clinicName}
     >
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat

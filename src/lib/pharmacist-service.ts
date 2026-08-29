@@ -12,7 +12,8 @@ import {
   orderBy,
   limit,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "@/lib/firebase";
 import { stock as mockStock } from "@/lib/data";
 
 // Shape the existing UI already expects (see pharmacist.index.tsx, pharmacist.stock.tsx).
@@ -26,6 +27,7 @@ export interface StockItem {
   inventId?: number;
   category?: string;
   lastUpdated?: string;
+  clinicId?: number; // NEW — which clinic this stock belongs to (mock/fallback items won't have one)
   avgDay: number; // average units used per day — see TODO below, this is currently faked
 }
 
@@ -36,8 +38,8 @@ interface RawInventoryDoc {
   inventId?: number;
   category?: string;
   lastUpdated?: string;
+  clinicId?: number;
 }
-
 // Firestore sometimes returns quantity/threshold as strings — this forces them
 // into real numbers no matter what type Firestore gives us, so math never breaks.
 function toNumber(value: unknown): number {
@@ -54,6 +56,7 @@ function mapInventoryDoc(id: string, data: RawInventoryDoc): StockItem {
     inventId: data.inventId,
     category: data.category,
     lastUpdated: data.lastUpdated,
+    clinicId: data.clinicId,
     // TODO(db): `avgDay` (average daily usage) does not exist in Firestore yet.
     // Faking it here as threshold/5 just so the UI has a plausible-looking number.
     // See db-issues.md #3 — needs a real decision: stored field vs. calculated
@@ -367,4 +370,162 @@ export function useMedicationDispenseTrends(): Record<string, number[]> {
   }, []);
 
   return trends;
+}
+
+// ---------------------------------------------------------------------------
+// SINGLE SOURCE OF TRUTH for "who is the current pharmacist".
+// Mirrors useCurrentDoctor() / useCurrentNurse() — built multi-clinic-aware
+// from the start, since Pharmacist had no identity resolution at all before
+// this, nothing old to preserve here.
+// ---------------------------------------------------------------------------
+
+export interface CurrentPharmacist {
+  pharmacistId: string; // e.g. "Pharm-1"
+  userId?: number;
+  clinicId?: number; // currently-active clinic — first entry of clinicIds
+  clinicIds?: number[]; // every clinic this pharmacist belongs to
+  clinicName?: string;
+  fullName: string;
+  email?: string;
+  contactNum?: string;
+  licenseNo?: string;
+}
+
+const pharmacistCacheByUid = new Map<string, Promise<CurrentPharmacist>>();
+
+async function resolveCurrentPharmacistForUid(
+  uid: string,
+): Promise<CurrentPharmacist> {
+  const profileSnap = await getDoc(doc(db, "profiles", uid));
+  const profile = profileSnap.exists()
+    ? profileSnap.data()
+    : ({} as Record<string, any>);
+
+  if (profile.legacyUserId == null) {
+    throw new Error(
+      "Your staff profile has no linked pharmacist record — contact whoever set up your account.",
+    );
+  }
+
+  const pharmSnap = await getDocs(
+    query(
+      collection(db, "pharmacists"),
+      where("userId", "==", Number(profile.legacyUserId)),
+    ),
+  );
+  if (pharmSnap.empty) {
+    throw new Error(
+      "Your staff profile has no linked pharmacist record — contact whoever set up your account.",
+    );
+  }
+
+  const pharmData = pharmSnap.docs[0].data();
+  return buildCurrentPharmacist(pharmData.pharmacistId, pharmData);
+}
+
+async function buildCurrentPharmacist(
+  pharmacistId: string,
+  pharmacistData: Record<string, any>,
+): Promise<CurrentPharmacist> {
+  let fullName = pharmacistId;
+  let email: string | undefined;
+  let contactNum: string | undefined;
+
+  if (pharmacistData.userId != null) {
+    const uSnap = await getDoc(doc(db, "users", String(pharmacistData.userId)));
+    if (uSnap.exists()) {
+      const u = uSnap.data();
+      fullName = [u.names, u.surname].filter(Boolean).join(" ") || pharmacistId;
+      email = u.email;
+      contactNum = u.contactNum;
+    }
+  }
+
+  const clinicIds: number[] = Array.isArray(pharmacistData.clinicIds)
+    ? pharmacistData.clinicIds
+    : pharmacistData.clinicId != null
+      ? [pharmacistData.clinicId]
+      : [];
+  const activeClinicId = clinicIds[0];
+
+  let clinicName: string | undefined;
+  if (activeClinicId != null) {
+    const cSnap = await getDoc(doc(db, "clinics", String(activeClinicId)));
+    if (cSnap.exists()) clinicName = cSnap.data().clinicName;
+  }
+
+  return {
+    pharmacistId,
+    userId: pharmacistData.userId,
+    clinicId: activeClinicId,
+    clinicIds,
+    clinicName,
+    fullName,
+    email,
+    contactNum,
+    licenseNo: pharmacistData.licenseNo,
+  };
+}
+
+/**
+ * Not wired into any pharmacist page yet — that's the next step. This just
+ * makes the capability exist, same shape as useCurrentDoctor().
+ */
+export function useCurrentPharmacist(): {
+  pharmacist: CurrentPharmacist | null;
+  loading: boolean;
+  error: string | null;
+} {
+  const [pharmacist, setPharmacist] = useState<CurrentPharmacist | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        if (!cancelled) {
+          setPharmacist(null);
+          setError("Not signed in");
+          setLoading(false);
+        }
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+
+      if (!pharmacistCacheByUid.has(user.uid)) {
+        pharmacistCacheByUid.set(
+          user.uid,
+          resolveCurrentPharmacistForUid(user.uid),
+        );
+      }
+
+      pharmacistCacheByUid
+        .get(user.uid)!
+        .then((p) => {
+          if (!cancelled) {
+            setPharmacist(p);
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to resolve current pharmacist:", err);
+          pharmacistCacheByUid.delete(user.uid);
+          if (!cancelled) {
+            setError(err.message ?? "Could not load pharmacist profile");
+            setLoading(false);
+          }
+        });
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  return { pharmacist, loading, error };
 }

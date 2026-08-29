@@ -1036,6 +1036,29 @@ export async function createAppointment(input: {
     clinician = await resolveClinicianId();
   }
 
+  // A clinician — especially a doctor working more than one clinic — must
+  // not be double-booked at the same exact date/time, even across
+  // different clinics. Appointments only carry the PATIENT's clinicId, not
+  // the clinician's, so this checks by clinician + time, not by clinic.
+  // Cancelled/no-show slots don't count as occupied.
+  const wantedDateTime = `${input.date}T${input.time}:00.000Z`;
+  const clashSnap = await getDocs(
+    query(
+      collection(db, "appointments"),
+      where("clinician", "==", clinician),
+      where("appointDateTime", "==", wantedDateTime),
+    ),
+  );
+  const realClash = clashSnap.docs.some((d) => {
+    const s = String(d.data().status ?? "").toLowerCase();
+    return s !== "cancelled" && s !== "no-show";
+  });
+  if (realClash) {
+    throw new Error(
+      `${clinician} already has an appointment at this date and time (possibly at a different clinic). Choose a different time.`,
+    );
+  }
+
   const nextId = await runTransaction(db, async (tx) => {
     const ref = doc(db, "counters", "appointments");
     const snap = await tx.get(ref);

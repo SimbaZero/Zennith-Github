@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useMemo } from "react";
 import {
   AppShell,
   StatusBadge,
@@ -7,9 +8,9 @@ import {
 import {
   useInventory,
   useMedicationDispenseTrends,
+  useCurrentPharmacist,
 } from "@/lib/pharmacist-service";
-import { useActiveClinic, CLINICS, type ClinicId } from "@/lib/clinic";
-import { Building2 } from "lucide-react";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 
 export const Route = createFileRoute("/pharmacist/analytics")({
   component: MedicationOverview,
@@ -47,14 +48,25 @@ function Sparkline({ values }: { values: number[] }) {
 }
 
 function MedicationOverview() {
-  const clinic = useActiveClinic();
-  // TODO(db): inventory is one shared central pool, not per-clinic (see
-  // db-issues.md #2) — the clinic selector stays in the UI for context but
-  // doesn't currently filter these numbers.
+  const { pharmacist } = useCurrentPharmacist();
+  const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
   const { stock } = useInventory();
   const trends = useMedicationDispenseTrends();
 
-  const enriched = stock.map((s) => {
+  // Filtered to the clinic picked in the header. Items with no clinicId at
+  // all (older/legacy data) are shown regardless, rather than vanishing.
+  const clinicStock = useMemo(
+    () =>
+      realClinic.activeClinicId == null
+        ? stock
+        : stock.filter(
+            (s) =>
+              s.clinicId == null || s.clinicId === realClinic.activeClinicId,
+          ),
+    [stock, realClinic.activeClinicId],
+  );
+
+  const enriched = clinicStock.map((s) => {
     // Real dispensing history for this med, or 7 zeros if none recorded yet.
     const series = trends[s.name] ?? new Array(7).fill(0);
     return {
@@ -71,22 +83,9 @@ function MedicationOverview() {
   return (
     <AppShell role="pharmacist" title="Medication Overview">
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <label className="inline-flex items-center gap-2 text-sm border rounded-md px-3 py-1.5 bg-white">
-          <Building2 size={14} className="text-muted-foreground" />
-          <select
-            value={clinic.id}
-            onChange={(e) => clinic.setId(e.target.value as ClinicId)}
-            className="bg-transparent outline-none text-sm font-medium"
-          >
-            {CLINICS.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
         <p className="text-xs text-muted-foreground">
-          Showing central stock and real 7-day dispensing history.
+          Showing stock at {realClinic.activeClinicName ?? "your clinic"} and
+          real 7-day dispensing history.
         </p>
       </div>
 
@@ -94,7 +93,7 @@ function MedicationOverview() {
         <Stat
           label="TOTAL UNITS"
           value={totalUnits.toLocaleString()}
-          sub="Central stock"
+          sub="This clinic's stock"
         />
         <Stat
           label="MEDICATIONS TRACKED"

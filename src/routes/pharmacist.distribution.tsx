@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   useInventory,
@@ -7,9 +7,10 @@ import {
   getNursesForClinic,
   recordDistribution,
   useRecentDistributions,
+  useCurrentPharmacist,
   type Nurse,
 } from "@/lib/pharmacist-service";
-import { useActiveClinic } from "@/lib/clinic";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 import { toast } from "sonner";
 import { AlertTriangle, Plus, Send, Users } from "lucide-react";
 
@@ -142,10 +143,11 @@ function SupplierIntake({
 // ---------------------------------------------------------------------------
 function NurseDistribution({
   stock,
+  activeClinicName,
 }: {
   stock: ReturnType<typeof useInventory>["stock"];
+  activeClinicName: string | undefined;
 }) {
-  const clinic = useActiveClinic();
   const [medIdx, setMedIdx] = useState(0);
   const [nurses, setNurses] = useState<Nurse[]>([]);
   const [nursesLoading, setNursesLoading] = useState(true);
@@ -156,8 +158,13 @@ function NurseDistribution({
 
   // Load the real nurses for the currently active clinic whenever it changes.
   useEffect(() => {
+    if (!activeClinicName) {
+      setNurses([]);
+      setNursesLoading(true);
+      return;
+    }
     setNursesLoading(true);
-    getNursesForClinic(clinic.name)
+    getNursesForClinic(activeClinicName)
       .then((list) => {
         setNurses(list);
         setAlloc(Object.fromEntries(list.map((n) => [n.nurseId, null])));
@@ -168,7 +175,7 @@ function NurseDistribution({
         setNurses([]);
       })
       .finally(() => setNursesLoading(false));
-  }, [clinic.name]);
+  }, [activeClinicName]);
 
   if (!med) return null;
 
@@ -222,8 +229,8 @@ function NurseDistribution({
       </div>
       <p className="text-sm text-muted-foreground mt-1 mb-5">
         Assign medication quantities to real nurses at{" "}
-        <strong>{clinic.name}</strong>. Saves directly to the database and
-        deducts from central inventory.
+        <strong>{activeClinicName ?? "your clinic"}</strong>. Saves directly to
+        the database and deducts from central inventory.
       </p>
 
       <label className="text-sm font-medium block mb-1.5">Medication</label>
@@ -245,7 +252,8 @@ function NurseDistribution({
         </p>
       ) : nurses.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No nurses found for {clinic.name} in the database.
+          No nurses found for {activeClinicName ?? "this clinic"} in the
+          database.
         </p>
       ) : (
         <div className="space-y-3">
@@ -374,13 +382,31 @@ function RecentDistributions() {
 }
 
 function Distribution() {
+  const { pharmacist } = useCurrentPharmacist();
+  const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
   const { stock } = useInventory();
+
+  // Filtered to the clinic picked in the header. Items with no clinicId at
+  // all (older/legacy data) are included regardless, rather than vanishing.
+  const clinicStock = useMemo(
+    () =>
+      realClinic.activeClinicId == null
+        ? stock
+        : stock.filter(
+            (s) =>
+              s.clinicId == null || s.clinicId === realClinic.activeClinicId,
+          ),
+    [stock, realClinic.activeClinicId],
+  );
 
   return (
     <AppShell role="pharmacist" title="Stock Distribution">
       <div className="space-y-6">
-        <SupplierIntake stock={stock} />
-        <NurseDistribution stock={stock} />
+        <SupplierIntake stock={clinicStock} />
+        <NurseDistribution
+          stock={clinicStock}
+          activeClinicName={realClinic.activeClinicName}
+        />
         <RecentDistributions />
       </div>
     </AppShell>

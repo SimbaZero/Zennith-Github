@@ -5,26 +5,39 @@ import {
   StatusBadge,
   computeStockStatus,
 } from "@/components/AppShell";
-import { useInventory } from "@/lib/pharmacist-service"; // real Firestore data now, not mock store
-import { useActiveClinic, CLINICS, type ClinicId } from "@/lib/clinic";
-import { Building2 } from "lucide-react";
+import { useInventory, useCurrentPharmacist } from "@/lib/pharmacist-service";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 
 export const Route = createFileRoute("/pharmacist/stock")({ component: Stock });
 
 function Stock() {
-  const clinic = useActiveClinic();
-  // TODO(db): inventory is currently one shared central pool (see db-issues.md #2) —
-  // the clinic selector below stays in the UI, but does not yet filter these numbers.
+  const { pharmacist } = useCurrentPharmacist();
+  const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
   const { stock: items } = useInventory();
   const navigate = useNavigate();
 
+  // Filters to the selected clinic now — the old selector here never
+  // actually did this (see the TODO this replaces). Stock with no
+  // clinicId at all (older data) is shown regardless of selection,
+  // rather than silently vanishing.
+  const clinicFiltered = useMemo(
+    () =>
+      realClinic.activeClinicId == null
+        ? items
+        : items.filter(
+            (i) =>
+              i.clinicId == null || i.clinicId === realClinic.activeClinicId,
+          ),
+    [items, realClinic.activeClinicId],
+  );
+
   const enriched = useMemo(
     () =>
-      items.map((i) => ({
+      clinicFiltered.map((i) => ({
         ...i,
         status: computeStockStatus(i.units, i.threshold),
       })),
-    [items],
+    [clinicFiltered],
   );
 
   const valueColor = (status: "OK" | "Low" | "Out") =>
@@ -44,22 +57,10 @@ function Stock() {
     <AppShell role="pharmacist" title="Stock Management">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
-          <label className="inline-flex items-center gap-2 text-sm border rounded-md px-3 py-1.5 bg-white">
-            <Building2 size={14} className="text-muted-foreground" />
-            <select
-              value={clinic.id}
-              onChange={(e) => clinic.setId(e.target.value as ClinicId)}
-              className="bg-transparent outline-none text-sm font-medium"
-            >
-              {CLINICS.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
           <p className="text-sm text-muted-foreground">
-            {enriched.length} medications · live · updates from Distribution
+            {enriched.length} medications at{" "}
+            {realClinic.activeClinicName ?? "your clinic"} · live · updates from
+            Distribution
           </p>
         </div>
         <button

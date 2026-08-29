@@ -35,6 +35,9 @@ import {
   markNotificationRead,
 } from "@/lib/patient-service";
 import { useActiveClinic, CLINICS, type ClinicId } from "@/lib/clinic";
+import { useCurrentPharmacist } from "@/lib/pharmacist-service";
+import { useCurrentDoctor } from "@/lib/doctor-service";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 
 export type NavItem = { to: string; label: string; icon: LucideIcon };
 
@@ -101,6 +104,7 @@ const navByRole: Record<Role, NavItem[]> = {
 
 const staffCanSwitch: Partial<Record<Role, boolean>> = {
   pharmacist: true,
+  doctor: true,
   super_admin: true,
 };
 
@@ -143,10 +147,22 @@ export function AppShell({
 
   const username = typeof window !== "undefined" ? getUsername() : "";
   const { patient: sidebarPatient } = useCurrentPatient();
+  // Real pharmacist data. clinicIds/fullName are undefined for every other
+  // role, so this does no Firestore reads when not relevant.
+  const { pharmacist } = useCurrentPharmacist();
+  const realPharmacistClinic = useRealActiveClinic(
+    pharmacist?.clinicIds,
+    "pharmacist",
+  );
+  // Real doctor data — same idea, just for Doctor's own clinicIds.
+  const { doctor } = useCurrentDoctor();
+  const realDoctorClinic = useRealActiveClinic(doctor?.clinicIds, "doctor");
   const display =
     role === "patient" && sidebarPatient?.fullName
       ? sidebarPatient.fullName
-      : (staffNameOverride ?? displayNameFor(role, username));
+      : role === "pharmacist" && pharmacist?.fullName
+        ? pharmacist.fullName
+        : (staffNameOverride ?? displayNameFor(role, username));
   const initial = display.charAt(0).toUpperCase();
   const clinic = useActiveClinic();
   const canSwitch = !!staffCanSwitch[role];
@@ -155,7 +171,15 @@ export function AppShell({
       ? "Zennith Platform · All facilities"
       : role === "patient"
         ? "Patient Portal"
-        : (clinicNameOverride ?? clinic.name);
+        : role === "pharmacist"
+          ? (clinicNameOverride ??
+            realPharmacistClinic.activeClinicName ??
+            "Loading clinic…")
+          : role === "doctor"
+            ? (clinicNameOverride ??
+              realDoctorClinic.activeClinicName ??
+              "Loading clinic…")
+            : (clinicNameOverride ?? clinic.name);
 
   return (
     <div className="min-h-screen flex bg-[oklch(0.97_0.01_240)]">
@@ -236,14 +260,54 @@ export function AppShell({
             {title}
           </h1>
           <div className="flex-1" />
-          {role !== "patient" && (
-            <ClinicChip
-              clinicId={clinic.id}
-              clinicName={clinicNameOverride ?? clinic.name}
-              canSwitch={canSwitch && clinicNameOverride == null}
-              onSwitch={clinic.setId}
-            />
-          )}
+          {role !== "patient" &&
+            (role === "pharmacist" ? (
+              <ClinicChip
+                clinicId={realPharmacistClinic.activeClinicId ?? ""}
+                clinicName={
+                  clinicNameOverride ??
+                  realPharmacistClinic.activeClinicName ??
+                  "Loading clinic…"
+                }
+                canSwitch={canSwitch && clinicNameOverride == null}
+                onSwitch={(id) =>
+                  realPharmacistClinic.setActiveClinicId(Number(id))
+                }
+                options={realPharmacistClinic.options.map((o) => ({
+                  id: o.clinicId,
+                  name: o.clinicName,
+                }))}
+              />
+            ) : role === "doctor" ? (
+              <ClinicChip
+                clinicId={realDoctorClinic.activeClinicId ?? ""}
+                clinicName={
+                  clinicNameOverride ??
+                  realDoctorClinic.activeClinicName ??
+                  "Loading clinic…"
+                }
+                canSwitch={canSwitch && clinicNameOverride == null}
+                onSwitch={(id) =>
+                  realDoctorClinic.setActiveClinicId(Number(id))
+                }
+                options={realDoctorClinic.options.map((o) => ({
+                  id: o.clinicId,
+                  name: o.clinicName,
+                }))}
+              />
+            ) : (
+              <ClinicChip
+                clinicId={clinic.id}
+                clinicName={clinicNameOverride ?? clinic.name}
+                canSwitch={canSwitch && clinicNameOverride == null}
+                onSwitch={(id) => clinic.setId(id as ClinicId)}
+                options={CLINICS.map((c) => ({
+                  id: c.id,
+                  name: c.name,
+                  area: c.area,
+                }))}
+              />
+            ))}
           <ScopedSearch role={role} />
           <NotificationsButton role={role} />
           <button
@@ -478,11 +542,13 @@ function ClinicChip({
   clinicName,
   canSwitch,
   onSwitch,
+  options,
 }: {
-  clinicId: ClinicId;
+  clinicId: string | number;
   clinicName: string;
   canSwitch: boolean;
-  onSwitch: (id: ClinicId) => void;
+  onSwitch: (id: string | number) => void;
+  options: { id: string | number; name: string; area?: string }[];
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -516,7 +582,7 @@ function ClinicChip({
           <div className="text-[10px] tracking-wider text-muted-foreground p-2 border-b">
             SWITCH CLINIC
           </div>
-          {CLINICS.map((c) => (
+          {options.map((c) => (
             <button
               key={c.id}
               onClick={() => {
@@ -526,7 +592,11 @@ function ClinicChip({
               className={`w-full text-left px-3 py-2 hover:bg-secondary text-sm border-b last:border-b-0 ${c.id === clinicId ? "bg-[oklch(0.97_0.03_245)]" : ""}`}
             >
               <div className="font-medium">{c.name}</div>
-              <div className="text-[11px] text-muted-foreground">{c.area}</div>
+              {c.area && (
+                <div className="text-[11px] text-muted-foreground">
+                  {c.area}
+                </div>
+              )}
             </button>
           ))}
         </div>

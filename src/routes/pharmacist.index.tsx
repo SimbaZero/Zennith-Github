@@ -1,10 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useMemo } from "react";
 import {
   AppShell,
   StatusBadge,
   computeStockStatus,
 } from "@/components/AppShell";
-import { useInventory } from "@/lib/pharmacist-service";
+import { useInventory, useCurrentPharmacist } from "@/lib/pharmacist-service";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 import { Boxes, Activity, Share2, LineChart } from "lucide-react";
 
 export const Route = createFileRoute("/pharmacist/")({
@@ -12,9 +14,25 @@ export const Route = createFileRoute("/pharmacist/")({
 });
 
 function PharmacistDashboard() {
+  const { pharmacist } = useCurrentPharmacist();
+  const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
   const { stock } = useInventory();
 
-  const enriched = stock.map((s) => ({
+  // Filtered to the clinic picked in the header — matches Stock,
+  // Distribution, and Analytics. Items with no clinicId at all
+  // (older/legacy data) are included regardless.
+  const clinicStock = useMemo(
+    () =>
+      realClinic.activeClinicId == null
+        ? stock
+        : stock.filter(
+            (s) =>
+              s.clinicId == null || s.clinicId === realClinic.activeClinicId,
+          ),
+    [stock, realClinic.activeClinicId],
+  );
+
+  const enriched = clinicStock.map((s) => ({
     ...s,
     status: computeStockStatus(s.units, s.threshold),
   }));
@@ -28,7 +46,7 @@ function PharmacistDashboard() {
         <Stat
           label="TOTAL STOCK"
           value={total.toLocaleString()}
-          sub={`${stock.length} medications`}
+          sub={`${clinicStock.length} medications at ${realClinic.activeClinicName ?? "your clinic"}`}
         />
         <Stat
           label="LOW / OUT"
@@ -36,6 +54,11 @@ function PharmacistDashboard() {
           sub="Needs attention"
           tone="danger"
         />
+        {/* TODO(db): "DISTRIBUTED TODAY" is a hardcoded placeholder, not
+            real data — nothing queries for this yet. Same for "THIS
+            WEEK" below (Units dispensed / Stock updates / Low stock
+            alerts). Flagging so it isn't mistaken for real — needs a
+            real decision on what these should actually query. */}
         <Stat label="DISTRIBUTED TODAY" value="148" sub="units to nurses" />
       </div>
 
@@ -51,20 +74,27 @@ function PharmacistDashboard() {
             </Link>
           </div>
           <div className="space-y-2">
-            {critical.map((s) => (
-              <div
-                key={s.name}
-                className="flex items-center justify-between p-3 hover:bg-secondary/40 rounded-md"
-              >
-                <div>
-                  <div className="font-medium text-sm">{s.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {s.units} units · Threshold: {s.threshold}
+            {critical.length === 0 ? (
+              <p className="text-sm text-muted-foreground p-3">
+                Nothing critical at{" "}
+                {realClinic.activeClinicName ?? "this clinic"} right now.
+              </p>
+            ) : (
+              critical.map((s) => (
+                <div
+                  key={s.name}
+                  className="flex items-center justify-between p-3 hover:bg-secondary/40 rounded-md"
+                >
+                  <div>
+                    <div className="font-medium text-sm">{s.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {s.units} units · Threshold: {s.threshold}
+                    </div>
                   </div>
+                  <StatusBadge status={s.status} />
                 </div>
-                <StatusBadge status={s.status} />
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
@@ -100,6 +130,8 @@ function PharmacistDashboard() {
             <p className="text-[11px] tracking-wider text-muted-foreground mb-2">
               THIS WEEK
             </p>
+            {/* TODO(db): these three are hardcoded placeholders too — see
+                note above. */}
             <Row label="Units dispensed" value="1,248" />
             <Row label="Stock updates" value="23" />
             <Row label="Low stock alerts" value="4" />

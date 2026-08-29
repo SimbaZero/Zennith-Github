@@ -49,7 +49,8 @@ export function waitForAuthReady(): Promise<User | null> {
 export interface CurrentDoctor {
   doctorId: string; // e.g. "Doc-1"
   userId?: number;
-  clinicId?: number;
+  clinicId?: number; // currently-active clinic — first entry of clinicIds, for now
+  clinicIds?: number[]; // NEW — every clinic this doctor belongs to
   clinicName?: string;
   fullName: string;
   email?: string;
@@ -110,16 +111,29 @@ async function buildCurrentDoctor(
     }
   }
 
+  // NEW: clinicIds is the real multi-clinic list (added by
+  // scripts/migrate-staff-clinicids.mjs). Falls back to the old single
+  // clinicId if it's somehow missing, so this can never break.
+  const clinicIds: number[] = Array.isArray(doctorData.clinicIds)
+    ? doctorData.clinicIds
+    : doctorData.clinicId != null
+      ? [doctorData.clinicId]
+      : [];
+  // No switcher UI yet — "active" clinic is just the first one in the
+  // list, so behavior is identical to before this edit.
+  const activeClinicId = clinicIds[0];
+
   let clinicName: string | undefined;
-  if (doctorData.clinicId != null) {
-    const cSnap = await getDoc(doc(db, "clinics", String(doctorData.clinicId)));
+  if (activeClinicId != null) {
+    const cSnap = await getDoc(doc(db, "clinics", String(activeClinicId)));
     if (cSnap.exists()) clinicName = cSnap.data().clinicName;
   }
 
   return {
     doctorId,
     userId: doctorData.userId,
-    clinicId: doctorData.clinicId,
+    clinicId: activeClinicId,
+    clinicIds,
     clinicName,
     fullName,
     email,
