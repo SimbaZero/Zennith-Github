@@ -1,36 +1,26 @@
 import { useEffect, useState } from "react";
 import { registerPatient } from "@/lib/clinic-data";
-import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  query,
-  runTransaction,
-  serverTimestamp,
-  setDoc,
-  Timestamp,
-  where,
-} from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, Timestamp, where } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 
+// Reused, not duplicated — these were previously private to doctor-service.ts.
+// See doctor-service.ts for what each one actually does; the comments there
+// still apply, they're just exported now so both files (and this one) share
+// one copy instead of two drifting implementations.
 import {
   useMinuteTick,
   computeWeekBounds,
   useDoctorAppointments, // role-agnostic despite the name — just filters
-  // appointments by whatever clinician id you pass
-  // it, so nurse-service.ts calls it directly rather
-  // than writing a second copy of the same hook.
-  // (toBadgeStatus/resolvePatientNames are used
-  // internally by this hook — no need to import
-  // them separately here.)
-  usePatientDirectory, // patient lookups have nothing doctor-specific in
-  useFindPatientById, // them — re-exported below so nurse pages have one
-  usePatientRecord, // import source instead of reaching into doctor-service.ts
+                          // appointments by whatever clinician id you pass
+                          // it, so nurse-service.ts calls it directly rather
+                          // than writing a second copy of the same hook.
+                          // (toBadgeStatus/resolvePatientNames are used
+                          // internally by this hook — no need to import
+                          // them separately here.)
+  usePatientDirectory,   // patient lookups have nothing doctor-specific in
+  useFindPatientById,    // them — re-exported below so nurse pages have one
+  usePatientRecord,      // import source instead of reaching into doctor-service.ts
   type DoctorAppointment,
 } from "@/lib/doctor-service";
 
@@ -39,13 +29,19 @@ export type { DoctorAppointment as NurseAppointment };
 
 // ---------------------------------------------------------------------------
 // Current nurse identity.
+//
+// NOT a copy of useCurrentDoctor — that hook is hardcoded to look in the
+// `doctors` collection. This one follows the same branch clinic-data.ts's
+// resolveClinicianId() already uses: check profiles/{uid}.role, and query
+// the `nurses` collection (idField "nurseId") instead, falling back to
+// "Nur-1" for demo accounts with no legacyUserId, same as the doctor side
+// falls back to "Doc-1".
 // ---------------------------------------------------------------------------
 
 export interface CurrentNurse {
   nurseId: string; // e.g. "Nur-1"
   userId?: number;
-  clinicId?: number;
-  clinicName?: string;
+  clinicId?: number; // confirmed real field on `nurses` docs — `doctors` docs don't have this one
   fullName: string;
   email?: string;
   contactNum?: string;
@@ -53,10 +49,7 @@ export interface CurrentNurse {
 
 const nurseCacheByUid = new Map<string, Promise<CurrentNurse>>();
 
-async function buildCurrentNurse(
-  nurseId: string,
-  nurseData: Record<string, any>,
-): Promise<CurrentNurse> {
+async function buildCurrentNurse(nurseId: string, nurseData: Record<string, any>): Promise<CurrentNurse> {
   let fullName = nurseId;
   let email: string | undefined;
   let contactNum: string | undefined;
@@ -71,63 +64,49 @@ async function buildCurrentNurse(
     }
   }
 
-  let clinicName: string | undefined;
-  if (nurseData.clinicId != null) {
-    const cSnap = await getDoc(doc(db, "clinics", String(nurseData.clinicId)));
-    if (cSnap.exists()) clinicName = cSnap.data().clinicName;
-  }
-
   return {
     nurseId,
     userId: nurseData.userId,
     clinicId: nurseData.clinicId,
-    clinicName,
     fullName,
     email,
     contactNum,
   };
 }
 
+async function fetchNurseByNurseId(nurseId: string): Promise<CurrentNurse> {
+  const snap = await getDoc(doc(db, "nurses", nurseId));
+  const data = snap.exists() ? snap.data() : { nurseId };
+  return buildCurrentNurse(nurseId, data);
+}
+
 async function resolveCurrentNurseForUid(uid: string): Promise<CurrentNurse> {
   const profileSnap = await getDoc(doc(db, "profiles", uid));
-  const profile = profileSnap.exists()
-    ? profileSnap.data()
-    : ({} as Record<string, any>);
+  const profile = profileSnap.exists() ? profileSnap.data() : ({} as Record<string, any>);
 
+  // profiles.role is a real, confirmed field ("doctor" / "nurse" / etc.) —
+  // doctor-service.ts's equivalent resolver never checks it (route guards
+  // in doctor.tsx/nurse.tsx are the only gate today), but since we have
+  // it, surfacing a mismatch here beats silently resolving the wrong
+  // identity if a route guard is ever bypassed or misconfigured.
   if (profile.role && profile.role !== "nurse") {
     throw new Error(`Signed-in user has role "${profile.role}", not "nurse"`);
   }
 
-  // Previously fell back to hardcoded "Nur-1" in both cases below — meaning
-  // a broken/incomplete profile silently showed a DIFFERENT real nurse's
-  // name and clinic instead of a clear error. Fail loudly instead.
   if (profile.legacyUserId == null) {
-    throw new Error(
-      "Your staff profile has no linked nurse record — contact whoever set up your account.",
-    );
+    return fetchNurseByNurseId("Nur-1");
   }
 
   const snap = await getDocs(
-    query(
-      collection(db, "nurses"),
-      where("userId", "==", Number(profile.legacyUserId)),
-    ),
+    query(collection(db, "nurses"), where("userId", "==", Number(profile.legacyUserId))),
   );
-  if (snap.empty) {
-    throw new Error(
-      "Your staff profile has no linked nurse record — contact whoever set up your account.",
-    );
-  }
+  if (snap.empty) return fetchNurseByNurseId("Nur-1");
 
   const data = snap.docs[0].data();
   return buildCurrentNurse(data.nurseId, data);
 }
 
-export function useCurrentNurse(): {
-  nurse: CurrentNurse | null;
-  loading: boolean;
-  error: string | null;
-} {
+export function useCurrentNurse(): { nurse: CurrentNurse | null; loading: boolean; error: string | null } {
   const [nurse, setNurse] = useState<CurrentNurse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -184,7 +163,12 @@ export function clearNurseCache(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard
+// Dashboard — same composition as useDoctorDashboard() (identity +
+// useDoctorAppointments + derived stats), just built on useCurrentNurse.
+// Dropped `pendingReviews` from the stats shape: nurse.index.tsx's UI only
+// ever renders dayTotal / dayCompleted / weekPatients / upcoming, so there's
+// no "review appointments" stat to compute here — see doctor.index.tsx's
+// extra 4th stat card for where that lives on the doctor side instead.
 // ---------------------------------------------------------------------------
 
 export interface NurseDashboardData {
@@ -205,9 +189,7 @@ export function useNurseDashboard(): {
   error: string | null;
 } {
   const { nurse, loading: nurseLoading, error } = useCurrentNurse();
-  const { appointments, loading: apptsLoading } = useDoctorAppointments(
-    nurse?.nurseId,
-  );
+  const { appointments, loading: apptsLoading } = useDoctorAppointments(nurse?.nurseId);
 
   const loading = nurseLoading || (!!nurse && apptsLoading);
 
@@ -216,19 +198,17 @@ export function useNurseDashboard(): {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const nowTime = new Date().toISOString().slice(11, 16); // HH:mm, for same-day "later today"
+  const dates = [...new Set(appointments.map((a) => a.date))].sort();
+  const scheduleDate = dates.includes(today)
+    ? today
+    : (dates.filter((d) => d <= today).pop() ?? dates[0] ?? today);
 
-  // Always show the real today, even if it's empty — no more silently
-  // falling back to the last day that happened to have appointments.
-  const scheduleDate = today;
   const day = appointments.filter((a) => a.date === scheduleDate);
 
   const weekStart = new Date(scheduleDate);
   weekStart.setDate(weekStart.getDate() - 6);
   const weekStartIso = weekStart.toISOString().slice(0, 10);
-  const week = appointments.filter(
-    (a) => a.date >= weekStartIso && a.date <= scheduleDate,
-  );
+  const week = appointments.filter((a) => a.date >= weekStartIso && a.date <= scheduleDate);
 
   const data: NurseDashboardData = {
     nurseId: nurse.nurseId,
@@ -238,12 +218,7 @@ export function useNurseDashboard(): {
       dayTotal: day.length,
       dayCompleted: day.filter((a) => a.status === "Complete").length,
       weekPatients: new Set(week.map((a) => a.patientId)).size,
-      // future days, OR later today
-      upcoming: appointments.filter(
-        (a) =>
-          a.date > scheduleDate ||
-          (a.date === scheduleDate && a.time > nowTime),
-      ).length,
+      upcoming: appointments.filter((a) => a.date > scheduleDate).length,
     },
   };
 
@@ -251,7 +226,9 @@ export function useNurseDashboard(): {
 }
 
 // ---------------------------------------------------------------------------
-// Weekly schedule
+// Weekly schedule — identical composition to useDoctorWeekSchedule(), reusing
+// the exact same computeWeekBounds()/useMinuteTick() (Sunday 18:00 rollover
+// and all), just keyed to a nurse instead of a doctor.
 // ---------------------------------------------------------------------------
 
 export function useNurseWeekSchedule(): {
@@ -263,9 +240,7 @@ export function useNurseWeekSchedule(): {
   error: string | null;
 } {
   const { nurse, loading: nurseLoading, error } = useCurrentNurse();
-  const { appointments, loading: apptsLoading } = useDoctorAppointments(
-    nurse?.nurseId,
-  );
+  const { appointments, loading: apptsLoading } = useDoctorAppointments(nurse?.nurseId);
   const now = useMinuteTick();
 
   const { start, end, dates } = computeWeekBounds(now);
@@ -293,32 +268,41 @@ export function useNurseWeekSchedule(): {
 // Shift handover log
 //
 // Consolidated here from clinic-data.ts, and CORRECTED against the real
-// Firestore export: handoverEntries docs only ever have
-// { nurseId, patientId, note, createdAt } — no shiftId/date/shiftType/
-// finalized field on the entry itself. shifts docs only have
-// { clinicId, date, finalized, finalizedAt, nurseId, shiftType } — no
-// entryCount/summary. So an entry's Day/Night shift is NOT stored — it's
-// classified at read time from the HOUR of createdAt, same as the old
-// localStorage version's summarizeShift() did. "Finalizing" a shift does
-// NOT touch existing entries (there's no field on them to mark) — it just
-// writes a shifts doc recording that this nurse closed out this shift.
+// Firestore export: handoverEntries docs only ever had
+// { nurseId, patientId, note, createdAt } — no clinicId. Since the log is
+// meant to be shared across ALL nurses at a clinic (not just the nurse who
+// wrote a note), clinicId is now written on every new entry going forward —
+// this IS a schema change, not just a query change. Existing entries
+// written before this change won't have clinicId and won't show up in the
+// shared view; there's no backfill here.
 //
-// Also note: createdAt/finalizedAt are real Firestore Timestamp objects in
-// your data, not ISO strings — using serverTimestamp()/Timestamp here to
-// match, unlike the ISO-string convention used elsewhere in clinic-data.ts.
+// The "resets each day, not each session" behavior was already happening
+// via isToday() below — it just wasn't obvious because entries were also
+// scoped to one nurse, so a different nurse (or a fresh login) saw an empty
+// list and it read as a session reset rather than a shared daily one.
+//
+// shifts docs only have { clinicId, date, finalized, finalizedAt, nurseId,
+// shiftType } — no entryCount/summary. An entry's Day/Night shift is NOT
+// stored — it's classified at read time from the HOUR of createdAt, same
+// as the old localStorage version's summarizeShift() did. "Finalizing" a
+// shift does NOT touch existing entries (there's no field on them to
+// mark) — it just writes a shifts doc. nurseId on that doc records WHO
+// finalized it, but the lock itself now applies clinic-wide, to match
+// "seen by all nurses."
+//
+// createdAt/finalizedAt are real Firestore Timestamp objects in your data,
+// not ISO strings — using serverTimestamp()/Timestamp here to match.
 
 export interface HandoverEntry {
   id: string;
-  nurseId: string;
+  clinicId: number;
+  nurseId: string; // who logged this specific note — still shown per-entry
   patientId?: string;
   note: string;
   createdAt: Timestamp;
 }
 
-function isInShiftWindow(
-  createdAt: Timestamp,
-  shift: "Day" | "Night",
-): boolean {
+function isInShiftWindow(createdAt: Timestamp, shift: "Day" | "Night"): boolean {
   const hour = createdAt.toDate().getHours();
   return shift === "Day" ? hour >= 7 && hour < 19 : hour >= 19 || hour < 7;
 }
@@ -331,14 +315,14 @@ export function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Today's entries for this nurse, classified into Day/Night by createdAt's
- * hour — not stored, computed here every time. */
+/** Today's entries for the whole clinic — every nurse's notes, not just
+ * the signed-in one — classified into Day/Night by createdAt's hour. */
 export async function fetchHandoverEntries(
-  nurseId: string,
+  clinicId: number,
   shift: "Day" | "Night",
 ): Promise<HandoverEntry[]> {
   const snap = await getDocs(
-    query(collection(db, "handoverEntries"), where("nurseId", "==", nurseId)),
+    query(collection(db, "handoverEntries"), where("clinicId", "==", clinicId)),
   );
   return snap.docs
     .map((d) => ({ id: d.id, ...(d.data() as Omit<HandoverEntry, "id">) }))
@@ -347,11 +331,13 @@ export async function fetchHandoverEntries(
 }
 
 export async function addHandoverEntry(input: {
+  clinicId: number;
   nurseId: string;
   patientId?: string;
   note: string;
 }): Promise<void> {
   await addDoc(collection(db, "handoverEntries"), {
+    clinicId: input.clinicId,
     nurseId: input.nurseId,
     patientId: input.patientId ?? null,
     note: input.note,
@@ -363,33 +349,37 @@ export async function removeHandoverEntry(entryId: string): Promise<void> {
   await deleteDoc(doc(db, "handoverEntries", entryId));
 }
 
-/** Whether THIS nurse has already finalized today's given shift. */
+/** Whether ANY nurse at this clinic has already finalized today's given
+ * shift — a clinic-wide lock, not a per-nurse one. */
 export async function fetchShiftStatus(
-  nurseId: string,
+  clinicId: number,
   shift: "Day" | "Night",
-): Promise<{ finalized: boolean; finalizedAt?: Timestamp } | null> {
+): Promise<{ finalized: boolean; finalizedAt?: Timestamp; finalizedBy?: string } | null> {
   const snap = await getDocs(
     query(
       collection(db, "shifts"),
-      where("nurseId", "==", nurseId),
+      where("clinicId", "==", clinicId),
       where("date", "==", todayIso()),
       where("shiftType", "==", shift),
     ),
   );
-  if (snap.empty) return null;
-  const data = snap.docs[0].data();
-  return { finalized: !!data.finalized, finalizedAt: data.finalizedAt };
+  const finalizedDoc = snap.docs.find((d) => d.data().finalized);
+  if (!finalizedDoc) return snap.empty ? null : { finalized: false };
+  const data = finalizedDoc.data();
+  return { finalized: true, finalizedAt: data.finalizedAt, finalizedBy: data.nurseId };
 }
 
-/** Records that this nurse has closed out today's shift. Does not delete
- * or modify any handoverEntries — those remain as permanent history. */
+/** Records that shift as closed out for the WHOLE clinic — any nurse who
+ * finalizes locks it for everyone, though the doc still records which
+ * nurse actually did it. Does not delete or modify any handoverEntries —
+ * those remain as permanent history. */
 export async function finalizeShift(input: {
-  nurseId: string;
   clinicId: number;
+  nurseId: string; // who is finalizing — recorded, not the scope of the lock
   shift: "Day" | "Night";
 }): Promise<void> {
-  const existing = await fetchShiftStatus(input.nurseId, input.shift);
-  if (existing?.finalized) return;
+  const existing = await fetchShiftStatus(input.clinicId, input.shift);
+  if (existing?.finalized) return; // already finalized by someone — no-op, not an error
 
   await addDoc(collection(db, "shifts"), {
     clinicId: input.clinicId,
@@ -401,11 +391,8 @@ export async function finalizeShift(input: {
   });
 }
 
-/** count/patient-count from a list of entries. No fetch. */
-export function summarizeShift(entries: HandoverEntry[]): {
-  count: number;
-  patients: number;
-} {
+/** Pure helper — count/patient-count from a list of entries. No fetch. */
+export function summarizeShift(entries: HandoverEntry[]): { count: number; patients: number } {
   return {
     count: entries.length,
     patients: new Set(entries.map((e) => e.patientId).filter(Boolean)).size,
@@ -415,6 +402,10 @@ export function summarizeShift(entries: HandoverEntry[]): {
 // ---------------------------------------------------------------------------
 // Adherence (chronic-care medication dose logging)
 //
+// UNCONFIRMED against real data — patients/{id}/adherenceLogs is a
+// subcollection, and the export script only pulled top-level collections,
+// so this section is still the best-guess design from before, not verified
+// the way handover above now is.
 
 /** Today's dose status for a patient, keyed by medication name. */
 export async function fetchAdherenceForToday(
@@ -422,10 +413,7 @@ export async function fetchAdherenceForToday(
 ): Promise<Record<string, boolean>> {
   const date = todayIso();
   const snap = await getDocs(
-    query(
-      collection(db, "patients", patientId, "adherenceLogs"),
-      where("date", "==", date),
-    ),
+    query(collection(db, "patients", patientId, "adherenceLogs"), where("date", "==", date)),
   );
   const out: Record<string, boolean> = {};
   snap.docs.forEach((d) => {
@@ -443,16 +431,13 @@ export async function setAdherence(
   nurseId: string,
 ): Promise<void> {
   const date = todayIso();
-  await setDoc(
-    doc(db, "patients", patientId, "adherenceLogs", `${date}_${med}`),
-    {
-      med,
-      date,
-      taken,
-      nurseId,
-      updatedAt: serverTimestamp(),
-    },
-  );
+  await setDoc(doc(db, "patients", patientId, "adherenceLogs", `${date}_${med}`), {
+    med,
+    date,
+    taken,
+    nurseId,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +473,6 @@ export interface DigitizedPatientData {
 
 export async function saveDigitizedFile(
   data: DigitizedPatientData,
-  clinicId?: number,
 ): Promise<{ patientId: string; matchedExisting: boolean }> {
   let patientId: string;
   let matchedExisting = false;
@@ -501,10 +485,7 @@ export async function saveDigitizedFile(
   if (!uSnap.empty) {
     const userDocId = uSnap.docs[0].id;
     const pSnap = await getDocs(
-      query(
-        collection(db, "patients"),
-        where("userId", "==", Number(userDocId)),
-      ),
+      query(collection(db, "patients"), where("userId", "==", Number(userDocId))),
     );
     if (!pSnap.empty) {
       matchedExisting = true;
@@ -564,7 +545,10 @@ export async function saveDigitizedFile(
 
     await setDoc(
       doc(db, "patients", patientId!),
-      { chronicCondition: data.diagnosis || "Not yet assessed" },
+      {
+        chronicCondition: data.diagnosis || "Not yet assessed",
+        dateOfBirth: data.dateOfBirth,
+      },
       { merge: true },
     );
   }
