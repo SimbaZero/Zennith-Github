@@ -1,70 +1,122 @@
 import { useEffect, useState } from "react";
+import {
+  addDoc,
+  collection,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  where,
+  serverTimestamp,
+  type Timestamp,
+} from "firebase/firestore";
+import { db } from "@/firebase";
+
+// Real Firestore-backed audit log. Replaces the previous localStorage
+// version, which was invisible across devices, capped at 500 rows, and
+// silently wiped when a user cleared site data — meaning it was not an
+// audit trail in any meaningful sense.
+//
+// Matches the conventions of the existing real queueAudit collection.
 
 export type SystemLog = {
   id: string;
-  facility_id: string | null;
+  clinicId: number | null; // null = platform-wide event
   actor_id: string;
   action_type: string;
   description: string;
-  timestamp: string; // ISO
+  timestamp: string; // ISO, derived from the Firestore server timestamp
 };
 
-const KEY = "zennith_system_logs";
-const listeners = new Set<() => void>();
-const emit = () => listeners.forEach((f) => f());
+const COLLECTION = "systemAudit";
 
-function read(): SystemLog[] {
-  if (typeof window === "undefined") return [];
+/** Fire-and-forget: never blocks or breaks the action being logged. */
+export function logAction(entry: {
+  clinicId?: number | null;
+  actor_id: string;
+  action_type: string;
+  description: string;
+}) {
+  addDoc(collection(db, COLLECTION), {
+    clinicId: entry.clinicId ?? null,
+    actor_id: entry.actor_id,
+    action_type: entry.action_type,
+    description: entry.description,
+    timestamp: serverTimestamp(),
+  }).catch((err) => {
+    // An audit write failing must never take down the user's actual action.
+    console.error("Audit log write failed:", err);
+  });
+}
+
+function toIso(ts: Timestamp | null | undefined): string {
   try {
-    return JSON.parse(localStorage.getItem(KEY) || "[]") as SystemLog[];
+    return ts?.toDate?.().toISOString() ?? new Date().toISOString();
   } catch {
-    return [];
+    return new Date().toISOString();
   }
 }
-function write(rows: SystemLog[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(KEY, JSON.stringify(rows.slice(0, 500)));
-  emit();
-}
 
-export function logAction(entry: Omit<SystemLog, "id" | "timestamp">) {
-  const row: SystemLog = {
-    id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    timestamp: new Date().toISOString(),
-    ...entry,
-  };
-  write([row, ...read()]);
-  return row;
-}
+/**
+ * Live audit log.
+ *  - clinicId: number  -> only that clinic's events (what an Admin sees)
+ *  - clinicId: undefined -> everything, all clinics (what a Super Admin sees)
+ */
+export function useLogs(
+  clinicId?: number | null,
+  limitCount = 200,
+): { rows: SystemLog[]; loading: boolean; error: string | null } {
+  const [rows, setRows] = useState<SystemLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-export function getLogs(facilityId?: string | null): SystemLog[] {
-  const all = read();
-  if (facilityId === undefined) return all;
-  return all.filter((r) => r.facility_id === facilityId);
-}
-
-export function useLogs(facilityId?: string | null): SystemLog[] {
-  const [rows, setRows] = useState<SystemLog[]>(() => getLogs(facilityId));
   useEffect(() => {
-    const f = () => setRows(getLogs(facilityId));
-    listeners.add(f);
-    f();
-    return () => {
-      listeners.delete(f);
-    };
-  }, [facilityId]);
-  return rows;
-}
+    setLoading(true);
+    setError(null);
 
-/** Seed a couple of demo entries so panels don't feel empty on first load. */
-export function seedLogsIfEmpty() {
-  if (typeof window === "undefined") return;
-  if (read().length > 0) return;
-  const base = Date.now();
-  const seed: SystemLog[] = [
-    { id: "log_seed_1", facility_id: "hillbrow", actor_id: "admin", action_type: "settings.update", description: "Queue window set to 07:00–20:00", timestamp: new Date(base - 3600_000).toISOString() },
-    { id: "log_seed_2", facility_id: "orchards", actor_id: "admin", action_type: "staff.create", description: "Onboarded doctor \"gandi\"", timestamp: new Date(base - 7200_000).toISOString() },
-    { id: "log_seed_3", facility_id: null, actor_id: "superadmin", action_type: "facility.register", description: "Registered Yeoville CHC", timestamp: new Date(base - 86_400_000).toISOString() },
-  ];
-  write(seed);
+    const q =
+      clinicId == null
+        ? query(
+            collection(db, COLLECTION),
+            orderBy("timestamp", "desc"),
+            limit(limitCount),
+          )
+        : query(
+            collection(db, COLLECTION),
+            where("clinicId", "==", clinicId),
+            orderBy("timestamp", "desc"),
+            limit(limitCount),
+          );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setRows(
+          snap.docs.map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              clinicId: data.clinicId ?? null,
+              actor_id: data.actor_id ?? "unknown",
+              action_type: data.action_type ?? "unknown",
+              description: data.description ?? "",
+              timestamp: toIso(data.timestamp),
+            };
+          }),
+        );
+        setLoading(false);
+      },
+      (err) => {
+        // A missing Firestore composite index shows up here — the console
+        // error from Firebase includes a direct link to create it.
+        console.error("Audit log read failed:", err);
+        setError(err.message ?? "Could not load audit log");
+        setLoading(false);
+      },
+    );
+
+    return () => unsub();
+  }, [clinicId, limitCount]);
+
+  return { rows, loading, error };
 }

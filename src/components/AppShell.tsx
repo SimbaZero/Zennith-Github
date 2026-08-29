@@ -261,6 +261,7 @@ export function AppShell({
           </h1>
           <div className="flex-1" />
           {role !== "patient" &&
+            role !== "super_admin" &&
             (role === "pharmacist" ? (
               <ClinicChip
                 clinicId={realPharmacistClinic.activeClinicId ?? ""}

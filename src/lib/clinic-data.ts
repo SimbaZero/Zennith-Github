@@ -2,12 +2,14 @@
 // Join path for a doctor's schedule:
 //   profiles/{authUid}.legacyUserId → doctors.userId → doctors.doctorId
 //   → appointments.clinician → patients/{patientId}.userId → users/{userId}
+import { useEffect, useState } from "react";
 import {
   addDoc,
   collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   getFirestore,
   limit,
@@ -1566,4 +1568,190 @@ export async function updateMedicalRecord(
     ...stripUndefined(input),
     lastUpdated: new Date().toISOString(),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Real clinic registry — replaces the old fake, browser-only facilities.ts.
+// Clinics now go through a real pending -> approved workflow.
+// ---------------------------------------------------------------------------
+
+export interface ClinicRecord {
+  clinicId: number;
+  clinicName: string;
+  type: "public" | "private";
+  address?: string;
+  status: "pending" | "active";
+  plan?: "public-standard" | "private-standard";
+  billingStatus?: "not-set-up" | "active";
+  contactName?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  registrationNumber?: string;
+}
+
+export async function listClinics(): Promise<ClinicRecord[]> {
+  const snap = await getDocs(collection(db, "clinics"));
+  return snap.docs
+    .map((d) => {
+      const data = d.data();
+      return {
+        clinicId: Number(data.clinicId),
+        clinicName: data.clinicName ?? `Clinic ${data.clinicId}`,
+        type: (data.type === "private" ? "private" : "public") as
+          | "public"
+          | "private",
+        address: data.Coordinates,
+        // Existing pre-loaded clinics have no status field at all — treat
+        // those as already active rather than newly pending.
+        status: data.status === "pending" ? "pending" : "active",
+        plan: data.plan,
+        billingStatus: data.billingStatus,
+        contactName: data.contactName,
+        contactEmail: data.contactEmail,
+        contactPhone: data.contactPhone,
+        registrationNumber: data.registrationNumber,
+      } satisfies ClinicRecord;
+    })
+    .sort((a, b) => a.clinicName.localeCompare(b.clinicName));
+}
+
+// Public self-serve submission — no sign-in required. Starts "pending",
+// invisible everywhere except Super Admin's review queue until approved.
+export async function submitClinicApplication(input: {
+  clinicName: string;
+  type: "public" | "private";
+  address?: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone?: string;
+  registrationNumber?: string;
+  plan: "public-standard" | "private-standard";
+}): Promise<ClinicRecord> {
+  const clinicId = await runTransaction(db, async (tx) => {
+    const ref = doc(db, "counters", "registration");
+    const snap = await tx.get(ref);
+    const cur = snap.exists() ? (snap.data() as Record<string, number>) : {};
+    const next = (cur.clinicNo ?? 0) + 1;
+    tx.set(ref, { ...cur, clinicNo: next }, { merge: true });
+    return next;
+  });
+
+  await setDoc(doc(db, "clinics", String(clinicId)), {
+    clinicId,
+    clinicName: input.clinicName,
+    type: input.type,
+    status: "pending",
+    ...(input.address ? { Coordinates: input.address } : {}),
+    contactName: input.contactName,
+    contactEmail: input.contactEmail,
+    plan: input.plan,
+    // TODO(billing): no real payment processor is connected yet. Billing is
+    // arranged manually after approval. Real card/debit-order capture needs
+    // a payment provider account (PayFast/Yoco/Paystack etc.) AND the team's
+    // final pricing decision — neither exists yet, so this is deliberately
+    // not faked with a fake bank-details form.
+    billingStatus: "not-set-up",
+    ...(input.contactPhone ? { contactPhone: input.contactPhone } : {}),
+    ...(input.registrationNumber
+      ? { registrationNumber: input.registrationNumber }
+      : {}),
+  });
+
+  return { clinicId, status: "pending", ...input };
+}
+
+export async function approveClinic(clinicId: number): Promise<void> {
+  await updateDoc(doc(db, "clinics", String(clinicId)), { status: "active" });
+}
+
+export async function rejectClinicApplication(clinicId: number): Promise<void> {
+  await deleteDoc(doc(db, "clinics", String(clinicId)));
+}
+
+// Only blocks on real staff (doctor/nurse/pharmacist/receptionist) still
+// assigned to this clinic — does NOT check patients, appointments, or
+// inventory. Flagging that honestly rather than pretending this is a full
+// safety net: a clean staff-reassignment path isn't built yet either.
+export async function deleteClinicIfEmpty(
+  clinicId: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const checks: Array<{
+    col: string;
+    field: string;
+    op: "==" | "array-contains";
+  }> = [
+    { col: "doctors", field: "clinicId", op: "==" },
+    { col: "doctors", field: "clinicIds", op: "array-contains" },
+    { col: "nurses", field: "clinicId", op: "==" },
+    { col: "pharmacists", field: "clinicId", op: "==" },
+    { col: "pharmacists", field: "clinicIds", op: "array-contains" },
+    { col: "receptionists", field: "clinicId", op: "==" },
+  ];
+  for (const c of checks) {
+    const snap = await getDocs(
+      query(collection(db, c.col), where(c.field, c.op, clinicId)),
+    );
+    if (!snap.empty) {
+      return {
+        ok: false,
+        error: `Can't remove — ${snap.size} ${c.col} still assigned to this clinic. Reassign or remove them first.`,
+      };
+    }
+  }
+  await deleteDoc(doc(db, "clinics", String(clinicId)));
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Real connectivity check. Deliberately narrow: this answers "can this
+// browser reach Firestore right now", nothing more. It does NOT check whether
+// every feature works, so the UI must not claim "all services healthy".
+// Real service-health monitoring + alerting would need a backend that runs
+// when nobody is logged in — not something the app itself can do.
+// ---------------------------------------------------------------------------
+
+export function useDatabaseReachable(): "checking" | "online" | "offline" {
+  const [state, setState] = useState<"checking" | "online" | "offline">(
+    "checking",
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function check() {
+      // The browser's own offline flag is instant and free — trust it first.
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        if (!cancelled) setState("offline");
+        return;
+      }
+      try {
+        // getDocFromServer, NOT getDoc: plain getDoc happily returns
+        // Firestore's local cache, so it reports success even with the
+        // network off. This forces a real round trip to the server.
+        await getDocFromServer(doc(db, "counters", "registration"));
+        if (!cancelled) setState("online");
+      } catch {
+        if (!cancelled) setState("offline");
+      }
+    }
+
+    check();
+    const id = setInterval(check, 15_000);
+
+    // React immediately when the browser gains/loses its connection, instead
+    // of waiting up to 15s for the next poll.
+    const onOnline = () => check();
+    const onOffline = () => !cancelled && setState("offline");
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  return state;
 }

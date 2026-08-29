@@ -43,12 +43,24 @@ export function facilityName(id: string | null | undefined): string {
   if (!id) return "Platform-wide";
   return getFacilities().find((f) => f.id === id)?.name ?? id;
 }
-export function registerFacility(f: Omit<Facility, "id" | "createdAt">, actor: string): Facility {
-  const id = f.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 32) || `fac_${Date.now()}`;
-  const rec: Facility = { ...f, id, createdAt: new Date().toISOString().slice(0, 10) };
+export function registerFacility(
+  f: Omit<Facility, "id" | "createdAt">,
+  actor: string,
+): Facility {
+  const id =
+    f.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "")
+      .slice(0, 32) || `fac_${Date.now()}`;
+  const rec: Facility = {
+    ...f,
+    id,
+    createdAt: new Date().toISOString().slice(0, 10),
+  };
   writeCustom([...readCustom(), rec]);
   logAction({
-    facility_id: id,
+    clinicId: null,
     actor_id: actor,
     action_type: "facility.register",
     description: `Registered ${f.kind} "${f.name}" (${f.area})`,
@@ -58,7 +70,7 @@ export function registerFacility(f: Omit<Facility, "id" | "createdAt">, actor: s
 export function removeFacility(id: string, actor: string) {
   writeCustom(readCustom().filter((r) => r.id !== id));
   logAction({
-    facility_id: id,
+    clinicId: null,
     actor_id: actor,
     action_type: "facility.remove",
     description: `Removed facility ${id}`,

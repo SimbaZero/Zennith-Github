@@ -19,6 +19,7 @@ import { Route as NurseRouteImport } from './routes/nurse'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as DoctorRouteImport } from './routes/doctor'
+import { Route as ClinicSignupRouteImport } from './routes/clinic-signup'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SuperAdminIndexRouteImport } from './routes/super-admin.index'
@@ -101,6 +102,11 @@ const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
 const DoctorRoute = DoctorRouteImport.update({
   id: '/doctor',
   path: '/doctor',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ClinicSignupRoute = ClinicSignupRouteImport.update({
+  id: '/clinic-signup',
+  path: '/clinic-signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -274,6 +280,7 @@ const DoctorPatientRecordPidRoute = DoctorPatientRecordPidRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/clinic-signup': typeof ClinicSignupRoute
   '/doctor': typeof DoctorRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -318,6 +325,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/clinic-signup': typeof ClinicSignupRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
@@ -358,6 +366,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/clinic-signup': typeof ClinicSignupRoute
   '/doctor': typeof DoctorRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -405,6 +414,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/clinic-signup'
     | '/doctor'
     | '/forgot-password'
     | '/login'
@@ -449,6 +459,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/clinic-signup'
     | '/forgot-password'
     | '/login'
     | '/signup'
@@ -488,6 +499,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/clinic-signup'
     | '/doctor'
     | '/forgot-password'
     | '/login'
@@ -534,6 +546,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
+  ClinicSignupRoute: typeof ClinicSignupRoute
   DoctorRoute: typeof DoctorRouteWithChildren
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
@@ -616,6 +629,13 @@ declare module '@tanstack/react-router' {
       path: '/doctor'
       fullPath: '/doctor'
       preLoaderRoute: typeof DoctorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/clinic-signup': {
+      id: '/clinic-signup'
+      path: '/clinic-signup'
+      fullPath: '/clinic-signup'
+      preLoaderRoute: typeof ClinicSignupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -981,6 +1001,7 @@ const SuperAdminRouteWithChildren = SuperAdminRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
+  ClinicSignupRoute: ClinicSignupRoute,
   DoctorRoute: DoctorRouteWithChildren,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
