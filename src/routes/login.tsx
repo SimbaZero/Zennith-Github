@@ -1,15 +1,8 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import {
-  Eye,
-  EyeOff,
-  ChevronLeft,
-  ChevronRight,
-  Building2,
-} from "lucide-react";
+import { Eye, EyeOff, ChevronLeft, ChevronRight } from "lucide-react";
 import { ZennithStar } from "@/components/ZennithStar";
 import { checkCredentials } from "@/lib/auth";
-import { setActiveClinicId, type ClinicId, DEFAULT_CLINIC } from "@/lib/clinic";
 import heroClinic1 from "@/assets/hero-clinic-1.jpg";
 import heroClinic2 from "@/assets/hero-clinic-2.jpg";
 import heroClinic3 from "@/assets/hero-clinic-3.jpg";
@@ -39,7 +32,6 @@ function Login() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [clinic, setClinic] = useState<ClinicId>(DEFAULT_CLINIC);
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -79,13 +71,13 @@ function Login() {
       }
     }
 
-    // A profile-assigned facility wins; otherwise use the clinic picked above.
-    const fac = user.facilityId ?? clinic;
-    if (user.role !== "super_admin" && user.role !== "patient")
-      setActiveClinicId(fac as ClinicId);
+    // Clinic scope now comes from the user's own Firestore record after
+    // login (useCurrentDoctor / useCurrentNurse / useCurrentPharmacist /
+    // useCurrentAdmin), not from a picker on this page — that ran on a
+    // hardcoded 3-clinic list unrelated to the real clinics collection.
     navigate({
       to: "/two-factor",
-      search: { role: user.role, u: username.trim(), f: fac ?? "" },
+      search: { role: user.role, u: username.trim(), f: user.facilityId ?? "" },
     });
   };
 

@@ -32,6 +32,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as SuperAdminFacilitiesRouteImport } from './routes/super-admin.facilities'
 import { Route as SuperAdminAuditRouteImport } from './routes/super-admin.audit'
 import { Route as ReceptionistRegistrationRouteImport } from './routes/receptionist.registration'
+import { Route as ReceptionistQueueRouteImport } from './routes/receptionist.queue'
 import { Route as ReceptionistProfilesRouteImport } from './routes/receptionist.profiles'
 import { Route as ReceptionistAppointmentsRouteImport } from './routes/receptionist.appointments'
 import { Route as PharmacistStockRouteImport } from './routes/pharmacist.stock'
@@ -170,6 +171,11 @@ const ReceptionistRegistrationRoute =
     path: '/registration',
     getParentRoute: () => ReceptionistRoute,
   } as any)
+const ReceptionistQueueRoute = ReceptionistQueueRouteImport.update({
+  id: '/queue',
+  path: '/queue',
+  getParentRoute: () => ReceptionistRoute,
+} as any)
 const ReceptionistProfilesRoute = ReceptionistProfilesRouteImport.update({
   id: '/profiles',
   path: '/profiles',
@@ -309,6 +315,7 @@ export interface FileRoutesByFullPath {
   '/pharmacist/stock': typeof PharmacistStockRoute
   '/receptionist/appointments': typeof ReceptionistAppointmentsRoute
   '/receptionist/profiles': typeof ReceptionistProfilesRoute
+  '/receptionist/queue': typeof ReceptionistQueueRoute
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
@@ -348,6 +355,7 @@ export interface FileRoutesByTo {
   '/pharmacist/stock': typeof PharmacistStockRoute
   '/receptionist/appointments': typeof ReceptionistAppointmentsRoute
   '/receptionist/profiles': typeof ReceptionistProfilesRoute
+  '/receptionist/queue': typeof ReceptionistQueueRoute
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
@@ -395,6 +403,7 @@ export interface FileRoutesById {
   '/pharmacist/stock': typeof PharmacistStockRoute
   '/receptionist/appointments': typeof ReceptionistAppointmentsRoute
   '/receptionist/profiles': typeof ReceptionistProfilesRoute
+  '/receptionist/queue': typeof ReceptionistQueueRoute
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
@@ -443,6 +452,7 @@ export interface FileRouteTypes {
     | '/pharmacist/stock'
     | '/receptionist/appointments'
     | '/receptionist/profiles'
+    | '/receptionist/queue'
     | '/receptionist/registration'
     | '/super-admin/audit'
     | '/super-admin/facilities'
@@ -482,6 +492,7 @@ export interface FileRouteTypes {
     | '/pharmacist/stock'
     | '/receptionist/appointments'
     | '/receptionist/profiles'
+    | '/receptionist/queue'
     | '/receptionist/registration'
     | '/super-admin/audit'
     | '/super-admin/facilities'
@@ -528,6 +539,7 @@ export interface FileRouteTypes {
     | '/pharmacist/stock'
     | '/receptionist/appointments'
     | '/receptionist/profiles'
+    | '/receptionist/queue'
     | '/receptionist/registration'
     | '/super-admin/audit'
     | '/super-admin/facilities'
@@ -720,6 +732,13 @@ declare module '@tanstack/react-router' {
       path: '/registration'
       fullPath: '/receptionist/registration'
       preLoaderRoute: typeof ReceptionistRegistrationRouteImport
+      parentRoute: typeof ReceptionistRoute
+    }
+    '/receptionist/queue': {
+      id: '/receptionist/queue'
+      path: '/queue'
+      fullPath: '/receptionist/queue'
+      preLoaderRoute: typeof ReceptionistQueueRouteImport
       parentRoute: typeof ReceptionistRoute
     }
     '/receptionist/profiles': {
@@ -965,6 +984,7 @@ const PharmacistRouteWithChildren = PharmacistRoute._addFileChildren(
 interface ReceptionistRouteChildren {
   ReceptionistAppointmentsRoute: typeof ReceptionistAppointmentsRoute
   ReceptionistProfilesRoute: typeof ReceptionistProfilesRoute
+  ReceptionistQueueRoute: typeof ReceptionistQueueRoute
   ReceptionistRegistrationRoute: typeof ReceptionistRegistrationRoute
   ReceptionistIndexRoute: typeof ReceptionistIndexRoute
   ReceptionistProfilesPidRoute: typeof ReceptionistProfilesPidRoute
@@ -973,6 +993,7 @@ interface ReceptionistRouteChildren {
 const ReceptionistRouteChildren: ReceptionistRouteChildren = {
   ReceptionistAppointmentsRoute: ReceptionistAppointmentsRoute,
   ReceptionistProfilesRoute: ReceptionistProfilesRoute,
+  ReceptionistQueueRoute: ReceptionistQueueRoute,
   ReceptionistRegistrationRoute: ReceptionistRegistrationRoute,
   ReceptionistIndexRoute: ReceptionistIndexRoute,
   ReceptionistProfilesPidRoute: ReceptionistProfilesPidRoute,

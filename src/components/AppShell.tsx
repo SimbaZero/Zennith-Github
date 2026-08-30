@@ -76,6 +76,7 @@ const navByRole: Record<Role, NavItem[]> = {
   ],
   receptionist: [
     { to: "/receptionist", label: "Dashboard", icon: LayoutDashboard },
+    { to: "/receptionist/queue", label: "Acute Queue", icon: ClipboardList },
     { to: "/receptionist/appointments", label: "Appointments", icon: Calendar },
     {
       to: "/receptionist/registration",

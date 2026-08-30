@@ -3,25 +3,18 @@ import { AppShell, StatusBadge } from "@/components/AppShell";
 import {
   UserCircle2,
   CalendarPlus,
-  MessageCircle,
-  Plus,
   AlertTriangle,
   ArrowRight,
-  CheckCircle,
-  ClipboardList,
 } from "lucide-react";
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { useNow } from "@/lib/store";
-
 import type {
   QueueEntry,
   TriageLevel,
   ClinicWideAppointment,
 } from "@/lib/clinic-data";
 import { resolveCurrentReceptionist } from "@/lib/clinic-data";
-import { usePatientDirectory } from "@/lib/doctor-service";
 
 export const Route = createFileRoute("/receptionist/")({
   component: ReceptionDashboard,
@@ -35,21 +28,12 @@ const TRIAGE_COLORS: Record<TriageLevel, string> = {
   green: "bg-green-500 text-white",
 };
 
-const TRIAGE_LABELS: Record<TriageLevel, string> = {
-  red: "Critical — Immediate",
-  orange: "Emergent — 10 min",
-  yellow: "Urgent — 30 min",
-  green: "Less Urgent — 60 min",
+const TRIAGE_SHORT: Record<TriageLevel, string> = {
+  red: "CRITICAL",
+  orange: "EMERGENT",
+  yellow: "URGENT",
+  green: "ROUTINE",
 };
-
-const TRIAGE_MAX_WAIT_MINUTES: Record<TriageLevel, number> = {
-  red: 0,
-  orange: 10,
-  yellow: 30,
-  green: 60,
-};
-
-type LogEntry = { ts: string; msg: string; type: "info" | "warn" | "critical" };
 
 let clinicData: typeof import("@/lib/clinic-data") | null = null;
 async function getClinicData() {
@@ -69,131 +53,26 @@ function ReceptionDashboard() {
     receptionist?.clinicId != null ? String(receptionist.clinicId) : null;
 
   const [queue, setQueue] = useState<QueueEntry[]>([]);
-  const [walkInQuery, setWalkInQuery] = useState("");
-  const { patients: clinicPatients } = usePatientDirectory(
-    500,
-    receptionist?.clinicId ?? undefined,
-  );
-  const walkInMatches = walkInQuery.trim()
-    ? clinicPatients
-        .filter(
-          (p) =>
-            p.name.toLowerCase().includes(walkInQuery.toLowerCase()) ||
-            p.patientId.toLowerCase().includes(walkInQuery.toLowerCase()),
-        )
-        .slice(0, 6)
-    : [];
-  const [queueError, setQueueError] = useState(false);
-
-  // Pace indicator — compares real completed visits today against each
-  // one's own triage max-wait target, not a fixed number. Needs at least
-  // 2 completed visits today to say anything meaningful; otherwise shows
-  // "Not enough data yet" rather than guessing.
-  const queuePace = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const doneToday = queue.filter(
-      (q) =>
-        q.status === "done" && q.calledAt && q.joinedAt.slice(0, 10) === today,
-    );
-    if (doneToday.length < 2) return null;
-    const ratios = doneToday.map((q) => {
-      const waited =
-        (new Date(q.calledAt!).getTime() - new Date(q.joinedAt).getTime()) /
-        60000;
-      const target = TRIAGE_MAX_WAIT_MINUTES[q.triage] || 30;
-      return waited / target;
-    });
-    const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
-    if (avg < 0.7)
-      return {
-        label: "Fast today",
-        cls: "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]",
-      };
-    if (avg <= 1.2)
-      return {
-        label: "Normal pace",
-        cls: "bg-[oklch(0.96_0.1_85)] text-[oklch(0.4_0.15_70)]",
-      };
-    return {
-      label: "Running slow",
-      cls: "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]",
-    };
-  }, [queue]);
   const [clinicReady, setClinicReady] = useState(false);
-  const [auditLog, setAuditLog] = useState<LogEntry[]>([]);
-  const [auditLogLoading, setAuditLogLoading] = useState(true);
-  const [auditLogError, setAuditLogError] = useState(false);
 
   useEffect(() => {
     getClinicData().then(() => setClinicReady(true));
   }, []);
 
-  // Live queue subscription — scoped to the receptionist's real clinicId
-  // (was previously the fake localStorage-based getUserFacility(), which is
-  // disconnected from the real receptionists.clinicId — see #17/#18 in
-  // docs/db-issues.md).
+  // Read-only live view — the dashboard shows the shape of the queue, the
+  // dedicated /receptionist/queue page is where you actually work it.
   useEffect(() => {
     if (!clinicReady) return;
     let unsubscribe: (() => void) | undefined;
     getClinicData().then(({ subscribeQueue }) => {
       unsubscribe = subscribeQueue(
         (rows) => setQueue(rows),
-        () => setQueueError(true),
+        () => {},
         realFacilityId,
       );
     });
     return () => unsubscribe?.();
   }, [clinicReady, realFacilityId]);
-
-  // Fetch recent audit events on load — now scoped to the real clinic
-  // instead of pulling every clinic's history.
-  //
-  // This resets to [] on every mount (navigating away and back to this
-  // page remounts it), so without a loading state a normal in-flight
-  // refetch looked identical to "broken and gone" — nothing rendered at
-  // all while it was empty, whether that emptiness was "still loading" or
-  // "genuinely nothing here." Now those are visibly different states.
-  useEffect(() => {
-    if (!clinicReady) return;
-    setAuditLogLoading(true);
-    setAuditLogError(false);
-    getClinicData()
-      .then(({ fetchQueueAudit }) =>
-        fetchQueueAudit(undefined, 20, realFacilityId),
-      )
-      .then((events) => {
-        setAuditLog(
-          events.map((e) => ({
-            ts: e.timestamp?.toDate?.()
-              ? e.timestamp.toDate().toISOString()
-              : new Date().toISOString(),
-            msg: `${e.action.toUpperCase()}: ${e.patientId} — ${e.details}`,
-            type:
-              e.action === "handoff"
-                ? "warn"
-                : e.triage === "red"
-                  ? "critical"
-                  : "info",
-          })),
-        );
-        setAuditLogLoading(false);
-      })
-      .catch((err) => {
-        console.error("Failed to load audit log:", err);
-        setAuditLogError(true);
-        setAuditLogLoading(false);
-      });
-  }, [clinicReady, realFacilityId]);
-
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({
-    patientId: "",
-    reason: "",
-    clinician: "",
-    triage: "yellow" as TriageLevel,
-  });
-  const [busy, setBusy] = useState(false);
-  const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
 
   const { data: appointments = [] } = useQuery({
     queryKey: ["recent-appointments", realFacilityId],
@@ -204,7 +83,6 @@ function ReceptionDashboard() {
     enabled: clinicReady,
   });
 
-  // Acute care filtering
   const active = queue.filter((q) => q.status !== "done");
   const waiting = active.filter(
     (q) => q.status === "waiting" || q.status === "called",
@@ -213,142 +91,10 @@ function ReceptionDashboard() {
     (q) => q.status === "in-room" || q.status === "handoff",
   );
   const criticalWaiting = waiting.filter((q) => q.triage === "red");
+  const nextUp = waiting.slice(0, 4);
 
-  // Escalation alerts. Was previously pushing a fresh duplicate log entry
-  // every time this effect re-ran (every 60s, via `now`) for the same
-  // still-waiting patient — flooding the 20-entry audit log with repeats of
-  // the same escalation and pushing real events off the bottom. Now tracked
-  // so each patient only logs once per queue entry.
-  const escalatedRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!clinicReady) return;
-    const stillWaitingIds = new Set(waiting.map((q) => q.id));
-    // Drop tracking for anyone no longer waiting (called, done, requeued).
-    for (const id of escalatedRef.current) {
-      if (!stillWaitingIds.has(id)) escalatedRef.current.delete(id);
-    }
-    waiting.forEach((q) => {
-      const waitMin = (now.getTime() - new Date(q.joinedAt).getTime()) / 60000;
-      const maxWait = TRIAGE_MAX_WAIT_MINUTES[q.triage];
-      if (waitMin > maxWait && q.status === "waiting") {
-        toast.error(
-          `${q.patientName} (${q.triage.toUpperCase()}) exceeded ${maxWait}min wait!`,
-          { duration: 10000, id: `escalation-${q.id}` },
-        );
-        if (!escalatedRef.current.has(q.id)) {
-          escalatedRef.current.add(q.id);
-          const entry: LogEntry = {
-            ts: now.toISOString(),
-            msg: `ESCALATION: ${q.patientId} (${q.triage.toUpperCase()}) exceeded ${maxWait}min wait`,
-            type: "critical",
-          };
-          setAuditLog((l) => [entry, ...l].slice(0, 20));
-        }
-      }
-    });
-  }, [waiting, now, clinicReady]);
-
-  const addWalkIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draft.patientId.trim()) return toast.error("Patient ID is required");
-    setBusy(true);
-    const { addToQueue } = await getClinicData();
-    const res = await addToQueue({
-      patientId: draft.patientId,
-      reason: draft.reason,
-      clinician: draft.clinician || undefined,
-      triage: draft.triage,
-      facilityId: realFacilityId,
-    });
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Could not add to queue");
-    toast.success(`${draft.patientId} added — ${TRIAGE_LABELS[draft.triage]}`);
-    setDraft({ patientId: "", reason: "", clinician: "", triage: "yellow" });
-    setAdding(false);
-  };
-
-  const notifyNext = async () => {
-    const next = waiting[0];
-    if (!next) return toast.info("No patients waiting");
-    setBusy(true);
-    try {
-      const { callPatient } = await getClinicData();
-      const { nextAllowed } = await import("@/lib/notifications-queue");
-      const deliverAt = nextAllowed(now);
-      await callPatient(next, deliverAt);
-      const entry: LogEntry = {
-        ts: new Date().toISOString(),
-        msg: `Called ${next.patientName} (${next.triage.toUpperCase()}) → ${next.clinician || "triage"}`,
-        type: "info",
-      };
-      setAuditLog((l) => [entry, ...l].slice(0, 20));
-      toast.success(
-        `${next.patientName} called — proceed to ${next.clinician || "triage"}`,
-      );
-    } catch {
-      toast.error("Could not notify patient");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleHandoff = async (entryId: string, targetClinician: string) => {
-    if (!targetClinician.trim()) return toast.error("Enter target clinician");
-    setBusy(true);
-    const { handoffPatient } = await getClinicData();
-    const res = await handoffPatient(entryId, targetClinician);
-    setHandoffTarget(null);
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Handoff failed");
-    toast.success(`Handed off to ${targetClinician}`);
-  };
-
-  const handleAcceptHandoff = async (entryId: string, clinicianId: string) => {
-    setBusy(true);
-    const { acceptHandoff } = await getClinicData();
-    const res = await acceptHandoff(entryId, clinicianId);
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Accept failed");
-    toast.success("Handoff accepted — patient is now yours");
-  };
-
-  const handleSetQueueStatus = async (
-    id: string,
-    status: QueueEntry["status"],
-  ) => {
-    const { setQueueStatus } = await getClinicData();
-    await setQueueStatus(id, status);
-  };
-
-  const handleRemoveFromQueue = async (id: string) => {
-    const { removeFromQueue } = await getClinicData();
-    await removeFromQueue(id);
-  };
-
-  const getWaitTime = (joinedAt: string) => {
-    return Math.floor((now.getTime() - new Date(joinedAt).getTime()) / 60000);
-  };
-
-  const isOverdue = (q: QueueEntry) => {
-    const waitMin = getWaitTime(q.joinedAt);
-    return waitMin > TRIAGE_MAX_WAIT_MINUTES[q.triage];
-  };
-
-  if (!clinicReady) {
-    return (
-      <AppShell
-        role="receptionist"
-        title="Reception Dashboard"
-        showBack={false}
-        clinicNameOverride={receptionist?.clinicName}
-        staffNameOverride={receptionist?.name}
-      >
-        <div className="flex items-center justify-center h-64">
-          <p className="text-muted-foreground">Loading queue system...</p>
-        </div>
-      </AppShell>
-    );
-  }
+  const getWaitTime = (joinedAt: string) =>
+    Math.floor((now.getTime() - new Date(joinedAt).getTime()) / 60000);
 
   return (
     <AppShell
@@ -386,7 +132,6 @@ function ReceptionDashboard() {
         />
       </div>
 
-      {/* Critical Alert Banner */}
       {criticalWaiting.length > 0 && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-3">
           <AlertTriangle size={18} className="text-red-600 shrink-0" />
@@ -394,369 +139,73 @@ function ReceptionDashboard() {
             <strong>{criticalWaiting.length} critical patient(s)</strong>{" "}
             waiting immediate attention
           </p>
+          <Link
+            to="/receptionist/queue"
+            className="ml-auto text-xs font-medium bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-700 shrink-0"
+          >
+            Open queue
+          </Link>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* ACUTE CARE QUEUE PANEL */}
-        <div className="lg:col-span-2 bg-white rounded-xl border p-5">
-          <div className="flex items-center justify-between mb-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Queue summary — a glance, not a workspace */}
+        <div className="bg-white rounded-xl border p-5">
+          <div className="flex items-center justify-between mb-4">
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold">Acute Care Queue</h3>
-                {queuePace && (
-                  <span
-                    className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${queuePace.cls}`}
-                  >
-                    {queuePace.label}
-                  </span>
-                )}
-              </div>
+              <h3 className="font-semibold">Next in queue</h3>
               <p className="text-xs text-muted-foreground">
-                Triage-based priority with handoff tracking
+                {waiting.length === 0
+                  ? "Nobody waiting"
+                  : `${waiting.length} waiting`}
               </p>
             </div>
-            <div className="flex gap-1.5">
-              <button
-                onClick={() => setAdding((v) => !v)}
-                className="flex items-center gap-1 border text-xs px-2.5 py-1.5 rounded-md hover:bg-secondary"
-              >
-                <Plus size={12} /> Add Walk-in
-              </button>
-              <button
-                onClick={notifyNext}
-                disabled={busy || waiting.length === 0}
-                className="flex items-center gap-1.5 bg-[oklch(0.18_0.06_260)] text-white text-xs px-3 py-1.5 rounded-md hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
-              >
-                <MessageCircle size={12} /> Call Next
-              </button>
-            </div>
+            <Link
+              to="/receptionist/queue"
+              className="flex items-center gap-1 text-xs font-medium border px-3 py-1.5 rounded-md hover:bg-secondary"
+            >
+              Manage queue <ArrowRight size={12} />
+            </Link>
           </div>
 
-          {/* Add walk-in form */}
-          {adding && (
-            <form
-              onSubmit={addWalkIn}
-              className="mb-3 p-3 rounded-md bg-secondary/40 border space-y-2"
-            >
-              <div className="relative">
-                <input
-                  value={walkInQuery}
-                  onChange={(e) => {
-                    setWalkInQuery(e.target.value);
-                    setDraft({ ...draft, patientId: "" }); // typing again clears any prior selection
-                  }}
-                  placeholder="Search patient name or ID…"
-                  className="w-full border rounded-md px-2.5 py-1.5 text-sm"
-                />
-                {walkInQuery.trim() && !draft.patientId && (
-                  <div className="absolute z-10 mt-1 w-full bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                    {walkInMatches.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-muted-foreground">
-                        No match — try the exact Patient ID instead.
-                      </div>
-                    ) : (
-                      walkInMatches.map((p) => (
-                        <button
-                          key={p.patientId}
-                          type="button"
-                          onClick={() => {
-                            setDraft({ ...draft, patientId: p.patientId });
-                            setWalkInQuery(`${p.name} (${p.patientId})`);
-                          }}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-secondary border-b last:border-b-0"
-                        >
-                          <div className="font-medium">{p.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {p.patientId}
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-              <input
-                value={draft.reason}
-                onChange={(e) => setDraft({ ...draft, reason: e.target.value })}
-                placeholder="Reason for visit"
-                className="w-full border rounded-md px-2.5 py-1.5 text-sm"
-              />
-              <input
-                value={draft.clinician}
-                onChange={(e) =>
-                  setDraft({ ...draft, clinician: e.target.value })
-                }
-                placeholder="Assign clinician (optional)"
-                className="w-full border rounded-md px-2.5 py-1.5 text-sm font-mono"
-              />
-              <div>
-                <label className="text-[11px] text-muted-foreground block mb-1">
-                  Triage Level
-                </label>
-                <div className="flex gap-2">
-                  {(["red", "orange", "yellow", "green"] as TriageLevel[]).map(
-                    (t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => setDraft({ ...draft, triage: t })}
-                        className={`text-[10px] px-2 py-1 rounded uppercase font-bold ${
-                          draft.triage === t
-                            ? TRIAGE_COLORS[t]
-                            : "bg-secondary text-muted-foreground"
-                        }`}
-                      >
-                        {t}
-                      </button>
-                    ),
-                  )}
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAdding(false)}
-                  className="flex-1 border py-1.5 rounded-md text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={busy}
-                  className="flex-1 bg-[oklch(0.55_0.18_245)] text-white py-1.5 rounded-md text-xs disabled:opacity-60"
-                >
-                  {busy ? "Adding..." : "Add to queue"}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {queueError && (
-            <p className="text-xs text-destructive mb-2">
-              Could not load live queue.
+          {nextUp.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">
+              Queue is empty
             </p>
-          )}
-
-          {/* Queue list */}
-          <ul className="space-y-2">
-            {active.length === 0 ? (
-              <li className="text-sm text-muted-foreground py-4 text-center">
-                Queue is empty
-              </li>
-            ) : (
-              active.map((q) => {
-                const waitMin = getWaitTime(q.joinedAt);
-                const overdue = isOverdue(q);
-                const rowBg =
-                  overdue && q.status === "waiting"
-                    ? "bg-red-50 border-red-200"
-                    : q.status === "called"
-                      ? "bg-blue-50 border-blue-200"
-                      : q.status === "handoff"
-                        ? "bg-purple-50 border-purple-200"
-                        : "hover:bg-secondary/40";
-
-                return (
-                  <li
-                    key={q.id}
-                    className={`flex items-center gap-3 p-3 rounded-md border ${rowBg}`}
-                  >
-                    {/* Triage badge */}
-                    <span
-                      className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${TRIAGE_COLORS[q.triage]}`}
-                    >
-                      {q.triage === "red" ? "!" : q.triage[0].toUpperCase()}
-                    </span>
-
-                    {/* Patient info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-sm truncate">
-                          {q.patientName}
-                        </p>
-                        {overdue && (
-                          <AlertTriangle
-                            size={12}
-                            className="text-red-500 shrink-0"
-                          />
-                        )}
-                        {q.status === "handoff" && (
-                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
-                            Handoff
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-muted-foreground truncate">
-                        {[q.patientId, q.reason].filter(Boolean).join(" · ")}
+          ) : (
+            <ul className="space-y-2">
+              {nextUp.map((q, i) => (
+                <li
+                  key={q.id}
+                  className="flex items-center gap-3 p-2.5 rounded-lg border"
+                >
+                  <span className="w-6 text-center text-lg font-bold shrink-0">
+                    {i + 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-sm truncate">
+                        {q.patientName}
                       </p>
-                      <p className="text-[10px] text-muted-foreground">
-                        Wait: {waitMin}min · {TRIAGE_LABELS[q.triage]}
-                        {q.clinician && ` · Assigned: ${q.clinician}`}
-                        {q.handedOffTo && ` → Handoff to: ${q.handedOffTo}`}
-                      </p>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex flex-col items-end gap-1 shrink-0">
                       <span
-                        className={`text-[10px] uppercase tracking-wider font-medium ${
-                          q.status === "waiting" && overdue
-                            ? "text-red-600"
-                            : "text-muted-foreground"
-                        }`}
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${TRIAGE_COLORS[q.triage]}`}
                       >
-                        {q.status === "handoff"
-                          ? `Handoff → ${q.handedOffTo}`
-                          : q.status}
+                        {TRIAGE_SHORT[q.triage]}
                       </span>
-                      <div className="flex gap-1">
-                        {q.status === "waiting" && (
-                          <>
-                            <button
-                              onClick={() =>
-                                handleSetQueueStatus(q.id, "called")
-                              }
-                              className="text-[11px] bg-blue-600 text-white px-2 py-0.5 rounded"
-                            >
-                              Call
-                            </button>
-                            <button
-                              onClick={() =>
-                                handleSetQueueStatus(q.id, "in-room")
-                              }
-                              className="text-[11px] border px-2 py-0.5 rounded hover:bg-secondary"
-                            >
-                              Skip call
-                            </button>
-                          </>
-                        )}
-                        {q.status === "called" && (
-                          <button
-                            onClick={() =>
-                              handleSetQueueStatus(q.id, "in-room")
-                            }
-                            className="text-[11px] border px-2 py-0.5 rounded hover:bg-secondary"
-                          >
-                            In room
-                          </button>
-                        )}
-                        {q.status === "in-room" && (
-                          <>
-                            {handoffTarget === q.id ? (
-                              <div className="flex gap-1">
-                                <input
-                                  autoFocus
-                                  placeholder="To clinician"
-                                  className="w-20 text-[11px] border rounded px-1"
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter")
-                                      handleHandoff(
-                                        q.id,
-                                        e.currentTarget.value,
-                                      );
-                                    if (e.key === "Escape")
-                                      setHandoffTarget(null);
-                                  }}
-                                />
-                              </div>
-                            ) : (
-                              <>
-                                <button
-                                  onClick={() => setHandoffTarget(q.id)}
-                                  className="text-[11px] flex items-center gap-0.5 bg-purple-600 text-white px-2 py-0.5 rounded"
-                                >
-                                  <ArrowRight size={10} /> Handoff
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    handleSetQueueStatus(q.id, "done")
-                                  }
-                                  className="text-[11px] border px-2 py-0.5 rounded hover:bg-secondary"
-                                >
-                                  Done
-                                </button>
-                              </>
-                            )}
-                          </>
-                        )}
-                        {q.status === "handoff" && (
-                          <>
-                            <button
-                              onClick={() =>
-                                handleAcceptHandoff(q.id, q.handedOffTo || "")
-                              }
-                              disabled={!q.handedOffTo}
-                              className="text-[11px] flex items-center gap-0.5 bg-green-600 text-white px-2 py-0.5 rounded disabled:opacity-50"
-                            >
-                              <CheckCircle size={10} /> Accept
-                            </button>
-                            <button
-                              onClick={() =>
-                                handleSetQueueStatus(q.id, "in-room")
-                              }
-                              className="text-[11px] border px-2 py-0.5 rounded hover:bg-secondary"
-                            >
-                              Cancel
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => handleRemoveFromQueue(q.id)}
-                          className="text-[11px] text-muted-foreground hover:text-destructive"
-                        >
-                          ×
-                        </button>
-                      </div>
                     </div>
-                  </li>
-                );
-              })
-            )}
-          </ul>
-
-          {/* Activity log */}
-          {(auditLogLoading || auditLogError || auditLog.length > 0) && (
-            <div className="mt-4 pt-4 border-t">
-              <div className="flex items-center gap-2 mb-2">
-                <ClipboardList size={12} className="text-muted-foreground" />
-                <p className="text-[10px] tracking-wider text-muted-foreground">
-                  AUDIT LOG (persisted to Firestore)
-                </p>
-              </div>
-              {auditLogLoading && (
-                <p className="text-xs text-muted-foreground">Loading…</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Waiting {getWaitTime(q.joinedAt)} min
+                      {q.clinician ? ` · ${q.clinician}` : ""}
+                    </p>
+                  </div>
+                </li>
+              ))}
+              {waiting.length > nextUp.length && (
+                <li className="text-xs text-muted-foreground text-center pt-1">
+                  + {waiting.length - nextUp.length} more waiting
+                </li>
               )}
-              {auditLogError && (
-                <p className="text-xs text-destructive">
-                  Could not load audit log.
-                </p>
-              )}
-              {!auditLogLoading && !auditLogError && (
-                <ul className="text-xs space-y-1 max-h-64 overflow-y-auto">
-                  {auditLog.map((l, i) => (
-                    <li
-                      key={i}
-                      className={`${
-                        l.type === "critical"
-                          ? "text-red-600 font-medium"
-                          : l.type === "warn"
-                            ? "text-orange-600"
-                            : "text-muted-foreground"
-                      }`}
-                    >
-                      <span className="font-mono mr-2">
-                        {new Date(l.ts).toLocaleTimeString("en-ZA", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                      {l.msg}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            </ul>
           )}
         </div>
 
@@ -773,7 +222,7 @@ function ReceptionDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {appointments.slice(0, 10).map((a: ClinicWideAppointment) => (
+                {appointments.slice(0, 8).map((a: ClinicWideAppointment) => (
                   <tr key={a.id} className="border-b last:border-0">
                     <td className="py-2 font-mono text-xs">
                       {a.date} {a.time}
