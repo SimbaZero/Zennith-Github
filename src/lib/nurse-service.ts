@@ -1,6 +1,20 @@
 import { useEffect, useState } from "react";
 import { registerPatient } from "@/lib/clinic-data";
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, Timestamp, where } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  runTransaction,
+  serverTimestamp,
+  setDoc,
+  Timestamp,
+  where,
+} from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 
@@ -12,15 +26,15 @@ import {
   useMinuteTick,
   computeWeekBounds,
   useDoctorAppointments, // role-agnostic despite the name — just filters
-                          // appointments by whatever clinician id you pass
-                          // it, so nurse-service.ts calls it directly rather
-                          // than writing a second copy of the same hook.
-                          // (toBadgeStatus/resolvePatientNames are used
-                          // internally by this hook — no need to import
-                          // them separately here.)
-  usePatientDirectory,   // patient lookups have nothing doctor-specific in
-  useFindPatientById,    // them — re-exported below so nurse pages have one
-  usePatientRecord,      // import source instead of reaching into doctor-service.ts
+  // appointments by whatever clinician id you pass
+  // it, so nurse-service.ts calls it directly rather
+  // than writing a second copy of the same hook.
+  // (toBadgeStatus/resolvePatientNames are used
+  // internally by this hook — no need to import
+  // them separately here.)
+  usePatientDirectory, // patient lookups have nothing doctor-specific in
+  useFindPatientById, // them — re-exported below so nurse pages have one
+  usePatientRecord, // import source instead of reaching into doctor-service.ts
   type DoctorAppointment,
 } from "@/lib/doctor-service";
 
@@ -49,7 +63,10 @@ export interface CurrentNurse {
 
 const nurseCacheByUid = new Map<string, Promise<CurrentNurse>>();
 
-async function buildCurrentNurse(nurseId: string, nurseData: Record<string, any>): Promise<CurrentNurse> {
+async function buildCurrentNurse(
+  nurseId: string,
+  nurseData: Record<string, any>,
+): Promise<CurrentNurse> {
   let fullName = nurseId;
   let email: string | undefined;
   let contactNum: string | undefined;
@@ -82,7 +99,9 @@ async function fetchNurseByNurseId(nurseId: string): Promise<CurrentNurse> {
 
 async function resolveCurrentNurseForUid(uid: string): Promise<CurrentNurse> {
   const profileSnap = await getDoc(doc(db, "profiles", uid));
-  const profile = profileSnap.exists() ? profileSnap.data() : ({} as Record<string, any>);
+  const profile = profileSnap.exists()
+    ? profileSnap.data()
+    : ({} as Record<string, any>);
 
   // profiles.role is a real, confirmed field ("doctor" / "nurse" / etc.) —
   // doctor-service.ts's equivalent resolver never checks it (route guards
@@ -98,7 +117,10 @@ async function resolveCurrentNurseForUid(uid: string): Promise<CurrentNurse> {
   }
 
   const snap = await getDocs(
-    query(collection(db, "nurses"), where("userId", "==", Number(profile.legacyUserId))),
+    query(
+      collection(db, "nurses"),
+      where("userId", "==", Number(profile.legacyUserId)),
+    ),
   );
   if (snap.empty) return fetchNurseByNurseId("Nur-1");
 
@@ -106,7 +128,11 @@ async function resolveCurrentNurseForUid(uid: string): Promise<CurrentNurse> {
   return buildCurrentNurse(data.nurseId, data);
 }
 
-export function useCurrentNurse(): { nurse: CurrentNurse | null; loading: boolean; error: string | null } {
+export function useCurrentNurse(): {
+  nurse: CurrentNurse | null;
+  loading: boolean;
+  error: string | null;
+} {
   const [nurse, setNurse] = useState<CurrentNurse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -189,7 +215,9 @@ export function useNurseDashboard(): {
   error: string | null;
 } {
   const { nurse, loading: nurseLoading, error } = useCurrentNurse();
-  const { appointments, loading: apptsLoading } = useDoctorAppointments(nurse?.nurseId);
+  const { appointments, loading: apptsLoading } = useDoctorAppointments(
+    nurse?.nurseId,
+  );
 
   const loading = nurseLoading || (!!nurse && apptsLoading);
 
@@ -208,7 +236,9 @@ export function useNurseDashboard(): {
   const weekStart = new Date(scheduleDate);
   weekStart.setDate(weekStart.getDate() - 6);
   const weekStartIso = weekStart.toISOString().slice(0, 10);
-  const week = appointments.filter((a) => a.date >= weekStartIso && a.date <= scheduleDate);
+  const week = appointments.filter(
+    (a) => a.date >= weekStartIso && a.date <= scheduleDate,
+  );
 
   const data: NurseDashboardData = {
     nurseId: nurse.nurseId,
@@ -240,7 +270,9 @@ export function useNurseWeekSchedule(): {
   error: string | null;
 } {
   const { nurse, loading: nurseLoading, error } = useCurrentNurse();
-  const { appointments, loading: apptsLoading } = useDoctorAppointments(nurse?.nurseId);
+  const { appointments, loading: apptsLoading } = useDoctorAppointments(
+    nurse?.nurseId,
+  );
   const now = useMinuteTick();
 
   const { start, end, dates } = computeWeekBounds(now);
@@ -302,7 +334,10 @@ export interface HandoverEntry {
   createdAt: Timestamp;
 }
 
-function isInShiftWindow(createdAt: Timestamp, shift: "Day" | "Night"): boolean {
+function isInShiftWindow(
+  createdAt: Timestamp,
+  shift: "Day" | "Night",
+): boolean {
   const hour = createdAt.toDate().getHours();
   return shift === "Day" ? hour >= 7 && hour < 19 : hour >= 19 || hour < 7;
 }
@@ -354,7 +389,11 @@ export async function removeHandoverEntry(entryId: string): Promise<void> {
 export async function fetchShiftStatus(
   clinicId: number,
   shift: "Day" | "Night",
-): Promise<{ finalized: boolean; finalizedAt?: Timestamp; finalizedBy?: string } | null> {
+): Promise<{
+  finalized: boolean;
+  finalizedAt?: Timestamp;
+  finalizedBy?: string;
+} | null> {
   const snap = await getDocs(
     query(
       collection(db, "shifts"),
@@ -366,7 +405,11 @@ export async function fetchShiftStatus(
   const finalizedDoc = snap.docs.find((d) => d.data().finalized);
   if (!finalizedDoc) return snap.empty ? null : { finalized: false };
   const data = finalizedDoc.data();
-  return { finalized: true, finalizedAt: data.finalizedAt, finalizedBy: data.nurseId };
+  return {
+    finalized: true,
+    finalizedAt: data.finalizedAt,
+    finalizedBy: data.nurseId,
+  };
 }
 
 /** Records that shift as closed out for the WHOLE clinic — any nurse who
@@ -392,7 +435,10 @@ export async function finalizeShift(input: {
 }
 
 /** Pure helper — count/patient-count from a list of entries. No fetch. */
-export function summarizeShift(entries: HandoverEntry[]): { count: number; patients: number } {
+export function summarizeShift(entries: HandoverEntry[]): {
+  count: number;
+  patients: number;
+} {
   return {
     count: entries.length,
     patients: new Set(entries.map((e) => e.patientId).filter(Boolean)).size,
@@ -413,7 +459,10 @@ export async function fetchAdherenceForToday(
 ): Promise<Record<string, boolean>> {
   const date = todayIso();
   const snap = await getDocs(
-    query(collection(db, "patients", patientId, "adherenceLogs"), where("date", "==", date)),
+    query(
+      collection(db, "patients", patientId, "adherenceLogs"),
+      where("date", "==", date),
+    ),
   );
   const out: Record<string, boolean> = {};
   snap.docs.forEach((d) => {
@@ -431,13 +480,16 @@ export async function setAdherence(
   nurseId: string,
 ): Promise<void> {
   const date = todayIso();
-  await setDoc(doc(db, "patients", patientId, "adherenceLogs", `${date}_${med}`), {
-    med,
-    date,
-    taken,
-    nurseId,
-    updatedAt: serverTimestamp(),
-  });
+  await setDoc(
+    doc(db, "patients", patientId, "adherenceLogs", `${date}_${med}`),
+    {
+      med,
+      date,
+      taken,
+      nurseId,
+      updatedAt: serverTimestamp(),
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +525,7 @@ export interface DigitizedPatientData {
 
 export async function saveDigitizedFile(
   data: DigitizedPatientData,
+  clinicId?: number,
 ): Promise<{ patientId: string; matchedExisting: boolean }> {
   let patientId: string;
   let matchedExisting = false;
@@ -485,7 +538,10 @@ export async function saveDigitizedFile(
   if (!uSnap.empty) {
     const userDocId = uSnap.docs[0].id;
     const pSnap = await getDocs(
-      query(collection(db, "patients"), where("userId", "==", Number(userDocId))),
+      query(
+        collection(db, "patients"),
+        where("userId", "==", Number(userDocId)),
+      ),
     );
     if (!pSnap.empty) {
       matchedExisting = true;

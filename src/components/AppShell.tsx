@@ -34,7 +34,6 @@ import {
   usePatientNotifications,
   markNotificationRead,
 } from "@/lib/patient-service";
-import { useActiveClinic, CLINICS, type ClinicId } from "@/lib/clinic";
 import { useCurrentPharmacist } from "@/lib/pharmacist-service";
 import { useCurrentDoctor } from "@/lib/doctor-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
@@ -164,7 +163,6 @@ export function AppShell({
         ? pharmacist.fullName
         : (staffNameOverride ?? displayNameFor(role, username));
   const initial = display.charAt(0).toUpperCase();
-  const clinic = useActiveClinic();
   const canSwitch = !!staffCanSwitch[role];
   const siteLabel =
     role === "super_admin"
@@ -179,7 +177,7 @@ export function AppShell({
             ? (clinicNameOverride ??
               realDoctorClinic.activeClinicName ??
               "Loading clinic…")
-            : (clinicNameOverride ?? clinic.name);
+            : (clinicNameOverride ?? "Zennith");
 
   return (
     <div className="min-h-screen flex bg-[oklch(0.97_0.01_240)]">
@@ -296,19 +294,19 @@ export function AppShell({
                   name: o.clinicName,
                 }))}
               />
-            ) : (
+            ) : clinicNameOverride ? (
+              // Nurse, Receptionist and Admin are single-clinic: they pass
+              // their real clinic name from Firestore, and can't switch.
+              // Previously this fell back to a hardcoded 3-clinic list that
+              // had nothing to do with the real clinics collection.
               <ClinicChip
-                clinicId={clinic.id}
-                clinicName={clinicNameOverride ?? clinic.name}
-                canSwitch={canSwitch && clinicNameOverride == null}
-                onSwitch={(id) => clinic.setId(id as ClinicId)}
-                options={CLINICS.map((c) => ({
-                  id: c.id,
-                  name: c.name,
-                  area: c.area,
-                }))}
+                clinicId=""
+                clinicName={clinicNameOverride}
+                canSwitch={false}
+                onSwitch={() => {}}
+                options={[]}
               />
-            ))}
+            ) : null)}
           <ScopedSearch role={role} />
           <NotificationsButton role={role} />
           <button

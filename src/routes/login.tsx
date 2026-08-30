@@ -9,12 +9,7 @@ import {
 } from "lucide-react";
 import { ZennithStar } from "@/components/ZennithStar";
 import { checkCredentials } from "@/lib/auth";
-import {
-  CLINICS,
-  setActiveClinicId,
-  type ClinicId,
-  DEFAULT_CLINIC,
-} from "@/lib/clinic";
+import { setActiveClinicId, type ClinicId, DEFAULT_CLINIC } from "@/lib/clinic";
 import heroClinic1 from "@/assets/hero-clinic-1.jpg";
 import heroClinic2 from "@/assets/hero-clinic-2.jpg";
 import heroClinic3 from "@/assets/hero-clinic-3.jpg";
@@ -236,36 +231,6 @@ function Login() {
                   </button>
                 </div>
               </div>
-
-              {(() => {
-                const u = username.trim().toLowerCase();
-                const rolesNeedingClinic = ["pharmacist", "admin", "doctor"];
-                const needsClinic = rolesNeedingClinic.some((r) =>
-                  u.includes(r),
-                );
-                if (!needsClinic) return null;
-                return (
-                  <div>
-                    <label className="text-xs tracking-wider text-muted-foreground block mb-1.5 uppercase flex items-center gap-1.5">
-                      <Building2 size={12} /> Active clinic
-                    </label>
-                    <select
-                      value={clinic}
-                      onChange={(e) => setClinic(e.target.value as ClinicId)}
-                      className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] bg-white"
-                    >
-                      {CLINICS.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} — {c.area}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      Choose the clinic workspace you're signing in to.
-                    </p>
-                  </div>
-                );
-              })()}
 
               {error && <p className="text-sm text-destructive">{error}</p>}
 
