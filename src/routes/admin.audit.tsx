@@ -82,9 +82,30 @@ function AdminAudit() {
     );
   }, [staffLogs, queueRows]);
 
+  // Reviewed flags are dismissed per-admin. Kept locally rather than in
+  // Firestore: "I've looked at this" is one person's working state, not a
+  // fact about the clinic, and it must never hide the underlying audit
+  // entry — only the prompt to review it.
+  const [dismissed, setDismissed] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(
+        localStorage.getItem("zennith_dismissed_flags") ?? "[]",
+      );
+    } catch {
+      return [];
+    }
+  });
+
+  const dismissFlag = (id: string) => {
+    const next = [...dismissed, id];
+    setDismissed(next);
+    localStorage.setItem("zennith_dismissed_flags", JSON.stringify(next));
+  };
+
   const flags = useMemo(
-    () => buildFlags(rawQueue, staffLogs),
-    [rawQueue, staffLogs],
+    () => buildFlags(rawQueue, staffLogs, dismissed),
+    [rawQueue, staffLogs, dismissed],
   );
   const stats = useMemo(() => buildStats(rawQueue), [rawQueue]);
 
@@ -125,7 +146,7 @@ function AdminAudit() {
       staffNameOverride={admin?.fullName}
       clinicNameOverride={admin?.clinicName}
     >
-      <InsightsPanel flags={flags} stats={stats} />
+      <InsightsPanel flags={flags} stats={stats} onDismiss={dismissFlag} />
 
       <div className="bg-white rounded-xl border">
         <div className="p-5 border-b">
@@ -248,9 +269,11 @@ function AdminAudit() {
 function InsightsPanel({
   flags,
   stats,
+  onDismiss,
 }: {
   flags: Flag[];
   stats: ReturnType<typeof buildStats>;
+  onDismiss: (id: string) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const critical = flags.filter((f) => f.severity === "critical").length;
@@ -326,6 +349,12 @@ function InsightsPanel({
                         </li>
                       ))}
                     </ol>
+                    <button
+                      onClick={() => onDismiss(f.id)}
+                      className="mt-3 text-xs font-medium border px-3 py-1.5 rounded-md hover:bg-secondary"
+                    >
+                      Mark as reviewed
+                    </button>
                   </div>
                 )}
               </li>

@@ -35,7 +35,12 @@ function NurseStock() {
   );
 
   return (
-    <AppShell role="nurse" title="Stock" staffNameOverride={nurse?.fullName}>
+    <AppShell
+      role="nurse"
+      title="Stock"
+      staffNameOverride={nurse?.fullName}
+      clinicNameOverride={nurse?.clinicName}
+    >
       {/* Deliveries waiting to be checked in — the whole point of this page,
           so it sits at the top and can't be missed. */}
       <div className="bg-white rounded-xl border p-5 mb-6">
@@ -119,6 +124,9 @@ function NurseStock() {
               clinicId={nurse?.clinicId ?? 0}
               nurseId={nurse?.nurseId ?? ""}
               onDone={() => setShowExternal(false)}
+              knownMedications={[
+                ...new Set(stock.map((s) => s.name).filter(Boolean)),
+              ].sort()}
             />
           )}
         </div>
@@ -372,10 +380,12 @@ function ExternalStockForm({
   clinicId,
   nurseId,
   onDone,
+  knownMedications,
 }: {
   clinicId: number;
   nurseId: string;
   onDone: () => void;
+  knownMedications: string[];
 }) {
   const [medName, setMedName] = useState("");
   const [quantity, setQuantity] = useState("");
@@ -407,13 +417,23 @@ function ExternalStockForm({
         For a supplier who isn't on Zennith. This is recorded against your name
         and reviewed by your clinic admin — supplier name is required.
       </p>
+      {/* Suggests medications already stocked at this clinic. Free-typing is
+          still allowed for genuinely new items, but matching an existing name
+          exactly matters — a typo creates a duplicate inventory row instead
+          of adding to the existing one. */}
       <input
         required
+        list="known-medications"
         value={medName}
         onChange={(e) => setMedName(e.target.value)}
-        placeholder="Medication name"
+        placeholder="Start typing a medication name…"
         className="w-full border rounded-md px-3 py-2 text-sm"
       />
+      <datalist id="known-medications">
+        {knownMedications.map((m) => (
+          <option key={m} value={m} />
+        ))}
+      </datalist>
       <div className="flex gap-2">
         <input
           required

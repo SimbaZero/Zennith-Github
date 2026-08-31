@@ -56,6 +56,12 @@ export interface CurrentNurse {
   nurseId: string; // e.g. "Nur-1"
   userId?: number;
   clinicId?: number; // confirmed real field on `nurses` docs — `doctors` docs don't have this one
+  /**
+   * Resolved clinic name. Every nurse page was already passing
+   * `nurse?.clinicName` to AppShell, but this field never existed — so it
+   * always passed undefined and the header fell back to "Zennith".
+   */
+  clinicName?: string;
   fullName: string;
   email?: string;
   contactNum?: string;
@@ -81,10 +87,17 @@ async function buildCurrentNurse(
     }
   }
 
+  let clinicName: string | undefined;
+  if (nurseData.clinicId != null) {
+    const cSnap = await getDoc(doc(db, "clinics", String(nurseData.clinicId)));
+    if (cSnap.exists()) clinicName = cSnap.data().clinicName;
+  }
+
   return {
     nurseId,
     userId: nurseData.userId,
     clinicId: nurseData.clinicId,
+    clinicName,
     fullName,
     email,
     contactNum,

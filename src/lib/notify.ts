@@ -157,3 +157,90 @@ export async function markRead(docId: string): Promise<void> {
 export async function markAllRead(docIds: string[]): Promise<void> {
   await Promise.all(docIds.map((id) => markRead(id)));
 }
+/**
+ * Notify the admin(s) of a clinic.
+ *
+ * Admins are routed by clinicId rather than a numeric userId, because an
+ * admin is an access scope rather than a clinical identity — they have no
+ * `users` record to link to, and creating one just to carry a notification
+ * would duplicate data for no reason. Looks up admin profiles for the clinic
+ * and delivers to each, so it keeps working as admins change.
+ */
+export async function notifyClinicAdmins(input: {
+  clinicId: number;
+  title: string;
+  message: string;
+  link?: string;
+}): Promise<void> {
+  try {
+    const snap = await getDocs(
+      query(
+        collection(db, "profiles"),
+        where("role", "==", "admin"),
+        where("clinicId", "==", input.clinicId),
+      ),
+    );
+    await Promise.all(
+      snap.docs.map((d) =>
+        addDoc(collection(db, "notifications"), {
+          notifId: Date.now(),
+          // Admins are addressed by their profile document id, since they
+          // have no numeric users.userId.
+          profileId: d.id,
+          title: input.title,
+          message: input.message,
+          isRead: false,
+          timeSent: new Date().toISOString(),
+          ...(input.link ? { link: input.link } : {}),
+        }),
+      ),
+    );
+  } catch (err) {
+    console.error("notifyClinicAdmins failed:", err);
+  }
+}
+
+/**
+ * Live notifications addressed by profile document id — used by roles that
+ * have no numeric users.userId (currently admins).
+ */
+export function useNotificationsByProfile(
+  profileId?: string | null,
+): AppNotification[] {
+  const [items, setItems] = useState<AppNotification[]>([]);
+
+  useEffect(() => {
+    if (!profileId) {
+      setItems([]);
+      return;
+    }
+    const q = query(
+      collection(db, "notifications"),
+      where("profileId", "==", profileId),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setItems(
+          snap.docs
+            .map((d) => {
+              const n = d.data();
+              return {
+                docId: d.id,
+                title: n.title ?? "",
+                message: n.message ?? "",
+                timeSent: n.timeSent ?? "",
+                isRead: !!n.isRead,
+                link: n.link,
+              };
+            })
+            .sort((a, b) => b.timeSent.localeCompare(a.timeSent)),
+        );
+      },
+      (err) => console.error("Admin notifications failed:", err),
+    );
+    return () => unsub();
+  }, [profileId]);
+
+  return items;
+}

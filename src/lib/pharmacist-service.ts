@@ -15,7 +15,12 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { stock as mockStock } from "@/lib/data";
-import { notifyRoleAtClinic, userIdForStaff } from "@/lib/notify";
+import {
+  notifyClinicAdmins,
+  notifyRoleAtClinic,
+  notifyUser,
+  userIdForStaff,
+} from "@/lib/notify";
 
 // Shape the existing UI already expects (see pharmacist.index.tsx, pharmacist.stock.tsx).
 // Real Firestore `inventory` docs use different field names (medName, quantity) —
@@ -857,9 +862,19 @@ export async function recordExternalStock(input: {
     status: "Confirmed",
     sentByPharmacistId: null,
     externalSource: input.source,
+    createdAt: new Date().toISOString(),
     sentAt: new Date().toISOString(),
     confirmedByNurseId: input.nurseId,
     confirmedAt: new Date().toISOString(),
+  });
+
+  // External stock bypasses the pharmacy entirely, so the clinic admin is
+  // told — that's the accountability trail, since nothing prevents misuse.
+  notifyClinicAdmins({
+    clinicId: input.clinicId,
+    title: "Stock recorded from outside supplier",
+    message: `${input.nurseId} recorded ${input.quantity} × ${input.medName} from ${input.source}.`,
+    link: "/admin/audit",
   });
 
   return { ok: true };

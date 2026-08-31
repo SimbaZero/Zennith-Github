@@ -39,7 +39,12 @@ import {
 import { useCurrentPharmacist } from "@/lib/pharmacist-service";
 import { useCurrentDoctor } from "@/lib/doctor-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
-import { useNotifications, markRead, markAllRead } from "@/lib/notify";
+import {
+  useNotifications,
+  useNotificationsByProfile,
+  markRead,
+  markAllRead,
+} from "@/lib/notify";
 import { useQuery } from "@tanstack/react-query";
 import { useCurrentNurse } from "@/lib/nurse-service";
 import { resolveCurrentReceptionist } from "@/lib/clinic-data";
@@ -455,11 +460,14 @@ function NotificationsButton({ role }: { role: Role }) {
             ? pharmacist?.userId
             : role === "receptionist"
               ? receptionist?.userId
-              : role === "admin"
-                ? adminUserIdFrom(admin)
-                : undefined;
+              : undefined;
 
-  const items = useNotifications(userId ?? undefined);
+  // Admins are addressed by profile id, everyone else by numeric userId.
+  const byUserId = useNotifications(role === "admin" ? undefined : userId);
+  const byProfile = useNotificationsByProfile(
+    role === "admin" ? admin?.profileId : undefined,
+  );
+  const items = role === "admin" ? byProfile : byUserId;
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -553,13 +561,6 @@ function NotificationsButton({ role }: { role: Role }) {
       )}
     </div>
   );
-}
-
-/** Admin's clinicId lives on the profile, but notifications need a userId. */
-function adminUserIdFrom(admin: { clinicId?: number } | null): undefined {
-  // TODO(db): useCurrentAdmin doesn't expose legacyUserId yet, so admin
-  // notifications aren't wired up. Flagged rather than faked.
-  return undefined;
 }
 
 function formatNotifTime(raw: string) {

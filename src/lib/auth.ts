@@ -468,6 +468,13 @@ export interface CurrentAdmin {
   clinicName?: string;
   fullName: string;
   username: string;
+  /**
+   * Firestore profile document id. Admins are addressed by this rather than
+   * a numeric users.userId, because an admin is an access scope, not a
+   * clinical identity — they have no `users` record, and creating one just
+   * to carry notifications would duplicate data for no reason.
+   */
+  profileId?: string;
 }
 
 /**
@@ -510,6 +517,7 @@ export function useCurrentAdmin(): {
             clinicName,
             fullName: data.fullName || data.username || "Admin",
             username: data.username ?? "",
+            profileId: user.uid,
           });
           setLoading(false);
         }

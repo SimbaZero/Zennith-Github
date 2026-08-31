@@ -29,11 +29,17 @@ const TARGETS: Record<string, number> = {
 const ts = (e: QueueAuditEvent) =>
   e.timestamp?.toDate?.() ? e.timestamp.toDate() : new Date();
 
+/** Events older than this aren't actionable — nobody can fix last month. */
+const REVIEW_WINDOW_DAYS = 7;
+
 export function buildFlags(
   queueEvents: QueueAuditEvent[],
   staffLogs: SystemLog[],
+  dismissedIds: string[] = [],
 ): Flag[] {
   const flags: Flag[] = [];
+  const cutoff = Date.now() - REVIEW_WINDOW_DAYS * 86_400_000;
+  const dismissed = new Set(dismissedIds);
 
   // Group queue events per patient visit so we can reconstruct timelines.
   const byEntry = new Map<string, QueueAuditEvent[]>();
@@ -55,8 +61,14 @@ export function buildFlags(
     }));
 
     const joined = ts(ordered[0]);
+    // Old demo entries that were never resolved would otherwise show
+    // absurd waits (weeks in minutes) and never leave the panel.
+    if (joined.getTime() < cutoff) continue;
+
     const called = ordered.find((e) => e.action === "called");
-    const target = TARGETS[first.triage] ?? 30;
+    // A red-triage target is 0 min, so without a floor even a minute of
+    // normal paperwork flags. Matches the queue's own grace period.
+    const target = Math.max(TARGETS[first.triage] ?? 30, 10);
 
     // 1. Someone urgent waited well past their target.
     //
@@ -143,7 +155,9 @@ export function buildFlags(
   }
 
   const rank: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };
-  return flags.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return flags
+    .filter((f) => !dismissed.has(f.id))
+    .sort((a, b) => rank[a.severity] - rank[b.severity]);
 }
 
 /** Plain counts for the stats strip — all from real timestamps. */
