@@ -70,7 +70,7 @@ const navByRole: Record<Role, NavItem[]> = {
       label: "Prescription Lookup",
       icon: Search,
     },
-    { to: "/pharmacist/distribution", label: "Distribution", icon: Share2 },
+
     { to: "/pharmacist/deliveries", label: "Deliveries", icon: Truck },
     {
       to: "/pharmacist/analytics",

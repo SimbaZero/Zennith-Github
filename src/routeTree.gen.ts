@@ -36,7 +36,6 @@ import { Route as ReceptionistQueueRouteImport } from './routes/receptionist.que
 import { Route as ReceptionistProfilesRouteImport } from './routes/receptionist.profiles'
 import { Route as ReceptionistAppointmentsRouteImport } from './routes/receptionist.appointments'
 import { Route as PharmacistStockRouteImport } from './routes/pharmacist.stock'
-import { Route as PharmacistDistributionRouteImport } from './routes/pharmacist.distribution'
 import { Route as PharmacistDiagnosticsRouteImport } from './routes/pharmacist.diagnostics'
 import { Route as PharmacistDeliveriesRouteImport } from './routes/pharmacist.deliveries'
 import { Route as PharmacistAnalyticsRouteImport } from './routes/pharmacist.analytics'
@@ -194,11 +193,6 @@ const PharmacistStockRoute = PharmacistStockRouteImport.update({
   path: '/stock',
   getParentRoute: () => PharmacistRoute,
 } as any)
-const PharmacistDistributionRoute = PharmacistDistributionRouteImport.update({
-  id: '/distribution',
-  path: '/distribution',
-  getParentRoute: () => PharmacistRoute,
-} as any)
 const PharmacistDiagnosticsRoute = PharmacistDiagnosticsRouteImport.update({
   id: '/diagnostics',
   path: '/diagnostics',
@@ -325,7 +319,6 @@ export interface FileRoutesByFullPath {
   '/pharmacist/analytics': typeof PharmacistAnalyticsRoute
   '/pharmacist/deliveries': typeof PharmacistDeliveriesRoute
   '/pharmacist/diagnostics': typeof PharmacistDiagnosticsRoute
-  '/pharmacist/distribution': typeof PharmacistDistributionRoute
   '/pharmacist/stock': typeof PharmacistStockRoute
   '/receptionist/appointments': typeof ReceptionistAppointmentsRoute
   '/receptionist/profiles': typeof ReceptionistProfilesRoute
@@ -367,7 +360,6 @@ export interface FileRoutesByTo {
   '/pharmacist/analytics': typeof PharmacistAnalyticsRoute
   '/pharmacist/deliveries': typeof PharmacistDeliveriesRoute
   '/pharmacist/diagnostics': typeof PharmacistDiagnosticsRoute
-  '/pharmacist/distribution': typeof PharmacistDistributionRoute
   '/pharmacist/stock': typeof PharmacistStockRoute
   '/receptionist/appointments': typeof ReceptionistAppointmentsRoute
   '/receptionist/profiles': typeof ReceptionistProfilesRoute
@@ -417,7 +409,6 @@ export interface FileRoutesById {
   '/pharmacist/analytics': typeof PharmacistAnalyticsRoute
   '/pharmacist/deliveries': typeof PharmacistDeliveriesRoute
   '/pharmacist/diagnostics': typeof PharmacistDiagnosticsRoute
-  '/pharmacist/distribution': typeof PharmacistDistributionRoute
   '/pharmacist/stock': typeof PharmacistStockRoute
   '/receptionist/appointments': typeof ReceptionistAppointmentsRoute
   '/receptionist/profiles': typeof ReceptionistProfilesRoute
@@ -468,7 +459,6 @@ export interface FileRouteTypes {
     | '/pharmacist/analytics'
     | '/pharmacist/deliveries'
     | '/pharmacist/diagnostics'
-    | '/pharmacist/distribution'
     | '/pharmacist/stock'
     | '/receptionist/appointments'
     | '/receptionist/profiles'
@@ -510,7 +500,6 @@ export interface FileRouteTypes {
     | '/pharmacist/analytics'
     | '/pharmacist/deliveries'
     | '/pharmacist/diagnostics'
-    | '/pharmacist/distribution'
     | '/pharmacist/stock'
     | '/receptionist/appointments'
     | '/receptionist/profiles'
@@ -559,7 +548,6 @@ export interface FileRouteTypes {
     | '/pharmacist/analytics'
     | '/pharmacist/deliveries'
     | '/pharmacist/diagnostics'
-    | '/pharmacist/distribution'
     | '/pharmacist/stock'
     | '/receptionist/appointments'
     | '/receptionist/profiles'
@@ -786,13 +774,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PharmacistStockRouteImport
       parentRoute: typeof PharmacistRoute
     }
-    '/pharmacist/distribution': {
-      id: '/pharmacist/distribution'
-      path: '/distribution'
-      fullPath: '/pharmacist/distribution'
-      preLoaderRoute: typeof PharmacistDistributionRouteImport
-      parentRoute: typeof PharmacistRoute
-    }
     '/pharmacist/diagnostics': {
       id: '/pharmacist/diagnostics'
       path: '/diagnostics'
@@ -1005,7 +986,6 @@ interface PharmacistRouteChildren {
   PharmacistAnalyticsRoute: typeof PharmacistAnalyticsRoute
   PharmacistDeliveriesRoute: typeof PharmacistDeliveriesRoute
   PharmacistDiagnosticsRoute: typeof PharmacistDiagnosticsRoute
-  PharmacistDistributionRoute: typeof PharmacistDistributionRoute
   PharmacistStockRoute: typeof PharmacistStockRoute
   PharmacistIndexRoute: typeof PharmacistIndexRoute
 }
@@ -1014,7 +994,6 @@ const PharmacistRouteChildren: PharmacistRouteChildren = {
   PharmacistAnalyticsRoute: PharmacistAnalyticsRoute,
   PharmacistDeliveriesRoute: PharmacistDeliveriesRoute,
   PharmacistDiagnosticsRoute: PharmacistDiagnosticsRoute,
-  PharmacistDistributionRoute: PharmacistDistributionRoute,
   PharmacistStockRoute: PharmacistStockRoute,
   PharmacistIndexRoute: PharmacistIndexRoute,
 }

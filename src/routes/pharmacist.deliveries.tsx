@@ -2,12 +2,20 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
-import { Truck, Plus, X, Package, AlertCircle } from "lucide-react";
+import {
+  Truck,
+  Plus,
+  X,
+  Package,
+  AlertCircle,
+  PackagePlus,
+} from "lucide-react";
 import {
   useInventory,
   useCurrentPharmacist,
   sendStockDelivery,
   useStockDeliveries,
+  addInventoryStock,
   type DeliveryItem,
 } from "@/lib/pharmacist-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
@@ -90,6 +98,11 @@ function Deliveries() {
           Change the clinic in the header to deliver elsewhere
         </span>
       </div>
+
+      {/* Pharmacy's own restocking — moved here from the Distribution page,
+          which is being retired. This is the pharmacy receiving from its
+          wholesaler, which is a different thing from sending to a clinic. */}
+      <SupplierIntake stock={available} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Compose */}
@@ -316,5 +329,120 @@ function DeliveryCard({ d }: { d: any }) {
         </p>
       )}
     </li>
+  );
+}
+function SupplierIntake({
+  stock,
+}: {
+  stock: ReturnType<typeof useInventory>["stock"];
+}) {
+  const [open, setOpen] = useState(false);
+  const [medIdx, setMedIdx] = useState(0);
+  const [qty, setQty] = useState("");
+  const [supplier, setSupplier] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const med = stock[medIdx];
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = Number(qty);
+    if (!Number.isFinite(n) || n <= 0)
+      return toast.error("Enter a quantity greater than zero");
+    if (!med?.docId)
+      return toast.error(
+        "That medication isn't linked to an inventory record.",
+      );
+    setSaving(true);
+    try {
+      await addInventoryStock(med.docId, n);
+      toast.success(
+        `${n} × ${med.name} added${supplier ? ` from ${supplier}` : ""}`,
+      );
+      setQty("");
+      setSupplier("");
+      setOpen(false);
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not update stock. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border p-5 mb-6">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 text-left"
+      >
+        <PackagePlus size={16} className="text-[oklch(0.55_0.18_245)]" />
+        <div>
+          <h3 className="font-semibold">Receive stock into the pharmacy</h3>
+          <p className="text-xs text-muted-foreground">
+            Your own restocking from a wholesaler — separate from sending to a
+            clinic.
+          </p>
+        </div>
+        <span className="ml-auto text-xs font-medium border px-3 py-1.5 rounded-md">
+          {open ? "Close" : "Add stock"}
+        </span>
+      </button>
+
+      {open && (
+        <form
+          onSubmit={submit}
+          className="mt-4 pt-4 border-t grid grid-cols-1 md:grid-cols-[2fr_1fr_1.5fr_auto] gap-3 items-end"
+        >
+          <div>
+            <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+              MEDICATION
+            </label>
+            <select
+              value={medIdx}
+              onChange={(e) => setMedIdx(Number(e.target.value))}
+              className="w-full px-3 py-2 border rounded-md text-sm bg-white"
+            >
+              {stock.map((s, i) => (
+                <option key={s.docId ?? s.name} value={i}>
+                  {s.name} ({s.units} on hand)
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+              QUANTITY
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              placeholder="e.g. 200"
+              className="w-full px-3 py-2 border rounded-md text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+              SUPPLIER (OPTIONAL)
+            </label>
+            <input
+              value={supplier}
+              onChange={(e) => setSupplier(e.target.value)}
+              placeholder="e.g. Adcock Ingram"
+              className="w-full px-3 py-2 border rounded-md text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={saving}
+            className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Add"}
+          </button>
+        </form>
+      )}
+    </div>
   );
 }

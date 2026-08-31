@@ -820,3 +820,238 @@ export async function recordExternalStock(input: {
 
   return { ok: true };
 }
+// ---------------------------------------------------------------------------
+// Inventory forecasting.
+//
+// Uses standard inventory-management method, not invented numbers:
+//   - Average daily usage from real dispensing history
+//   - Days of stock remaining = on hand / average daily usage
+//   - Reorder point = (average daily usage x lead time) + safety stock
+//   - Suggested order = enough to cover the review period, minus what's left
+//
+// Deliberately NOT included: outbreak or geographic demand prediction. That
+// needs epidemiological data this system doesn't have, and inventing it would
+// look convincing while being fiction.
+// ---------------------------------------------------------------------------
+
+export interface MedForecast {
+  name: string;
+  onHand: number;
+  avgDailyUse: number;
+  daysRemaining: number | null; // null = no usage history yet
+  reorderPoint: number;
+  suggestedOrder: number;
+  status: "critical" | "reorder" | "healthy" | "unknown";
+  history: { date: string; units: number }[];
+}
+
+const LEAD_TIME_DAYS = 3; // typical supplier turnaround
+const SAFETY_DAYS = 4; // buffer against demand spikes
+const COVER_DAYS = 30; // how long an order should last
+
+/**
+ * Real usage history per medication over `days`, from the distributions
+ * collection. Returns oldest-first so it charts naturally.
+ */
+type UsageMap = Record<string, { date: string; units: number }[]>;
+
+export function useMedicationUsage(days = 30): UsageMap {
+  const [usage, setUsage] = useState<UsageMap>({});
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "distributions"), (snap) => {
+      const dayKeys: string[] = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        dayKeys.push(d.toISOString().slice(0, 10));
+      }
+
+      const byMed: Record<string, number[]> = {};
+      snap.docs.forEach((docSnap) => {
+        const data = docSnap.data();
+        const medName = data.medName as string;
+        const idx = dayKeys.indexOf(data.date as string);
+        if (idx === -1 || !medName) return;
+        if (!byMed[medName]) byMed[medName] = new Array(days).fill(0);
+        byMed[medName][idx] += toNumber(data.unitsGiven);
+      });
+
+      const out: Record<string, { date: string; units: number }[]> = {};
+      for (const [med, counts] of Object.entries(byMed)) {
+        out[med] = counts.map((units, i) => ({ date: dayKeys[i], units }));
+      }
+      setUsage(out);
+    });
+    return () => unsub();
+  }, [days]);
+
+  return usage;
+}
+
+export function buildForecasts(
+  stock: StockItem[],
+  usage: Record<string, { date: string; units: number }[]>,
+): MedForecast[] {
+  return stock
+    .map((s) => {
+      const history = usage[s.name] ?? [];
+      const totalUsed = history.reduce((sum, d) => sum + d.units, 0);
+      const daysOfData = history.length || 1;
+      const avgDailyUse = totalUsed / daysOfData;
+
+      // No usage recorded — can't forecast, and saying "0 days left" would
+      // be wrong. Report it as unknown rather than guessing.
+      if (avgDailyUse <= 0) {
+        return {
+          name: s.name,
+          onHand: s.units,
+          avgDailyUse: 0,
+          daysRemaining: null,
+          reorderPoint: 0,
+          suggestedOrder: 0,
+          status: "unknown" as const,
+          history,
+        };
+      }
+
+      const daysRemaining = s.units / avgDailyUse;
+      const reorderPoint = Math.ceil(
+        avgDailyUse * LEAD_TIME_DAYS + avgDailyUse * SAFETY_DAYS,
+      );
+      const targetLevel = Math.ceil(
+        avgDailyUse * (COVER_DAYS + LEAD_TIME_DAYS),
+      );
+      const suggestedOrder = Math.max(0, targetLevel - s.units);
+
+      const status =
+        daysRemaining <= LEAD_TIME_DAYS
+          ? ("critical" as const)
+          : s.units <= reorderPoint
+            ? ("reorder" as const)
+            : ("healthy" as const);
+
+      return {
+        name: s.name,
+        onHand: s.units,
+        avgDailyUse: Math.round(avgDailyUse * 10) / 10,
+        daysRemaining: Math.round(daysRemaining * 10) / 10,
+        reorderPoint,
+        suggestedOrder,
+        status,
+        history,
+      };
+    })
+    .sort((a, b) => {
+      const rank = { critical: 0, reorder: 1, healthy: 2, unknown: 3 };
+      if (rank[a.status] !== rank[b.status])
+        return rank[a.status] - rank[b.status];
+      return (a.daysRemaining ?? 999) - (b.daysRemaining ?? 999);
+    });
+}
+/**
+ * Plain-English reading of the forecast numbers, for someone who doesn't
+ * want to interpret charts. Every sentence is derived from the same real
+ * data the table shows — nothing here is generated or guessed.
+ */
+export function summariseForecasts(
+  forecasts: MedForecast[],
+  clinicName?: string,
+): { headline: string; points: string[] } {
+  const known = forecasts.filter((f) => f.status !== "unknown");
+  const critical = forecasts.filter((f) => f.status === "critical");
+  const reorder = forecasts.filter((f) => f.status === "reorder");
+  const where = clinicName ?? "this clinic";
+
+  if (forecasts.length === 0) {
+    return {
+      headline: `No stock is currently recorded for ${where}.`,
+      points: [],
+    };
+  }
+
+  if (known.length === 0) {
+    return {
+      headline: `${forecasts.length} medications are stocked at ${where}, but none have been dispensed recently.`,
+      points: [
+        "Without dispensing history there's nothing to forecast from — these figures will fill in as medication is handed out.",
+      ],
+    };
+  }
+
+  const headline =
+    critical.length > 0
+      ? `${critical.length} medication${critical.length === 1 ? "" : "s"} at ${where} will run out before a new order could arrive.`
+      : reorder.length > 0
+        ? `Stock at ${where} is holding, but ${reorder.length} item${reorder.length === 1 ? "" : "s"} should be reordered soon.`
+        : `Stock levels at ${where} are healthy across all ${known.length} tracked medications.`;
+
+  const points: string[] = [];
+
+  if (critical.length > 0) {
+    const worst = critical[0];
+    points.push(
+      `${worst.name} is the most urgent — about ${worst.daysRemaining} days left at the current rate of ${worst.avgDailyUse} per day. Ordering ${worst.suggestedOrder} would cover the next month.`,
+    );
+    if (critical.length > 1) {
+      points.push(
+        `Also running out soon: ${critical
+          .slice(1, 4)
+          .map((f) => `${f.name} (${f.daysRemaining}d)`)
+          .join(", ")}${critical.length > 4 ? ", and others" : ""}.`,
+      );
+    }
+  }
+
+  if (reorder.length > 0) {
+    points.push(
+      `${reorder.length} item${reorder.length === 1 ? " has" : "s have"} dropped to the reorder point: ${reorder
+        .slice(0, 3)
+        .map((f) => f.name)
+        .join(
+          ", ",
+        )}${reorder.length > 3 ? ", and others" : ""}. Not urgent yet, but worth including in the next order.`,
+    );
+  }
+
+  // Busiest medication by total consumption.
+  const busiest = [...known].sort((a, b) => b.avgDailyUse - a.avgDailyUse)[0];
+  if (busiest && busiest.avgDailyUse > 0) {
+    points.push(
+      `${busiest.name} moves fastest at roughly ${busiest.avgDailyUse} units a day — the one most worth keeping ahead of.`,
+    );
+  }
+
+  // Is overall demand rising or falling? Compare the two halves of the window.
+  const totals = new Map<string, number>();
+  for (const f of known) {
+    for (const d of f.history) {
+      totals.set(d.date, (totals.get(d.date) ?? 0) + d.units);
+    }
+  }
+  const series = [...totals.entries()].sort(([a], [b]) => a.localeCompare(b));
+  if (series.length >= 8) {
+    const half = Math.floor(series.length / 2);
+    const older = series.slice(0, half).reduce((s, [, v]) => s + v, 0);
+    const recent = series.slice(half).reduce((s, [, v]) => s + v, 0);
+    if (older > 0) {
+      const change = Math.round(((recent - older) / older) * 100);
+      if (Math.abs(change) >= 15) {
+        points.push(
+          change > 0
+            ? `Dispensing is up about ${change}% compared with the earlier part of the month — demand is rising, so current stock will last less long than these figures suggest.`
+            : `Dispensing is down about ${Math.abs(change)}% on the earlier part of the month, so stock should stretch further than the day counts imply.`,
+        );
+      }
+    }
+  }
+
+  const noData = forecasts.filter((f) => f.status === "unknown").length;
+  if (noData > 0) {
+    points.push(
+      `${noData} medication${noData === 1 ? " has" : "s have"} no recent dispensing record, so ${noData === 1 ? "it isn't" : "they aren't"} included in these forecasts.`,
+    );
+  }
+
+  return { headline, points };
+}
