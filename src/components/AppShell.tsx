@@ -183,7 +183,9 @@ export function AppShell({
     role === "super_admin"
       ? "Zennith Platform · All facilities"
       : role === "patient"
-        ? "Patient Portal"
+        ? // A patient attends a clinic rather than working at one, so this
+          // reads as "where my records are", not a workplace.
+          (sidebarPatient?.clinicName ?? "Patient Portal")
         : role === "pharmacist"
           ? (clinicNameOverride ??
             realPharmacistClinic.activeClinicName ??
@@ -273,6 +275,15 @@ export function AppShell({
             {title}
           </h1>
           <div className="flex-1" />
+          {role === "patient" && sidebarPatient?.clinicName ? (
+            <ClinicChip
+              clinicId=""
+              clinicName={sidebarPatient.clinicName}
+              canSwitch={false}
+              onSwitch={() => {}}
+              options={[]}
+            />
+          ) : null}
           {role !== "patient" &&
             role !== "super_admin" &&
             (role === "pharmacist" ? (

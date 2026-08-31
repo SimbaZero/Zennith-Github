@@ -67,6 +67,11 @@ const TRIAGE_MAX_WAIT_MINUTES: Record<TriageLevel, number> = {
 const BTN_SECONDARY =
   "text-xs font-medium border px-3 py-1.5 rounded-md hover:bg-secondary";
 
+// How long a called patient can stay "called" before reception is prompted.
+// Someone called but never marked as arrived stalls the queue silently —
+// they're no longer waiting, but they're not being seen either.
+const NO_SHOW_AFTER_MIN = 5;
+
 // Guided triage. Reception is not clinically trained, so they should not be
 // choosing "Critical" from a dropdown — they answer observable yes/no
 // questions and the level is computed. Modelled on the emergency
@@ -318,6 +323,13 @@ function QueuePage() {
   const waiting = active.filter(
     (q) => q.status === "waiting" || q.status === "called",
   );
+  const stalled = active.filter(
+    (q) =>
+      q.status === "called" &&
+      q.calledAt &&
+      (now.getTime() - new Date(q.calledAt).getTime()) / 60000 >
+        NO_SHOW_AFTER_MIN,
+  );
 
   const escalatedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -469,6 +481,18 @@ function QueuePage() {
       clinicNameOverride={receptionist?.clinicName}
       staffNameOverride={receptionist?.name}
     >
+      {stalled.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex items-center gap-3">
+          <p className="text-sm text-amber-900">
+            <strong>
+              {stalled.length} patient{stalled.length === 1 ? "" : "s"}
+            </strong>{" "}
+            called but not arrived — re-call them or mark as no-show so the
+            queue keeps moving.
+          </p>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border p-5">
         <div className="flex items-start justify-between mb-3 gap-3">
           <div className="min-w-0">
@@ -728,6 +752,40 @@ function QueuePage() {
                     <p className="text-[11px] text-muted-foreground mt-0.5">
                       {[q.patientId, q.reason].filter(Boolean).join(" · ")}
                     </p>
+
+                    {/* Called but never arrived. Without this the entry just
+                        sits as "Called" indefinitely and nobody notices. */}
+                    {q.status === "called" &&
+                      q.calledAt &&
+                      (now.getTime() - new Date(q.calledAt).getTime()) / 60000 >
+                        NO_SHOW_AFTER_MIN && (
+                        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+                          <p className="text-xs text-amber-900">
+                            Called{" "}
+                            {Math.round(
+                              (now.getTime() - new Date(q.calledAt).getTime()) /
+                                60000,
+                            )}{" "}
+                            min ago but hasn't arrived.
+                          </p>
+                          <div className="flex gap-2 mt-2">
+                            <button
+                              onClick={() =>
+                                handleSetQueueStatus(q.id, "waiting")
+                              }
+                              className="text-xs font-medium border bg-white px-3 py-1.5 rounded-md hover:bg-secondary"
+                            >
+                              Put back in queue
+                            </button>
+                            <button
+                              onClick={() => handleRemoveFromQueue(q.id)}
+                              className="text-xs font-medium border bg-white px-3 py-1.5 rounded-md hover:bg-secondary"
+                            >
+                              Mark as no-show
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                     {/* Wait time. Over-target is a quiet amber marker, not a
                         red shout — reception can't speed up a clinician, but
