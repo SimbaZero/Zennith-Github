@@ -39,6 +39,11 @@ import {
 import { useCurrentPharmacist } from "@/lib/pharmacist-service";
 import { useCurrentDoctor } from "@/lib/doctor-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
+import { useNotifications, markRead, markAllRead } from "@/lib/notify";
+import { useQuery } from "@tanstack/react-query";
+import { useCurrentNurse } from "@/lib/nurse-service";
+import { resolveCurrentReceptionist } from "@/lib/clinic-data";
+import { useCurrentAdmin } from "@/lib/auth";
 
 export type NavItem = { to: string; label: string; icon: LucideIcon };
 
@@ -422,37 +427,40 @@ function ScopedSearch({ role }: { role: Role }) {
 
 function NotificationsButton({ role }: { role: Role }) {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<Notification[]>([]);
   const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
-  // Real for Patient (same Firestore source the Alerts page uses) — still
-  // the old static fake list for every other role. Those roles' bell
-  // dropdowns are a known, flagged gap, not silently "also fixed" by this.
+  // Real for EVERY role now. The notifications collection was always keyed
+  // on the numeric users.userId — which every role has — but only Patients
+  // were ever wired to it; the rest rendered a hardcoded fake list.
   const { patient } = useCurrentPatient();
-  const realPatientNotifs = usePatientNotifications(
-    role === "patient" ? patient?.userId : undefined,
-  );
+  const { nurse } = useCurrentNurse();
+  const { doctor } = useCurrentDoctor();
+  const { pharmacist } = useCurrentPharmacist();
+  const { data: receptionist } = useQuery({
+    queryKey: ["current-receptionist"],
+    queryFn: resolveCurrentReceptionist,
+    enabled: role === "receptionist",
+  });
+  const { admin } = useCurrentAdmin();
 
-  useEffect(() => {
-    if (role === "patient") {
-      setItems(
-        realPatientNotifs.map((n) => ({
-          title: n.title,
-          body: n.message,
-          time: new Date(n.timeSent).toLocaleString("en-ZA", {
-            day: "numeric",
-            month: "short",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-          unread: !n.isRead,
-          docId: n.docId,
-        })),
-      );
-    } else {
-      setItems(getNotifications(role));
-    }
-  }, [role, realPatientNotifs]);
+  const userId =
+    role === "patient"
+      ? patient?.userId
+      : role === "nurse"
+        ? nurse?.userId
+        : role === "doctor"
+          ? doctor?.userId
+          : role === "pharmacist"
+            ? pharmacist?.userId
+            : role === "receptionist"
+              ? receptionist?.userId
+              : role === "admin"
+                ? adminUserIdFrom(admin)
+                : undefined;
+
+  const items = useNotifications(userId ?? undefined);
+
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node))
@@ -462,7 +470,7 @@ function NotificationsButton({ role }: { role: Role }) {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const unread = items.filter((i) => i.unread).length;
+  const unread = items.filter((i) => !i.isRead).length;
 
   return (
     <div className="relative" ref={ref}>
@@ -482,17 +490,14 @@ function NotificationsButton({ role }: { role: Role }) {
         <div className="absolute right-0 mt-1 w-80 bg-white border rounded-md shadow-lg z-50">
           <div className="flex items-center justify-between p-3 border-b">
             <span className="font-semibold text-sm">Notifications</span>
-            {items.length > 0 && (
+            {unread > 0 && (
               <button
                 className="text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  if (role === "patient") {
-                    items.forEach((i) => {
-                      if (i.unread && i.docId) markNotificationRead(i.docId);
-                    });
-                  }
-                  setItems(items.map((i) => ({ ...i, unread: false })));
-                }}
+                onClick={() =>
+                  markAllRead(
+                    items.filter((i) => !i.isRead).map((i) => i.docId),
+                  )
+                }
               >
                 Mark all read
               </button>
@@ -510,28 +515,37 @@ function NotificationsButton({ role }: { role: Role }) {
                 </p>
               </div>
             ) : (
-              items.map((n, i) => (
-                <div
-                  key={i}
-                  className={`p-3 border-b last:border-b-0 ${n.unread ? "bg-[oklch(0.97_0.03_245)]" : ""}`}
+              items.map((n) => (
+                <button
+                  key={n.docId}
+                  onClick={() => {
+                    if (!n.isRead) markRead(n.docId);
+                    // A notification should be a way IN, not just an
+                    // announcement — jump to where you can act on it.
+                    if (n.link) {
+                      setOpen(false);
+                      navigate({ to: n.link as any });
+                    }
+                  }}
+                  className={`w-full text-left p-3 border-b last:border-b-0 hover:bg-secondary/50 ${
+                    !n.isRead ? "bg-[oklch(0.97_0.03_245)]" : ""
+                  }`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="font-medium text-sm">{n.title}</div>
-                    <button
-                      onClick={() => setItems(items.filter((_, j) => j !== i))}
-                      className="text-muted-foreground hover:text-foreground"
-                      aria-label="Dismiss"
-                    >
-                      <X size={14} />
-                    </button>
+                  <div className="flex items-start gap-2">
+                    {!n.isRead && (
+                      <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[oklch(0.55_0.18_245)] shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm">{n.title}</div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {n.message}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        {formatNotifTime(n.timeSent)}
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {n.body}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground mt-1">
-                    {n.time}
-                  </div>
-                </div>
+                </button>
               ))
             )}
           </div>
@@ -539,6 +553,23 @@ function NotificationsButton({ role }: { role: Role }) {
       )}
     </div>
   );
+}
+
+/** Admin's clinicId lives on the profile, but notifications need a userId. */
+function adminUserIdFrom(admin: { clinicId?: number } | null): undefined {
+  // TODO(db): useCurrentAdmin doesn't expose legacyUserId yet, so admin
+  // notifications aren't wired up. Flagged rather than faked.
+  return undefined;
+}
+
+function formatNotifTime(raw: string) {
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+  return d.toLocaleDateString("en-ZA", { day: "numeric", month: "short" });
 }
 
 function ClinicChip({

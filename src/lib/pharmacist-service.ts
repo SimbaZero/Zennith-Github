@@ -15,6 +15,7 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { stock as mockStock } from "@/lib/data";
+import { notifyRoleAtClinic, userIdForStaff } from "@/lib/notify";
 
 // Shape the existing UI already expects (see pharmacist.index.tsx, pharmacist.stock.tsx).
 // Real Firestore `inventory` docs use different field names (medName, quantity) —
@@ -617,6 +618,16 @@ export async function sendStockDelivery(input: {
     await addInventoryStock(item.inventoryDocId, -item.quantity);
   }
 
+  // Tell the clinic's nurses something is on the way. Any of them can
+  // receive it, so it goes to all of them rather than one named person.
+  notifyRoleAtClinic({
+    role: "nurses",
+    clinicId: input.clinicId,
+    title: "Stock delivery on the way",
+    message: `${input.items.length} medication${input.items.length === 1 ? "" : "s"} sent from the pharmacy — confirm when it arrives.`,
+    link: "/nurse/stock",
+  });
+
   return { ok: true };
 }
 
@@ -742,6 +753,26 @@ export async function confirmStockDelivery(input: {
       : {}),
   });
 
+  // Close the loop back to whoever sent it.
+  const senderId = snap.data().sentByPharmacistId as string | null;
+  if (senderId) {
+    const uid = await userIdForStaff("pharmacists", senderId);
+    if (uid != null) {
+      await notifyUser({
+        userId: uid,
+        title:
+          discrepancies.length > 0
+            ? "Delivery received — amounts didn't match"
+            : "Delivery confirmed",
+        message:
+          discrepancies.length > 0
+            ? `${discrepancies.map((d) => `${d.name}: sent ${d.sent}, got ${d.received}`).join("; ")}${input.discrepancyNote ? ` — "${input.discrepancyNote}"` : ""}`
+            : `All items received in full by ${input.nurseId}.`,
+        link: "/pharmacist/deliveries",
+      });
+    }
+  }
+
   return { ok: true };
 }
 
@@ -763,6 +794,19 @@ export async function rejectStockDelivery(
     confirmedAt: new Date().toISOString(),
     rejectionReason: reason,
   });
+
+  const senderId = snap.data().sentByPharmacistId as string | null;
+  if (senderId) {
+    const uid = await userIdForStaff("pharmacists", senderId);
+    if (uid != null) {
+      await notifyUser({
+        userId: uid,
+        title: "Delivery rejected",
+        message: `${nurseId} rejected the delivery: ${reason}`,
+        link: "/pharmacist/deliveries",
+      });
+    }
+  }
   return { ok: true };
 }
 

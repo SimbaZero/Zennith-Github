@@ -32,6 +32,7 @@ import {
 } from "firebase/auth";
 import { auth, db, firebaseConfig } from "@/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
+import { notifyUser, userIdForStaff } from "@/lib/notify";
 
 // Same fix already proven in doctor-service.ts's waitForAuthReady(): on a
 // hard page load, auth.currentUser can still be null for a brief moment
@@ -1086,6 +1087,22 @@ export async function createAppointment(input: {
       ? { clinicId: patient.data()?.clinicId }
       : {}),
   });
+
+  // Tell the clinician they've been booked — previously they'd only find
+  // out by happening to look at their calendar.
+  if (clinician) {
+    const col = /^doc/i.test(clinician) ? "doctors" : "nurses";
+    const uid = await userIdForStaff(col, clinician);
+    if (uid != null) {
+      notifyUser({
+        userId: uid,
+        title: "New appointment booked",
+        message: `${input.date} at ${input.time} — ${input.patientId} (${input.type})`,
+        link:
+          col === "doctors" ? "/doctor/appointments" : "/nurse/appointments",
+      });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
