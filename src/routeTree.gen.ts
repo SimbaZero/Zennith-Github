@@ -38,11 +38,13 @@ import { Route as ReceptionistAppointmentsRouteImport } from './routes/reception
 import { Route as PharmacistStockRouteImport } from './routes/pharmacist.stock'
 import { Route as PharmacistDistributionRouteImport } from './routes/pharmacist.distribution'
 import { Route as PharmacistDiagnosticsRouteImport } from './routes/pharmacist.diagnostics'
+import { Route as PharmacistDeliveriesRouteImport } from './routes/pharmacist.deliveries'
 import { Route as PharmacistAnalyticsRouteImport } from './routes/pharmacist.analytics'
 import { Route as PatientPrivacyRouteImport } from './routes/patient.privacy'
 import { Route as PatientMedicalRecordRouteImport } from './routes/patient.medical-record'
 import { Route as PatientAppointmentsRouteImport } from './routes/patient.appointments'
 import { Route as PatientAlertsRouteImport } from './routes/patient.alerts'
+import { Route as NurseStockRouteImport } from './routes/nurse.stock'
 import { Route as NursePatientsRouteImport } from './routes/nurse.patients'
 import { Route as NurseDigitizeRouteImport } from './routes/nurse.digitize'
 import { Route as NurseAppointmentsRouteImport } from './routes/nurse.appointments'
@@ -202,6 +204,11 @@ const PharmacistDiagnosticsRoute = PharmacistDiagnosticsRouteImport.update({
   path: '/diagnostics',
   getParentRoute: () => PharmacistRoute,
 } as any)
+const PharmacistDeliveriesRoute = PharmacistDeliveriesRouteImport.update({
+  id: '/deliveries',
+  path: '/deliveries',
+  getParentRoute: () => PharmacistRoute,
+} as any)
 const PharmacistAnalyticsRoute = PharmacistAnalyticsRouteImport.update({
   id: '/analytics',
   path: '/analytics',
@@ -226,6 +233,11 @@ const PatientAlertsRoute = PatientAlertsRouteImport.update({
   id: '/alerts',
   path: '/alerts',
   getParentRoute: () => PatientRoute,
+} as any)
+const NurseStockRoute = NurseStockRouteImport.update({
+  id: '/stock',
+  path: '/stock',
+  getParentRoute: () => NurseRoute,
 } as any)
 const NursePatientsRoute = NursePatientsRouteImport.update({
   id: '/patients',
@@ -305,11 +317,13 @@ export interface FileRoutesByFullPath {
   '/nurse/appointments': typeof NurseAppointmentsRoute
   '/nurse/digitize': typeof NurseDigitizeRoute
   '/nurse/patients': typeof NursePatientsRoute
+  '/nurse/stock': typeof NurseStockRoute
   '/patient/alerts': typeof PatientAlertsRoute
   '/patient/appointments': typeof PatientAppointmentsRoute
   '/patient/medical-record': typeof PatientMedicalRecordRoute
   '/patient/privacy': typeof PatientPrivacyRoute
   '/pharmacist/analytics': typeof PharmacistAnalyticsRoute
+  '/pharmacist/deliveries': typeof PharmacistDeliveriesRoute
   '/pharmacist/diagnostics': typeof PharmacistDiagnosticsRoute
   '/pharmacist/distribution': typeof PharmacistDistributionRoute
   '/pharmacist/stock': typeof PharmacistStockRoute
@@ -345,11 +359,13 @@ export interface FileRoutesByTo {
   '/nurse/appointments': typeof NurseAppointmentsRoute
   '/nurse/digitize': typeof NurseDigitizeRoute
   '/nurse/patients': typeof NursePatientsRoute
+  '/nurse/stock': typeof NurseStockRoute
   '/patient/alerts': typeof PatientAlertsRoute
   '/patient/appointments': typeof PatientAppointmentsRoute
   '/patient/medical-record': typeof PatientMedicalRecordRoute
   '/patient/privacy': typeof PatientPrivacyRoute
   '/pharmacist/analytics': typeof PharmacistAnalyticsRoute
+  '/pharmacist/deliveries': typeof PharmacistDeliveriesRoute
   '/pharmacist/diagnostics': typeof PharmacistDiagnosticsRoute
   '/pharmacist/distribution': typeof PharmacistDistributionRoute
   '/pharmacist/stock': typeof PharmacistStockRoute
@@ -393,11 +409,13 @@ export interface FileRoutesById {
   '/nurse/appointments': typeof NurseAppointmentsRoute
   '/nurse/digitize': typeof NurseDigitizeRoute
   '/nurse/patients': typeof NursePatientsRoute
+  '/nurse/stock': typeof NurseStockRoute
   '/patient/alerts': typeof PatientAlertsRoute
   '/patient/appointments': typeof PatientAppointmentsRoute
   '/patient/medical-record': typeof PatientMedicalRecordRoute
   '/patient/privacy': typeof PatientPrivacyRoute
   '/pharmacist/analytics': typeof PharmacistAnalyticsRoute
+  '/pharmacist/deliveries': typeof PharmacistDeliveriesRoute
   '/pharmacist/diagnostics': typeof PharmacistDiagnosticsRoute
   '/pharmacist/distribution': typeof PharmacistDistributionRoute
   '/pharmacist/stock': typeof PharmacistStockRoute
@@ -442,11 +460,13 @@ export interface FileRouteTypes {
     | '/nurse/appointments'
     | '/nurse/digitize'
     | '/nurse/patients'
+    | '/nurse/stock'
     | '/patient/alerts'
     | '/patient/appointments'
     | '/patient/medical-record'
     | '/patient/privacy'
     | '/pharmacist/analytics'
+    | '/pharmacist/deliveries'
     | '/pharmacist/diagnostics'
     | '/pharmacist/distribution'
     | '/pharmacist/stock'
@@ -482,11 +502,13 @@ export interface FileRouteTypes {
     | '/nurse/appointments'
     | '/nurse/digitize'
     | '/nurse/patients'
+    | '/nurse/stock'
     | '/patient/alerts'
     | '/patient/appointments'
     | '/patient/medical-record'
     | '/patient/privacy'
     | '/pharmacist/analytics'
+    | '/pharmacist/deliveries'
     | '/pharmacist/diagnostics'
     | '/pharmacist/distribution'
     | '/pharmacist/stock'
@@ -529,11 +551,13 @@ export interface FileRouteTypes {
     | '/nurse/appointments'
     | '/nurse/digitize'
     | '/nurse/patients'
+    | '/nurse/stock'
     | '/patient/alerts'
     | '/patient/appointments'
     | '/patient/medical-record'
     | '/patient/privacy'
     | '/pharmacist/analytics'
+    | '/pharmacist/deliveries'
     | '/pharmacist/diagnostics'
     | '/pharmacist/distribution'
     | '/pharmacist/stock'
@@ -776,6 +800,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PharmacistDiagnosticsRouteImport
       parentRoute: typeof PharmacistRoute
     }
+    '/pharmacist/deliveries': {
+      id: '/pharmacist/deliveries'
+      path: '/deliveries'
+      fullPath: '/pharmacist/deliveries'
+      preLoaderRoute: typeof PharmacistDeliveriesRouteImport
+      parentRoute: typeof PharmacistRoute
+    }
     '/pharmacist/analytics': {
       id: '/pharmacist/analytics'
       path: '/analytics'
@@ -810,6 +841,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/patient/alerts'
       preLoaderRoute: typeof PatientAlertsRouteImport
       parentRoute: typeof PatientRoute
+    }
+    '/nurse/stock': {
+      id: '/nurse/stock'
+      path: '/stock'
+      fullPath: '/nurse/stock'
+      preLoaderRoute: typeof NurseStockRouteImport
+      parentRoute: typeof NurseRoute
     }
     '/nurse/patients': {
       id: '/nurse/patients'
@@ -928,6 +966,7 @@ interface NurseRouteChildren {
   NurseAppointmentsRoute: typeof NurseAppointmentsRoute
   NurseDigitizeRoute: typeof NurseDigitizeRoute
   NursePatientsRoute: typeof NursePatientsRoute
+  NurseStockRoute: typeof NurseStockRoute
   NurseIndexRoute: typeof NurseIndexRoute
   NursePatientRecordPidRoute: typeof NursePatientRecordPidRoute
 }
@@ -936,6 +975,7 @@ const NurseRouteChildren: NurseRouteChildren = {
   NurseAppointmentsRoute: NurseAppointmentsRoute,
   NurseDigitizeRoute: NurseDigitizeRoute,
   NursePatientsRoute: NursePatientsRoute,
+  NurseStockRoute: NurseStockRoute,
   NurseIndexRoute: NurseIndexRoute,
   NursePatientRecordPidRoute: NursePatientRecordPidRoute,
 }
@@ -963,6 +1003,7 @@ const PatientRouteWithChildren =
 
 interface PharmacistRouteChildren {
   PharmacistAnalyticsRoute: typeof PharmacistAnalyticsRoute
+  PharmacistDeliveriesRoute: typeof PharmacistDeliveriesRoute
   PharmacistDiagnosticsRoute: typeof PharmacistDiagnosticsRoute
   PharmacistDistributionRoute: typeof PharmacistDistributionRoute
   PharmacistStockRoute: typeof PharmacistStockRoute
@@ -971,6 +1012,7 @@ interface PharmacistRouteChildren {
 
 const PharmacistRouteChildren: PharmacistRouteChildren = {
   PharmacistAnalyticsRoute: PharmacistAnalyticsRoute,
+  PharmacistDeliveriesRoute: PharmacistDeliveriesRoute,
   PharmacistDiagnosticsRoute: PharmacistDiagnosticsRoute,
   PharmacistDistributionRoute: PharmacistDistributionRoute,
   PharmacistStockRoute: PharmacistStockRoute,

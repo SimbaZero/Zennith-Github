@@ -327,21 +327,32 @@ function QueuePage() {
       if (!stillWaitingIds.has(id)) escalatedRef.current.delete(id);
     }
     waiting.forEach((q) => {
-      const waitMin = (now.getTime() - new Date(q.joinedAt).getTime()) / 60000;
+      const waitMin = Math.round(
+        (now.getTime() - new Date(q.joinedAt).getTime()) / 60000,
+      );
       const maxWait = TRIAGE_MAX_WAIT_MINUTES[q.triage];
-      if (waitMin > maxWait && q.status === "waiting") {
+      // Same 10-minute grace period the audit flags use — a red target is
+      // 0 min, so without it every patient alerts within a minute.
+      if (waitMin > maxWait + 10 && q.status === "waiting") {
         if (!escalatedRef.current.has(q.id)) {
           escalatedRef.current.add(q.id);
-          const entry: LogEntry = {
-            ts: now.toISOString(),
-            msg: `ESCALATION: ${q.patientId} (${q.triage.toUpperCase()}) exceeded ${maxWait}min wait`,
-            type: "critical",
-          };
-          setAuditLog((l) => [entry, ...l].slice(0, 20));
+          toast.error(
+            `${q.patientName} (${q.triage.toUpperCase()}) waiting ${waitMin} min`,
+            { duration: 10000, id: `escalation-${q.id}` },
+          );
+          // Real notification, not just a toast — survives navigating away
+          // and lands in the bell like everything else.
+          if (receptionist?.userId != null) {
+            getClinicData().then(({ alertOverdueQueueEntry }) =>
+              alertOverdueQueueEntry(q, receptionist.userId!, waitMin).catch(
+                (err) => console.error("Overdue alert failed:", err),
+              ),
+            );
+          }
         }
       }
     });
-  }, [waiting, now, clinicReady]);
+  }, [waiting, now, clinicReady, receptionist?.userId]);
 
   const addWalkIn = async (e: React.FormEvent) => {
     e.preventDefault();

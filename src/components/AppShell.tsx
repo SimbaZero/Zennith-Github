@@ -23,6 +23,8 @@ import {
   X,
   Building2,
   ShieldQuestion,
+  Truck,
+  Package,
   type LucideIcon,
 } from "lucide-react";
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
@@ -46,6 +48,7 @@ const navByRole: Record<Role, NavItem[]> = {
     { to: "/nurse/appointments", label: "Appointments", icon: Calendar },
     { to: "/nurse/digitize", label: "Digitize Files", icon: ScanLine },
     { to: "/nurse/patients", label: "Patients", icon: Users },
+    { to: "/nurse/stock", label: "Stock", icon: Package },
   ],
   doctor: [
     { to: "/doctor", label: "Dashboard", icon: LayoutDashboard },
@@ -68,6 +71,7 @@ const navByRole: Record<Role, NavItem[]> = {
       icon: Search,
     },
     { to: "/pharmacist/distribution", label: "Distribution", icon: Share2 },
+    { to: "/pharmacist/deliveries", label: "Deliveries", icon: Truck },
     {
       to: "/pharmacist/analytics",
       label: "Medication Overview",

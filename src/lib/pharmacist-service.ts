@@ -529,3 +529,294 @@ export function useCurrentPharmacist(): {
 
   return { pharmacist, loading, error };
 }
+
+// ---------------------------------------------------------------------------
+// Stock deliveries: pharmacy → clinic.
+//
+// The `stockDeliveries` collection already existed in the schema with exactly
+// the right fields (sentByPharmacistId, confirmedByNurseId, clinicId, items,
+// status) but nothing in the app ever used it. This wires it up.
+//
+// The rule that matters: stock exists in exactly ONE place at a time.
+//   - Sending deducts from the pharmacy immediately (it left the shelf).
+//   - The clinic does NOT gain it until a nurse confirms arrival.
+// So stock in transit belongs to neither, which is the honest state.
+// ---------------------------------------------------------------------------
+
+export interface DeliveryItem {
+  inventoryDocId: string; // pharmacy's inventory doc it came out of
+  name: string;
+  quantity: number;
+}
+
+export interface StockDelivery {
+  id: string;
+  clinicId: number;
+  items: DeliveryItem[];
+  status: "Pending" | "Confirmed" | "Rejected";
+  sentByPharmacistId: string;
+  sentAt: string;
+  confirmedByNurseId?: string | null;
+  confirmedAt?: string | null;
+  note?: string;
+  /** Set when received quantities didn't match what was sent. */
+  hasDiscrepancy?: boolean;
+  discrepancies?: { name: string; sent: number; received: number }[];
+  discrepancyNote?: string;
+  rejectionReason?: string;
+  externalSource?: string;
+}
+
+/**
+ * Sends a delivery to a clinic and deducts the stock from the pharmacy now.
+ * Rejects the whole thing if any line would take stock negative, rather than
+ * sending a partial delivery the pharmacy can't actually fulfil.
+ */
+export async function sendStockDelivery(input: {
+  clinicId: number;
+  pharmacistId: string;
+  items: DeliveryItem[];
+  note?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  if (input.items.length === 0)
+    return { ok: false, error: "Add at least one medication." };
+
+  // Check everything is available BEFORE writing anything.
+  for (const item of input.items) {
+    const snap = await getDoc(doc(db, "inventory", item.inventoryDocId));
+    if (!snap.exists())
+      return { ok: false, error: `${item.name} is no longer in inventory.` };
+    const available = toNumber(snap.data().quantity);
+    if (item.quantity > available)
+      return {
+        ok: false,
+        error: `Only ${available} of ${item.name} in stock — can't send ${item.quantity}.`,
+      };
+  }
+
+  await addDoc(collection(db, "stockDeliveries"), {
+    clinicId: input.clinicId,
+    items: input.items.map((i) => ({
+      inventoryDocId: i.inventoryDocId,
+      name: i.name,
+      quantity: i.quantity,
+    })),
+    status: "Pending",
+    sentByPharmacistId: input.pharmacistId,
+    // Older seeded rows used `createdAt` — write both so old and new
+    // deliveries read consistently instead of showing "Invalid date".
+    createdAt: new Date().toISOString(),
+    sentAt: new Date().toISOString(),
+    confirmedByNurseId: null,
+    confirmedAt: null,
+    ...(input.note ? { note: input.note } : {}),
+  });
+
+  // Deduct from the pharmacy — the stock has physically left.
+  for (const item of input.items) {
+    await addInventoryStock(item.inventoryDocId, -item.quantity);
+  }
+
+  return { ok: true };
+}
+
+/** Live deliveries for one clinic (nurse's view) or one pharmacy (sent history). */
+export function useStockDeliveries(
+  clinicId?: number,
+  statusFilter?: StockDelivery["status"],
+): { deliveries: StockDelivery[]; loading: boolean } {
+  const [deliveries, setDeliveries] = useState<StockDelivery[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (clinicId == null) {
+      setDeliveries([]);
+      setLoading(false);
+      return;
+    }
+    const q = query(
+      collection(db, "stockDeliveries"),
+      where("clinicId", "==", clinicId),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        let rows = snap.docs.map(
+          (d) => ({ id: d.id, ...d.data() }) as StockDelivery,
+        );
+        if (statusFilter) rows = rows.filter((r) => r.status === statusFilter);
+        // Seeded rows use createdAt (a Firestore Timestamp), ours use sentAt
+        // (an ISO string). Normalise so both display and sort correctly.
+        rows = rows.map((r) => {
+          const raw = (r as any).sentAt ?? (r as any).createdAt;
+          const iso =
+            typeof raw === "string"
+              ? raw
+              : raw?.toDate?.()
+                ? raw.toDate().toISOString()
+                : new Date().toISOString();
+          return { ...r, sentAt: iso };
+        });
+        rows.sort(
+          (a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime(),
+        );
+        setDeliveries(rows);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Stock deliveries subscription failed:", err);
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [clinicId, statusFilter]);
+
+  return { deliveries, loading };
+}
+
+/**
+ * Nurse confirms a delivery arrived. `receivedItems` lets them correct the
+ * quantities — pharmacy sends 200, 180 actually arrives — because that's what
+ * really happens, and silently accepting the sent figure would put the
+ * clinic's stock permanently out of step with the shelf.
+ */
+export async function confirmStockDelivery(input: {
+  deliveryId: string;
+  nurseId: string;
+  clinicId: number;
+  receivedItems: { name: string; quantity: number }[];
+  /** Required when received quantities differ from what was sent. */
+  discrepancyNote?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const ref = doc(db, "stockDeliveries", input.deliveryId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return { ok: false, error: "Delivery not found." };
+  if (snap.data().status !== "Pending")
+    return { ok: false, error: "This delivery was already handled." };
+
+  // Add each received medication to the CLINIC's own inventory row, creating
+  // it if this clinic has never stocked that medication before.
+  for (const item of input.receivedItems) {
+    if (item.quantity <= 0) continue;
+    const existing = await getDocs(
+      query(
+        collection(db, "inventory"),
+        where("clinicId", "==", input.clinicId),
+        where("medName", "==", item.name),
+      ),
+    );
+    if (existing.empty) {
+      await addDoc(collection(db, "inventory"), {
+        medName: item.name,
+        quantity: item.quantity,
+        threshold: 0,
+        clinicId: input.clinicId,
+        category: "Delivered",
+        lastUpdated: new Date().toISOString(),
+      });
+    } else {
+      await addInventoryStock(existing.docs[0].id, item.quantity);
+    }
+  }
+
+  // Work out exactly which lines came up short or over, so the pharmacy can
+  // see the difference instead of it being silently absorbed into stock.
+  const sentItems = (snap.data().items ?? []) as DeliveryItem[];
+  const discrepancies = sentItems
+    .map((sent) => {
+      const got =
+        input.receivedItems.find((r) => r.name === sent.name)?.quantity ?? 0;
+      return { name: sent.name, sent: sent.quantity, received: got };
+    })
+    .filter((d) => d.sent !== d.received);
+
+  await updateDoc(ref, {
+    status: "Confirmed",
+    confirmedByNurseId: input.nurseId,
+    confirmedAt: new Date().toISOString(),
+    receivedItems: input.receivedItems,
+    hasDiscrepancy: discrepancies.length > 0,
+    discrepancies,
+    ...(input.discrepancyNote
+      ? { discrepancyNote: input.discrepancyNote }
+      : {}),
+  });
+
+  return { ok: true };
+}
+
+/** Nurse rejects a delivery outright — nothing is added to clinic stock. */
+export async function rejectStockDelivery(
+  deliveryId: string,
+  nurseId: string,
+  reason: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const ref = doc(db, "stockDeliveries", deliveryId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return { ok: false, error: "Delivery not found." };
+  if (snap.data().status !== "Pending")
+    return { ok: false, error: "This delivery was already handled." };
+
+  await updateDoc(ref, {
+    status: "Rejected",
+    confirmedByNurseId: nurseId,
+    confirmedAt: new Date().toISOString(),
+    rejectionReason: reason,
+  });
+  return { ok: true };
+}
+
+/**
+ * Fallback for when the supplying pharmacy doesn't use Zennith: a nurse
+ * records stock that physically arrived from outside the system.
+ *
+ * Deliberately no approval step — the stock is already in the room, and
+ * requiring sign-off just means nurses stop recording it. It's logged with
+ * who and why so it shows up in review instead.
+ */
+export async function recordExternalStock(input: {
+  clinicId: number;
+  nurseId: string;
+  medName: string;
+  quantity: number;
+  source: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  if (input.quantity <= 0)
+    return { ok: false, error: "Quantity must be more than zero." };
+
+  const existing = await getDocs(
+    query(
+      collection(db, "inventory"),
+      where("clinicId", "==", input.clinicId),
+      where("medName", "==", input.medName),
+    ),
+  );
+  if (existing.empty) {
+    await addDoc(collection(db, "inventory"), {
+      medName: input.medName,
+      quantity: input.quantity,
+      threshold: 0,
+      clinicId: input.clinicId,
+      category: "External",
+      lastUpdated: new Date().toISOString(),
+    });
+  } else {
+    await addInventoryStock(existing.docs[0].id, input.quantity);
+  }
+
+  // Recorded as a Confirmed delivery with no pharmacist, so external stock
+  // appears in the same history as everything else rather than materialising
+  // out of nowhere.
+  await addDoc(collection(db, "stockDeliveries"), {
+    clinicId: input.clinicId,
+    items: [{ name: input.medName, quantity: input.quantity }],
+    status: "Confirmed",
+    sentByPharmacistId: null,
+    externalSource: input.source,
+    sentAt: new Date().toISOString(),
+    confirmedByNurseId: input.nurseId,
+    confirmedAt: new Date().toISOString(),
+  });
+
+  return { ok: true };
+}

@@ -59,13 +59,22 @@ export function buildFlags(
     const target = TARGETS[first.triage] ?? 30;
 
     // 1. Someone urgent waited well past their target.
+    //
+    // Grace period: a red-triage target is 0 min, so without this ANY delay
+    // — even a minute of normal paperwork — would flag, which makes the
+    // whole panel noise. 10 min is long enough that there was a real window
+    // to act and it didn't happen; anything under that is just reality.
+    const GRACE_MIN = 10;
     if (called) {
       const waited = (ts(called).getTime() - joined.getTime()) / 60000;
       const overBy = Math.round(waited - target);
-      if (overBy > 0 && (first.triage === "red" || first.triage === "orange")) {
+      if (
+        overBy > GRACE_MIN &&
+        (first.triage === "red" || first.triage === "orange")
+      ) {
         flags.push({
           id: `wait-${entryId}`,
-          severity: overBy > target ? "critical" : "warning",
+          severity: overBy > target + GRACE_MIN * 2 ? "critical" : "warning",
           title: `${first.triage === "red" ? "Critical" : "Emergent"} patient waited ${Math.round(waited)} min`,
           detail: `${first.patientId} should have been seen within ${target} min — waited ${overBy} min longer. Worth checking what held things up.`,
           evidence,

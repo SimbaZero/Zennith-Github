@@ -1157,16 +1157,25 @@ export interface CurrentReceptionist {
   name: string;
   clinicId: number | null;
   clinicName: string | null;
+  /** Numeric users.userId — needed to send this receptionist notifications. */
+  userId: number | null;
 }
 export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist> {
   const user = await waitForAuthReady();
   const uid = user?.uid;
-  if (!uid) return { name: "Receptionist", clinicId: null, clinicName: null };
+  if (!uid)
+    return {
+      name: "Receptionist",
+      clinicId: null,
+      clinicName: null,
+      userId: null,
+    };
   const profileSnap = await getDoc(doc(db, "profiles", uid));
   const profile = profileSnap.exists() ? profileSnap.data() : {};
   const name = profile.fullName || "Receptionist";
   if (profile.legacyUserId == null)
-    return { name, clinicId: null, clinicName: null };
+    return { name, clinicId: null, clinicName: null, userId: null };
+  const userId = Number(profile.legacyUserId);
 
   const recSnap = await getDocs(
     query(
@@ -1174,7 +1183,7 @@ export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist>
       where("userId", "==", Number(profile.legacyUserId)),
     ),
   );
-  if (recSnap.empty) return { name, clinicId: null, clinicName: null };
+  if (recSnap.empty) return { name, clinicId: null, clinicName: null, userId };
   const clinicId = Number(recSnap.docs[0].data().clinicId);
 
   const clinicSnap = await getDoc(doc(db, "clinics", String(clinicId)));
@@ -1186,6 +1195,7 @@ export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist>
     name,
     clinicId: Number.isFinite(clinicId) ? clinicId : null,
     clinicName,
+    userId,
   };
 }
 
@@ -1793,4 +1803,45 @@ export function subscribeQueueAudit(
       onError(err);
     },
   );
+}
+
+/**
+ * Sends a real notification to the receptionist when a patient goes past
+ * their triage target. Previously this was only a toast, which vanished on
+ * navigation and left no record — so an overdue critical patient could be
+ * missed entirely if reception happened to be on another page.
+ *
+ * Writes to the same notifications collection everything else uses, so it
+ * shows up in the bell and survives a page change.
+ */
+export async function alertOverdueQueueEntry(
+  entry: QueueEntry,
+  receptionistUserId: number,
+  waitedMin: number,
+): Promise<void> {
+  await addDoc(collection(db, "notifications"), {
+    notifId: Date.now(),
+    userId: receptionistUserId,
+    title:
+      entry.triage === "red"
+        ? "Critical patient still waiting"
+        : "Patient over wait target",
+    message: `${entry.patientName} (${entry.triage.toUpperCase()}) has been waiting ${waitedMin} min. ${
+      entry.clinician
+        ? `Assigned to ${entry.clinician}.`
+        : "No clinician assigned yet."
+    }`,
+    isRead: false,
+    timeSent: new Date().toISOString(),
+  });
+
+  await logQueueEvent({
+    entryId: entry.id,
+    patientId: entry.patientId,
+    action: "escalation",
+    triage: entry.triage,
+    by: auth.currentUser?.uid ?? "system",
+    details: `Waited ${waitedMin} min — past target, reception alerted`,
+    facilityId: entry.facilityId,
+  });
 }
