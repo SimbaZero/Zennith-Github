@@ -1755,3 +1755,42 @@ export function useDatabaseReachable(): "checking" | "online" | "offline" {
 
   return state;
 }
+
+/**
+ * Live version of fetchQueueAudit. The receptionist queue subscribes to the
+ * queue itself, so fetching the audit log once on mount made the two
+ * visibly disagree — a status change appeared in the queue instantly but
+ * its audit entry only showed up after a manual refresh.
+ */
+export function subscribeQueueAudit(
+  onData: (events: QueueAuditEvent[]) => void,
+  onError: (err: unknown) => void,
+  facilityId?: string | null,
+  limitCount = 50,
+): () => void {
+  const q =
+    facilityId != null
+      ? query(
+          collection(db, "queueAudit"),
+          where("facilityId", "==", facilityId),
+          orderBy("timestamp", "desc"),
+          limit(limitCount),
+        )
+      : query(
+          collection(db, "queueAudit"),
+          orderBy("timestamp", "desc"),
+          limit(limitCount),
+        );
+
+  return onSnapshot(
+    q,
+    (snap) =>
+      onData(
+        snap.docs.map((d) => ({ id: d.id, ...d.data() }) as QueueAuditEvent),
+      ),
+    (err) => {
+      console.error("Queue audit subscription failed:", err);
+      onError(err);
+    },
+  );
+}

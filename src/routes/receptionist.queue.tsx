@@ -67,6 +67,93 @@ const TRIAGE_MAX_WAIT_MINUTES: Record<TriageLevel, number> = {
 const BTN_SECONDARY =
   "text-xs font-medium border px-3 py-1.5 rounded-md hover:bg-secondary";
 
+// Guided triage. Reception is not clinically trained, so they should not be
+// choosing "Critical" from a dropdown — they answer observable yes/no
+// questions and the level is computed. Modelled on the emergency
+// discriminators used in the South African Triage Scale (SATS): things a
+// non-clinician can see or be told, not vital signs or clinical judgement.
+//
+// TODO(db): the selected flags are appended to the visit reason so there's a
+// record of WHY a level was assigned. A dedicated field on the queue entry
+// would be better — needs a schema change.
+const TRIAGE_QUESTIONS: {
+  id: string;
+  label: string;
+  level: TriageLevel;
+}[] = [
+  // Any one of these = CRITICAL
+  {
+    id: "unresponsive",
+    label: "Unresponsive, or not breathing normally",
+    level: "red",
+  },
+  { id: "bleeding", label: "Heavy bleeding that won't stop", level: "red" },
+  { id: "seizure", label: "Having a seizure right now", level: "red" },
+  {
+    id: "breathing",
+    label: "Struggling badly to breathe / can't speak in full sentences",
+    level: "red",
+  },
+  // Any one of these = EMERGENT
+  { id: "chest", label: "Chest pain or pressure", level: "orange" },
+  {
+    id: "stroke",
+    label: "Face drooping, weakness on one side, or slurred speech",
+    level: "orange",
+  },
+  {
+    id: "pregnancy",
+    label: "Pregnant with bleeding, severe pain, or in labour",
+    level: "orange",
+  },
+  {
+    id: "confused",
+    label: "Confused, drowsy, or not making sense",
+    level: "orange",
+  },
+  {
+    id: "severePain",
+    label: "Severe pain (can't sit still or speak normally)",
+    level: "orange",
+  },
+  {
+    id: "injury",
+    label: "Serious recent injury, burn, or head knock",
+    level: "orange",
+  },
+  // Any one of these = URGENT
+  { id: "fever", label: "Fever and feeling very unwell", level: "yellow" },
+  {
+    id: "vomiting",
+    label: "Vomiting repeatedly or can't keep fluids down",
+    level: "yellow",
+  },
+  {
+    id: "wound",
+    label: "Wound needing attention (not heavy bleeding)",
+    level: "yellow",
+  },
+  { id: "moderatePain", label: "Moderate pain", level: "yellow" },
+];
+
+const TRIAGE_RANK: Record<TriageLevel, number> = {
+  green: 0,
+  yellow: 1,
+  orange: 2,
+  red: 3,
+};
+
+/** Highest severity among the ticked answers; nothing ticked = routine. */
+function computeTriage(flags: Set<string>): TriageLevel {
+  let level: TriageLevel = "green";
+  for (const q of TRIAGE_QUESTIONS) {
+    if (flags.has(q.id) && TRIAGE_RANK[q.level] > TRIAGE_RANK[level]) {
+      level = q.level;
+    }
+  }
+  return level;
+}
+
 type LogEntry = { ts: string; msg: string; type: "info" | "warn" | "critical" };
 
 let clinicData: typeof import("@/lib/clinic-data") | null = null;
@@ -170,36 +257,41 @@ function QueuePage() {
     return () => unsubscribe?.();
   }, [clinicReady, realFacilityId]);
 
+  // Live, so the audit log stays in step with the queue above it instead of
+  // only catching up on a manual refresh.
   useEffect(() => {
     if (!clinicReady) return;
     setAuditLogLoading(true);
     setAuditLogError(false);
-    getClinicData()
-      .then(({ fetchQueueAudit }) =>
-        fetchQueueAudit(undefined, 20, realFacilityId),
-      )
-      .then((events) => {
-        setAuditLog(
-          events.map((e) => ({
-            ts: e.timestamp?.toDate?.()
-              ? e.timestamp.toDate().toISOString()
-              : new Date().toISOString(),
-            msg: `${e.action.toUpperCase()}: ${e.patientId} — ${e.details}`,
-            type:
-              e.action === "handoff"
-                ? "warn"
-                : e.triage === "red"
-                  ? "critical"
-                  : "info",
-          })),
-        );
-        setAuditLogLoading(false);
-      })
-      .catch((err) => {
-        console.error("Failed to load audit log:", err);
-        setAuditLogError(true);
-        setAuditLogLoading(false);
-      });
+    let unsubscribe: (() => void) | undefined;
+    getClinicData().then(({ subscribeQueueAudit }) => {
+      unsubscribe = subscribeQueueAudit(
+        (events) => {
+          setAuditLog(
+            events.map((e) => ({
+              ts: e.timestamp?.toDate?.()
+                ? e.timestamp.toDate().toISOString()
+                : new Date().toISOString(),
+              msg: `${e.action.toUpperCase()}: ${e.patientId} — ${e.details}`,
+              type:
+                e.action === "handoff"
+                  ? "warn"
+                  : e.triage === "red"
+                    ? "critical"
+                    : "info",
+            })),
+          );
+          setAuditLogLoading(false);
+        },
+        () => {
+          setAuditLogError(true);
+          setAuditLogLoading(false);
+        },
+        realFacilityId,
+        20,
+      );
+    });
+    return () => unsubscribe?.();
   }, [clinicReady, realFacilityId]);
 
   const [adding, setAdding] = useState(false);
@@ -207,8 +299,18 @@ function QueuePage() {
     patientId: "",
     reason: "",
     clinician: "",
-    triage: "yellow" as TriageLevel,
   });
+  const [triageFlags, setTriageFlags] = useState<Set<string>>(new Set());
+  // Reception can raise the level if something worries them, but never lower
+  // it — escalating on instinct is safe, downgrading a computed red is not.
+  const [escalate, setEscalate] = useState(false);
+  const computedTriage = computeTriage(triageFlags);
+  const finalTriage: TriageLevel =
+    escalate && computedTriage !== "red"
+      ? (["green", "yellow", "orange", "red"] as TriageLevel[])[
+          TRIAGE_RANK[computedTriage] + 1
+        ]
+      : computedTriage;
   const [busy, setBusy] = useState(false);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
 
@@ -248,15 +350,24 @@ function QueuePage() {
     const { addToQueue } = await getClinicData();
     const res = await addToQueue({
       patientId: draft.patientId,
-      reason: draft.reason,
+      reason: [
+        draft.reason,
+        ...TRIAGE_QUESTIONS.filter((q) => triageFlags.has(q.id)).map(
+          (q) => q.label,
+        ),
+      ]
+        .filter(Boolean)
+        .join(" · "),
       clinician: draft.clinician || undefined,
-      triage: draft.triage,
+      triage: finalTriage,
       facilityId: realFacilityId,
     });
     setBusy(false);
     if (!res.ok) return toast.error(res.error ?? "Could not add to queue");
-    toast.success(`${draft.patientId} added — ${TRIAGE_LABELS[draft.triage]}`);
-    setDraft({ patientId: "", reason: "", clinician: "", triage: "yellow" });
+    toast.success(`${draft.patientId} added — ${TRIAGE_LABELS[finalTriage]}`);
+    setDraft({ patientId: "", reason: "", clinician: "" });
+    setTriageFlags(new Set());
+    setEscalate(false);
     setWalkInQuery("");
     setAdding(false);
   };
@@ -471,28 +582,61 @@ function QueuePage() {
               placeholder="Assign clinician (optional)"
               className="w-full border rounded-md px-2.5 py-1.5 text-sm font-mono"
             />
-            <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">
-                Triage Level
-              </label>
-              <div className="flex gap-2">
-                {(["red", "orange", "yellow", "green"] as TriageLevel[]).map(
-                  (t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setDraft({ ...draft, triage: t })}
-                      className={`text-[10px] px-2 py-1 rounded uppercase font-bold ${
-                        draft.triage === t
-                          ? TRIAGE_COLORS[t]
-                          : "bg-secondary text-muted-foreground"
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ),
-                )}
+            <div className="border rounded-md bg-white p-3">
+              <p className="text-sm font-medium">Tick anything that applies</p>
+              <p className="text-[11px] text-muted-foreground mb-2">
+                Based on what you can see or what the patient tells you. The
+                urgency level is worked out from your answers.
+              </p>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                {TRIAGE_QUESTIONS.map((q) => (
+                  <label
+                    key={q.id}
+                    className="flex items-start gap-2 text-xs cursor-pointer hover:bg-secondary/50 rounded px-1 py-0.5"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={triageFlags.has(q.id)}
+                      onChange={(e) => {
+                        const next = new Set(triageFlags);
+                        if (e.target.checked) next.add(q.id);
+                        else next.delete(q.id);
+                        setTriageFlags(next);
+                      }}
+                      className="mt-0.5 shrink-0"
+                    />
+                    <span>{q.label}</span>
+                  </label>
+                ))}
               </div>
+
+              <div className="mt-3 pt-3 border-t flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] text-muted-foreground">
+                  Urgency:
+                </span>
+                <span
+                  className={`text-[10px] font-bold px-2 py-1 rounded ${TRIAGE_COLORS[finalTriage]}`}
+                >
+                  {TRIAGE_SHORT[finalTriage]}
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  {TRIAGE_LABELS[finalTriage]}
+                </span>
+              </div>
+
+              {computedTriage !== "red" && (
+                <label className="flex items-start gap-2 mt-2 text-[11px] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={escalate}
+                    onChange={(e) => setEscalate(e.target.checked)}
+                    className="mt-0.5 shrink-0"
+                  />
+                  <span className="text-muted-foreground">
+                    Something else worries me — move up one level
+                  </span>
+                </label>
+              )}
             </div>
             <div className="flex gap-2">
               <button
