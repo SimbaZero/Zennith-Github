@@ -1862,3 +1862,77 @@ export async function alertOverdueQueueEntry(
     facilityId: entry.facilityId,
   });
 }
+
+/**
+ * Public, anonymous view of a clinic's queue for the landing page.
+ *
+ * Deliberately returns COUNTS ONLY — no names, no patient IDs, no reasons.
+ * Anyone on the internet can see this, so it must reveal how busy a clinic
+ * is without revealing anything about who is there.
+ */
+export function usePublicQueueSummary(clinicId?: number | null): {
+  waiting: number;
+  inProgress: number;
+  avgWaitMin: number | null;
+  loading: boolean;
+} {
+  const [state, setState] = useState({
+    waiting: 0,
+    inProgress: 0,
+    avgWaitMin: null as number | null,
+    loading: true,
+  });
+
+  useEffect(() => {
+    if (clinicId == null) {
+      setState({ waiting: 0, inProgress: 0, avgWaitMin: null, loading: false });
+      return;
+    }
+    const q = query(
+      collection(db, "queue"),
+      where("facilityId", "==", String(clinicId)),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => d.data());
+        const waiting = rows.filter(
+          (r) => r.status === "waiting" || r.status === "called",
+        ).length;
+        const inProgress = rows.filter(
+          (r) => r.status === "in-room" || r.status === "handoff",
+        ).length;
+
+        const today = new Date().toISOString().slice(0, 10);
+        const doneToday = rows.filter(
+          (r) =>
+            r.status === "done" &&
+            r.calledAt &&
+            String(r.joinedAt ?? "").slice(0, 10) === today,
+        );
+        const avgWaitMin =
+          doneToday.length >= 2
+            ? Math.round(
+                doneToday.reduce(
+                  (sum, r) =>
+                    sum +
+                    (new Date(r.calledAt).getTime() -
+                      new Date(r.joinedAt).getTime()) /
+                      60000,
+                  0,
+                ) / doneToday.length,
+              )
+            : null;
+
+        setState({ waiting, inProgress, avgWaitMin, loading: false });
+      },
+      (err) => {
+        console.error("Public queue read failed:", err);
+        setState((s) => ({ ...s, loading: false }));
+      },
+    );
+    return () => unsub();
+  }, [clinicId]);
+
+  return state;
+}
