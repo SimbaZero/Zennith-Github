@@ -21,6 +21,7 @@ import {
   notifyUser,
   userIdForStaff,
 } from "@/lib/notify";
+import { logAction } from "@/lib/audit";
 
 // Shape the existing UI already expects (see pharmacist.index.tsx, pharmacist.stock.tsx).
 // Real Firestore `inventory` docs use different field names (medName, quantity) —
@@ -722,14 +723,37 @@ export async function confirmStockDelivery(input: {
       ),
     );
     if (existing.empty) {
-      await addDoc(collection(db, "inventory"), {
-        medName: item.name,
-        quantity: item.quantity,
-        threshold: 0,
-        clinicId: input.clinicId,
-        category: "Delivered",
-        lastUpdated: new Date().toISOString(),
-      });
+      // Exact-name matching alone created duplicates: a delivery of
+      // "Metformin" to a clinic already stocking "Metformin 850mg" made a
+      // second row, splitting the count. Fall back to a looser match before
+      // creating anything new.
+      const allAtClinic = await getDocs(
+        query(
+          collection(db, "inventory"),
+          where("clinicId", "==", input.clinicId),
+        ),
+      );
+      const loosen = (n: string) =>
+        n
+          .toLowerCase()
+          .replace(/\d+\s*(mg|ml|g|mcg|iu)\b/g, "")
+          .replace(/[^a-z/]/g, "");
+      const near = allAtClinic.docs.find(
+        (d) => loosen(String(d.data().medName ?? "")) === loosen(item.name),
+      );
+
+      if (near) {
+        await addInventoryStock(near.id, item.quantity);
+      } else {
+        await addDoc(collection(db, "inventory"), {
+          medName: item.name,
+          quantity: item.quantity,
+          threshold: 0,
+          clinicId: input.clinicId,
+          category: "Delivered",
+          lastUpdated: new Date().toISOString(),
+        });
+      }
     } else {
       await addInventoryStock(existing.docs[0].id, item.quantity);
     }
@@ -868,8 +892,16 @@ export async function recordExternalStock(input: {
     confirmedAt: new Date().toISOString(),
   });
 
-  // External stock bypasses the pharmacy entirely, so the clinic admin is
-  // told — that's the accountability trail, since nothing prevents misuse.
+  // External stock bypasses the pharmacy entirely, so it goes in the audit
+  // log as well as notifying the admin. The notification links here, so the
+  // event has to actually be here — otherwise the link leads nowhere.
+  logAction({
+    clinicId: input.clinicId,
+    actor_id: input.nurseId,
+    action_type: "stock.external",
+    description: `Recorded ${input.quantity} × ${input.medName} from ${input.source} (supplier not on Zennith)`,
+  });
+
   notifyClinicAdmins({
     clinicId: input.clinicId,
     title: "Stock recorded from outside supplier",
