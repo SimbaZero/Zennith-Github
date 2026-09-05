@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { registerPatient } from "@/lib/clinic-data";
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, Timestamp, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, setDoc, Timestamp, where } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 
@@ -42,6 +42,9 @@ export interface CurrentNurse {
   nurseId: string; // e.g. "Nur-1"
   userId?: number;
   clinicId?: number; // confirmed real field on `nurses` docs — `doctors` docs don't have this one
+  clinicName?: string; // resolved from clinics/{clinicId}.clinicName — without it
+                       // the nurse pages fall back to AppShell's fake localStorage
+                       // clinic switcher and show "Hillbrow CHC" for every nurse
   fullName: string;
   email?: string;
   contactNum?: string;
@@ -64,10 +67,20 @@ async function buildCurrentNurse(nurseId: string, nurseData: Record<string, any>
     }
   }
 
+  // Same join the doctor and receptionist sides already do:
+  // nurses.clinicId → clinics/{clinicId}.clinicName. Docs are keyed by the
+  // numeric clinicId as a string.
+  let clinicName: string | undefined;
+  if (nurseData.clinicId != null) {
+    const cSnap = await getDoc(doc(db, "clinics", String(nurseData.clinicId)));
+    if (cSnap.exists()) clinicName = cSnap.data().clinicName;
+  }
+
   return {
     nurseId,
     userId: nurseData.userId,
     clinicId: nurseData.clinicId,
+    clinicName,
     fullName,
     email,
     contactNum,
@@ -473,6 +486,11 @@ export interface DigitizedPatientData {
 
 export async function saveDigitizedFile(
   data: DigitizedPatientData,
+  /** The digitizing nurse's own clinic (nurses.clinicId), so the new patient
+   *  is allocated to the clinic they were actually registered at. The caller
+   *  in nurse.digitize.tsx already passed this; the parameter was missing, so
+   *  the `clinicId` referenced below resolved to nothing. */
+  clinicId?: number | null,
 ): Promise<{ patientId: string; matchedExisting: boolean }> {
   let patientId: string;
   let matchedExisting = false;

@@ -14,6 +14,7 @@ export const Route = createFileRoute("/nurse/patient-record/$pid")({
         backLabel="Patient files"
         editable
         clinicId={nurse?.clinicId}
+        clinicName={nurse?.clinicName}
         nurseId={nurse?.nurseId}
       />
     );
