@@ -34,6 +34,10 @@ interface PatientRecordViewProps {
    *  entirely (e.g. on the Doctor view). */
   clinicId?: number;
   nurseId?: string;
+  /** Real clinic name from Firestore (nurses/doctors resolve it from
+   *  clinics/{clinicId}). Passed straight to AppShell — without it the header
+   *  falls back to the fake localStorage clinic switcher in lib/clinic.ts. */
+  clinicName?: string | null;
 }
 
 interface EditableFields {
@@ -60,6 +64,7 @@ export function PatientRecordView({
   editable,
   clinicId,
   nurseId,
+  clinicName,
 }: PatientRecordViewProps) {
   const navigate = useNavigate();
   const { record, medicalRecordNo, loading, error } = usePatientRecord(pid);
@@ -208,7 +213,11 @@ export function PatientRecordView({
   };
 
   return (
-    <AppShell role={role} title={`Medical Record · ${pid}`}>
+    <AppShell
+      role={role}
+      title={`Medical Record · ${pid}`}
+      clinicNameOverride={clinicName}
+    >
       {/* Toolbar (hidden in print) */}
       <div className="flex items-center justify-between mb-4 print:hidden">
         <button

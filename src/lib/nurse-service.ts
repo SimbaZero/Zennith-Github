@@ -56,12 +56,9 @@ export interface CurrentNurse {
   nurseId: string; // e.g. "Nur-1"
   userId?: number;
   clinicId?: number; // confirmed real field on `nurses` docs — `doctors` docs don't have this one
-  /**
-   * Resolved clinic name. Every nurse page was already passing
-   * `nurse?.clinicName` to AppShell, but this field never existed — so it
-   * always passed undefined and the header fell back to "Zennith".
-   */
-  clinicName?: string;
+  clinicName?: string; // resolved from clinics/{clinicId}.clinicName — without it
+  // the nurse pages fall back to AppShell's fake localStorage
+  // clinic switcher and show "Hillbrow CHC" for every nurse
   fullName: string;
   email?: string;
   contactNum?: string;
@@ -87,6 +84,9 @@ async function buildCurrentNurse(
     }
   }
 
+  // Same join the doctor and receptionist sides already do:
+  // nurses.clinicId → clinics/{clinicId}.clinicName. Docs are keyed by the
+  // numeric clinicId as a string.
   let clinicName: string | undefined;
   if (nurseData.clinicId != null) {
     const cSnap = await getDoc(doc(db, "clinics", String(nurseData.clinicId)));
@@ -538,7 +538,11 @@ export interface DigitizedPatientData {
 
 export async function saveDigitizedFile(
   data: DigitizedPatientData,
-  clinicId?: number,
+  /** The digitizing nurse's own clinic (nurses.clinicId), so the new patient
+   *  is allocated to the clinic they were actually registered at. The caller
+   *  in nurse.digitize.tsx already passed this; the parameter was missing, so
+   *  the `clinicId` referenced below resolved to nothing. */
+  clinicId?: number | null,
 ): Promise<{ patientId: string; matchedExisting: boolean }> {
   let patientId: string;
   let matchedExisting = false;
