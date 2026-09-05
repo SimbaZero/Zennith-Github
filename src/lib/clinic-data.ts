@@ -1713,6 +1713,7 @@ export async function deleteClinicIfEmpty(
     { col: "pharmacists", field: "clinicId", op: "==" },
     { col: "pharmacists", field: "clinicIds", op: "array-contains" },
     { col: "receptionists", field: "clinicId", op: "==" },
+    { col: "profiles", field: "clinicId", op: "==" },
   ];
   for (const c of checks) {
     const snap = await getDocs(
