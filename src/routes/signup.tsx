@@ -4,10 +4,19 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AuthBackground } from "@/components/AuthBackground";
-import { signUpPatient, fetchRealClinics } from "@/lib/clinic-data";
+import {
+  signUpPatient,
+  fetchRealClinics,
+  idNumberInUse,
+} from "@/lib/clinic-data";
 import { sendWelcomeEmail } from "@/lib/welcome-email";
 
 export const Route = createFileRoute("/signup")({ component: Signup });
+
+// SA ID numbers are 13 digits. Passports vary by country, so anything
+// alphanumeric of a sensible length is accepted instead of guessing a format.
+const SA_ID = /^\d{13}$/;
+const PASSPORT = /^[A-Za-z0-9]{6,12}$/;
 
 function Signup() {
   const navigate = useNavigate();
@@ -15,11 +24,14 @@ function Signup() {
     name: "",
     email: "",
     phone: "",
+    idType: "id" as "id" | "passport",
+    idNumber: "",
     password: "",
     confirm: "",
     clinicId: "",
   });
   const [error, setError] = useState("");
+  const [checkingId, setCheckingId] = useState(false);
 
   const { data: clinics = [], isLoading: clinicsLoading } = useQuery({
     queryKey: ["signup-clinics"],
@@ -34,10 +46,11 @@ function Signup() {
         phone: form.phone,
         password: form.password,
         clinicId: Number(form.clinicId),
+        idNumber: form.idNumber.trim(),
       });
       if (!res.ok) return { ...res, mailOk: false };
-      // Send the confirmation email via Resend (server-side). Never blocks the
-      // signup — report delivery status separately.
+      // Confirmation email via Resend (server-side). Never blocks signup —
+      // delivery status is reported separately.
       const mail = await sendWelcomeEmail({
         data: { email: form.email, name: form.name, patientId: res.patientId },
       }).catch(() => ({ ok: false }));
@@ -59,13 +72,25 @@ function Signup() {
     onError: () => setError("Could not create account — please try again"),
   });
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
     if (!/^[+\d\s-]{7,}$/.test(form.phone)) {
       setError("Enter a valid phone number.");
       return;
     }
+
+    const id = form.idNumber.trim();
+    if (form.idType === "id" && !SA_ID.test(id)) {
+      setError("A South African ID number is 13 digits.");
+      return;
+    }
+    if (form.idType === "passport" && !PASSPORT.test(id)) {
+      setError("Enter a valid passport number.");
+      return;
+    }
+
     if (form.password.length < 6) {
       setError("Password must be at least 6 characters.");
       return;
@@ -78,12 +103,28 @@ function Signup() {
       setError("Please choose your nearest clinic.");
       return;
     }
+
+    // Checked here so the person gets a clear message before an account is
+    // attempted. signUpPatient checks again server-side — this is convenience,
+    // not the safeguard.
+    setCheckingId(true);
+    const taken = await idNumberInUse(id).catch(() => false);
+    setCheckingId(false);
+    if (taken) {
+      setError(
+        "An account already exists with this ID number. Try signing in, or use 'Forgot password'.",
+      );
+      return;
+    }
+
     signup.mutate();
   };
 
+  const busy = signup.isPending || checkingId;
+
   return (
     <AuthBackground videoSrc="/login-bg.mp4">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8 animate-fade-up">
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8 my-8 animate-fade-up">
         <div className="flex flex-col items-center mb-6">
           <ZennithStar size={64} spin />
           <h1 className="mt-3 text-xl font-bold">Create your account</h1>
@@ -110,6 +151,47 @@ function Signup() {
             onChange={(v) => setForm({ ...form, phone: v })}
             placeholder="082 123 4567"
           />
+
+          <div>
+            <label className="text-sm font-medium block mb-1.5">
+              Identification
+            </label>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              {(
+                [
+                  ["id", "SA ID number"],
+                  ["passport", "Passport"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setForm({ ...form, idType: key })}
+                  className={`px-3 py-2 rounded-md text-sm border transition ${
+                    form.idType === key
+                      ? "bg-[oklch(0.55_0.18_245)] text-white border-transparent"
+                      : "hover:bg-secondary"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <input
+              value={form.idNumber}
+              onChange={(e) => setForm({ ...form, idNumber: e.target.value })}
+              placeholder={
+                form.idType === "id" ? "13 digits" : "Passport number"
+              }
+              required
+              className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Links you to your medical file and stops a second record being
+              created for you by mistake.
+            </p>
+          </div>
+
           <div>
             <label className="text-sm font-medium block mb-1.5">
               Nearest clinic
@@ -131,6 +213,7 @@ function Signup() {
               ))}
             </select>
           </div>
+
           <Field
             label="Password"
             type="password"
@@ -143,12 +226,18 @@ function Signup() {
             value={form.confirm}
             onChange={(v) => setForm({ ...form, confirm: v })}
           />
+
           {error && <p className="text-sm text-destructive">{error}</p>}
+
           <button
-            disabled={signup.isPending}
+            disabled={busy}
             className="w-full bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60"
           >
-            {signup.isPending ? "Creating..." : "Create account"}
+            {checkingId
+              ? "Checking..."
+              : signup.isPending
+                ? "Creating..."
+                : "Create account"}
           </button>
           <p className="text-sm text-center text-muted-foreground">
             Already have an account?{" "}

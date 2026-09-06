@@ -1361,6 +1361,23 @@ export async function fetchRealClinics(): Promise<RealClinic[]> {
     .sort((a, b) => a.clinicName.localeCompare(b.clinicName));
 }
 
+/**
+ * Is there already an account using this ID or passport number?
+ *
+ * A person can legitimately have several email addresses, so email alone
+ * doesn't prevent duplicates — but two patient records for one human being
+ * means split medical history, which is a real clinical risk, not just
+ * untidy data.
+ */
+export async function idNumberInUse(idNumber: string): Promise<boolean> {
+  const trimmed = idNumber.trim();
+  if (!trimmed) return false;
+  const snap = await getDocs(
+    query(collection(db, "users"), where("idNumber", "==", trimmed)),
+  );
+  return !snap.empty;
+}
+
 export async function signUpPatient(
   input: PatientSignupInput,
 ): Promise<{ ok: boolean; patientId?: string; error?: string }> {
