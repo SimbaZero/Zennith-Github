@@ -6,6 +6,7 @@ import { useInventory } from "@/lib/pharmacist-service"; // real central stock, 
 import {
   useCurrentPatient,
   usePatientAppointments,
+  useMedicationStatus,
   usePatientNotifications,
 } from "@/lib/patient-service";
 import {
@@ -51,6 +52,10 @@ function PatientDashboard() {
   const { stock } = useInventory();
 
   const { patient, loading: patientLoading } = useCurrentPatient();
+  const { status: medStatus } = useMedicationStatus(
+    patient?.patientId,
+    patient?.prescription,
+  );
   const clinicLabel = patient?.clinicName ?? "No clinic assigned";
   const appointments = usePatientAppointments(patient?.patientId);
   const notifications = usePatientNotifications(patient?.userId);
@@ -174,11 +179,17 @@ function PatientDashboard() {
           <p className="text-[11px] tracking-wider text-muted-foreground">
             MEDICATION STATUS
           </p>
-          <p className="text-2xl font-bold mt-1 text-[oklch(0.5_0.18_160)]">
-            Available
+          <p
+            className={`text-2xl font-bold mt-1 ${
+              medStatus.state === "none"
+                ? "text-muted-foreground"
+                : "text-[oklch(0.5_0.18_160)]"
+            }`}
+          >
+            {medStatus.label}
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            Ready for collection at {clinicLabel}
+            {medStatus.detail}
           </p>
         </div>
         <button
@@ -253,10 +264,20 @@ function PatientDashboard() {
             <p className="text-xs text-muted-foreground mb-2">
               Medication Collection
             </p>
-            <div className="bg-[oklch(0.96_0.05_160)] text-[oklch(0.35_0.12_160)] rounded-md p-3 text-sm">
-              ✓ Available for collection at {clinicLabel}
-              <br />
-              <span className="text-xs">Collection hours: 08:00 — 16:00</span>
+            <div className="bg-secondary/50 rounded-md p-3 text-sm">
+              {medStatus.state === "none" ? (
+                <span className="text-muted-foreground">
+                  No medication currently prescribed.
+                </span>
+              ) : (
+                <>
+                  <strong>{medStatus.medication}</strong>
+                  <br />
+                  <span className="text-xs text-muted-foreground">
+                    {medStatus.detail} Collect at {clinicLabel}.
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>

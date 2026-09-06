@@ -1,71 +1,93 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { ShieldCheck, AlertTriangle, Lock } from "lucide-react";
+import { ShieldCheck, AlertTriangle, Check } from "lucide-react";
 import { toast } from "sonner";
+import {
+  useCurrentPatient,
+  usePrivacySettings,
+  savePrivacySetting,
+  requestDataDeletion,
+  type PrivacySettings,
+} from "@/lib/patient-service";
 
 export const Route = createFileRoute("/patient/privacy")({
-  component: PrivacyPage,
+  component: PatientPrivacy,
 });
 
-const KEY = "zennith_patient_privacy";
-type PrivacyState = {
-  shareForResearch: boolean;
-  smsReminders: boolean;
-  familyAccess: boolean;
-};
-const DEFAULTS: PrivacyState = {
-  shareForResearch: false,
-  smsReminders: true,
-  familyAccess: false,
-};
+const FIELDS: {
+  key: keyof PrivacySettings;
+  label: string;
+  detail: string;
+}[] = [
+  {
+    key: "showIdNumber",
+    label: "ID / passport number",
+    detail: "Shown to clinic staff who open your record.",
+  },
+  {
+    key: "showContact",
+    label: "Phone number and email",
+    detail: "Used to reach you about appointments and medication.",
+  },
+  {
+    key: "showEmergencyContact",
+    label: "Emergency contact",
+    detail: "Who the clinic calls if you can't be reached.",
+  },
+  {
+    key: "showAddress",
+    label: "Home address",
+    detail: "Used for your nearest-clinic suggestions.",
+  },
+];
 
-function load(): PrivacyState {
-  if (typeof window === "undefined") return DEFAULTS;
-  try {
-    return {
-      ...DEFAULTS,
-      ...(JSON.parse(
-        localStorage.getItem(KEY) || "{}",
-      ) as Partial<PrivacyState>),
-    };
-  } catch {
-    return DEFAULTS;
-  }
-}
-function save(s: PrivacyState) {
-  if (typeof window !== "undefined")
-    localStorage.setItem(KEY, JSON.stringify(s));
-}
+function PatientPrivacy() {
+  const { patient } = useCurrentPatient();
+  const { settings, loading } = usePrivacySettings(patient?.patientId);
+  const [step, setStep] = useState<0 | 1 | 2>(0);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
 
-function PrivacyPage() {
-  const [state, setState] = useState<PrivacyState>(DEFAULTS);
-  const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
-  useEffect(() => {
-    setState(load());
-  }, []);
-
-  const toggle = (k: keyof PrivacyState) => {
-    const next = { ...state, [k]: !state[k] };
-    setState(next);
-    save(next);
-    toast.success("Privacy preference updated");
+  const toggle = async (key: keyof PrivacySettings) => {
+    if (!patient?.patientId) return;
+    try {
+      await savePrivacySetting(patient.patientId, key, !settings[key]);
+      toast.success("Privacy preference updated");
+    } catch (err) {
+      console.error(err);
+      toast.error("Couldn't save that — please try again.");
+    }
   };
 
-  const submitDelete = () => {
-    const requests = JSON.parse(
-      localStorage.getItem("zennith_deletion_requests") || "[]",
-    );
-    requests.push({ ts: new Date().toISOString(), status: "pending" });
-    localStorage.setItem("zennith_deletion_requests", JSON.stringify(requests));
-    setStep(0);
-    toast.success(
-      "Deactivation request submitted — admin will confirm within 48 hours",
-    );
+  const submitDelete = async () => {
+    if (!patient?.patientId) return;
+    setBusy(true);
+    try {
+      await requestDataDeletion({
+        patientId: patient.patientId,
+        clinicId: patient.clinicId,
+        reason: reason.trim() || undefined,
+      });
+      setStep(0);
+      setReason("");
+      toast.success(
+        "Request submitted — your clinic's admin has been notified.",
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error("Couldn't submit the request. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
-    <AppShell role="patient" title="Privacy & Data Settings">
+    <AppShell
+      role="patient"
+      title="Privacy & Data Settings"
+      clinicNameOverride={patient?.clinicName}
+    >
       <div className="max-w-3xl mx-auto space-y-6">
         <div className="bg-[oklch(0.97_0.03_245)] border border-[oklch(0.85_0.08_245)] rounded-xl p-5 flex gap-3">
           <ShieldCheck
@@ -75,197 +97,140 @@ function PrivacyPage() {
           <div className="text-sm">
             <p className="font-semibold">POPIA Data Consent</p>
             <p className="text-muted-foreground mt-1">
-              You control what personal data is visible in your record.
-              Mandatory clinical fields (marked below) are required by law for
-              safe healthcare delivery and cannot be hidden.
+              You control what personal information clinic staff can see in your
+              record. Clinical details needed for safe treatment — diagnoses,
+              medication, allergies — are always visible to the staff treating
+              you and can't be hidden.
             </p>
           </div>
         </div>
 
-        <section className="bg-white rounded-xl border p-6">
-          <h3 className="font-semibold mb-4">Mandatory clinical fields</h3>
-          <ul className="text-sm space-y-2">
-            {[
-              "Full name",
-              "ID number",
-              "Date of birth",
-              "Phone number",
-              "Primary condition",
-              "Current medication",
-              "Emergency contact",
-            ].map((f) => (
-              <li key={f} className="flex items-center gap-2">
-                <Lock size={14} className="text-muted-foreground" />
-                <span>{f}</span>
-                <span className="ml-auto text-[10px] tracking-wider text-muted-foreground">
-                  REQUIRED
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="bg-white rounded-xl border p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <h3 className="font-semibold">Optional visibility</h3>
-            <span
-              className="px-2 py-0.5 rounded-full text-[10px] font-medium tracking-wide bg-[oklch(0.94_0.1_75)] text-[oklch(0.4_0.15_75)]"
-              title="Saved to this browser only right now — not yet synced to your account or visible to staff."
-            >
-              WIP · not yet saved to your account
-            </span>
+        <div className="bg-white rounded-xl border">
+          <div className="p-5 border-b">
+            <h3 className="font-semibold">What staff can see</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Saved to your record, so these apply wherever you sign in.
+            </p>
           </div>
-          <div className="space-y-4">
-            <Toggle
-              label="Anonymised research use"
-              desc="Allow anonymised, aggregated use of your data for public-health research."
-              value={state.shareForResearch}
-              onToggle={() => toggle("shareForResearch")}
-            />
-            <Toggle
-              label="SMS/WhatsApp reminders"
-              desc="Automated appointment and medication-ready reminders."
-              value={state.smsReminders}
-              onToggle={() => toggle("smsReminders")}
-            />
-            <Toggle
-              label="Family / caregiver access"
-              desc="Nominated family member can view your record with your consent code."
-              value={state.familyAccess}
-              onToggle={() => toggle("familyAccess")}
-            />
-          </div>
-        </section>
-
-        <section className="bg-white rounded-xl border border-[oklch(0.85_0.1_25)] p-6">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle size={18} className="text-[oklch(0.55_0.2_25)]" />
-            <h3 className="font-semibold text-[oklch(0.45_0.2_25)]">
-              Delete / Disable Patient Record File
-            </h3>
-          </div>
-          <p className="text-sm text-muted-foreground mb-4">
-            This requests deactivation of your record from all clinics.
-            Historical clinical data is retained per DoH policy but your file is
-            hidden from staff and reminders stop.
-          </p>
-          <button
-            onClick={() => setStep(1)}
-            className="border border-[oklch(0.6_0.2_25)] text-[oklch(0.45_0.2_25)] px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.97_0.05_25)]"
-          >
-            Request deactivation
-          </button>
-        </section>
-      </div>
-
-      {step > 0 && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-md w-full p-6">
-            {step === 1 && (
-              <>
-                <h4 className="font-semibold text-lg">Are you sure?</h4>
-                <p className="text-sm text-muted-foreground mt-2">
-                  This will disable your patient record file across all Zennith
-                  clinics.
-                </p>
-                <div className="flex justify-end gap-2 mt-5">
+          {loading ? (
+            <p className="p-5 text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            <ul className="divide-y">
+              {FIELDS.map((f) => (
+                <li
+                  key={f.key}
+                  className="p-5 flex items-start justify-between gap-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium">{f.label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {f.detail}
+                    </p>
+                  </div>
                   <button
-                    onClick={() => setStep(0)}
-                    className="px-4 py-2 border rounded-md text-sm"
+                    onClick={() => toggle(f.key)}
+                    className={`shrink-0 w-12 h-6 rounded-full transition relative ${
+                      settings[f.key]
+                        ? "bg-[oklch(0.55_0.18_245)]"
+                        : "bg-secondary border"
+                    }`}
+                    aria-label={`Toggle ${f.label}`}
                   >
-                    Cancel
+                    <span
+                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${
+                        settings[f.key] ? "left-6" : "left-0.5"
+                      }`}
+                    />
                   </button>
-                  <button
-                    onClick={() => setStep(2)}
-                    className="px-4 py-2 bg-[oklch(0.55_0.2_25)] text-white rounded-md text-sm"
-                  >
-                    Continue
-                  </button>
-                </div>
-              </>
-            )}
-            {step === 2 && (
-              <>
-                <h4 className="font-semibold text-lg">
-                  Are you absolutely sure?
-                </h4>
-                <p className="text-sm text-muted-foreground mt-2">
-                  Nurses and doctors will no longer see your file. You'll lose
-                  SMS reminders and scheduled appointments.
-                </p>
-                <div className="flex justify-end gap-2 mt-5">
-                  <button
-                    onClick={() => setStep(0)}
-                    className="px-4 py-2 border rounded-md text-sm"
-                  >
-                    No, keep my record
-                  </button>
-                  <button
-                    onClick={() => setStep(3)}
-                    className="px-4 py-2 bg-[oklch(0.55_0.2_25)] text-white rounded-md text-sm"
-                  >
-                    Yes, continue
-                  </button>
-                </div>
-              </>
-            )}
-            {step === 3 && (
-              <>
-                <h4 className="font-semibold text-lg">Final confirmation</h4>
-                <p className="text-sm text-muted-foreground mt-2">
-                  Confirming this will request{" "}
-                  <strong>complete file deactivation</strong>. An admin must
-                  approve the request within 48 hours.
-                </p>
-                <div className="flex justify-end gap-2 mt-5">
-                  <button
-                    onClick={() => setStep(0)}
-                    className="px-4 py-2 border rounded-md text-sm"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={submitDelete}
-                    className="px-4 py-2 bg-[oklch(0.55_0.2_25)] text-white rounded-md text-sm"
-                  >
-                    Submit deactivation
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-      )}
-    </AppShell>
-  );
-}
 
-function Toggle({
-  label,
-  desc,
-  value,
-  onToggle,
-}: {
-  label: string;
-  desc: string;
-  value: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <label className="flex items-start justify-between gap-4 cursor-pointer">
-      <div>
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
+        <div className="bg-white rounded-xl border p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <AlertTriangle size={16} className="text-[oklch(0.55_0.2_25)]" />
+            <h3 className="font-semibold">Deactivate my account</h3>
+          </div>
+
+          {/* Deliberately honest about what this does. The previous version
+              said "admin will confirm within 48 hours" while saving the
+              request to the patient's own browser, where nobody could ever
+              see it. It also implied deletion happens on request, which
+              POPIA doesn't allow for medical records still within their
+              retention period. */}
+          <p className="text-sm text-muted-foreground mt-1">
+            This asks your clinic to deactivate your account. It is a request,
+            not an immediate deletion — clinics are legally required to keep
+            medical records for a set period, so an administrator reviews it
+            first and will contact you.
+          </p>
+
+          {step === 0 && (
+            <button
+              onClick={() => setStep(1)}
+              className="mt-4 text-sm border px-4 py-2 rounded-md hover:bg-secondary"
+            >
+              Request deactivation
+            </button>
+          )}
+
+          {step === 1 && (
+            <div className="mt-4 space-y-3">
+              <label className="text-sm font-medium block">
+                Why are you leaving? (optional)
+              </label>
+              <input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Helps your clinic understand — not required"
+                className="w-full border rounded-md px-3 py-2 text-sm"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setStep(0)}
+                  className="flex-1 border py-2 rounded-md text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setStep(2)}
+                  className="flex-1 bg-[oklch(0.55_0.2_25)] text-white py-2 rounded-md text-sm"
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="mt-4 rounded-md border border-[oklch(0.85_0.12_25)] bg-[oklch(0.98_0.03_25)] p-4">
+              <p className="text-sm font-medium">Are you sure?</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Your clinic's administrator will be notified and will contact
+                you. You can keep using your account until they respond.
+              </p>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => setStep(0)}
+                  className="flex-1 border bg-white py-2 rounded-md text-sm"
+                >
+                  Keep my account
+                </button>
+                <button
+                  onClick={submitDelete}
+                  disabled={busy}
+                  className="flex-1 bg-[oklch(0.55_0.2_25)] text-white py-2 rounded-md text-sm disabled:opacity-60 flex items-center justify-center gap-1"
+                >
+                  <Check size={14} />
+                  {busy ? "Submitting…" : "Submit request"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-      <button
-        type="button"
-        onClick={onToggle}
-        className={`shrink-0 w-11 h-6 rounded-full border transition-colors relative ${value ? "bg-[oklch(0.55_0.18_245)] border-[oklch(0.55_0.18_245)]" : "bg-secondary border-border"}`}
-      >
-        <span
-          className={`block w-4 h-4 rounded-full bg-white shadow absolute top-0.5 transition-all ${value ? "left-6" : "left-0.5"}`}
-        />
-      </button>
-    </label>
+    </AppShell>
   );
 }

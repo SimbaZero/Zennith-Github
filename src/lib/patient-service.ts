@@ -5,6 +5,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  setDoc,
+  serverTimestamp,
   onSnapshot,
   query,
   updateDoc,
@@ -155,9 +157,11 @@ export function useCurrentPatient(): {
 
     waitForAuthReady().then(() => {
       if (cancelled) return;
-      unsubscribe = onSnapshot(doc(db, "patients", patientId), (snap) => {
-        setPatientBase(snap.exists() ? snap.data() : null);
-      },
+      unsubscribe = onSnapshot(
+        doc(db, "patients", patientId),
+        (snap) => {
+          setPatientBase(snap.exists() ? snap.data() : null);
+        },
         (err) => {
           // Added so this listener can't fail silently.
           console.error("Firestore listener failed:", err);
@@ -326,40 +330,44 @@ export function usePatientAppointments(
       collection(db, "appointments"),
       where("patientId", "==", patientId),
     );
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const base = snapshot.docs
-        .map((d) => {
-          const a = d.data();
-          return {
-            docId: d.id,
-            dateTime: a.appointDateTime ?? "",
-            type: a.appointType ?? "",
-            clinicianId: a.clinician ?? "",
-            status: toDisplayStatus(a.status ?? ""),
-          };
-        })
-        .sort((a, b) => a.dateTime.localeCompare(b.dateTime));
+    const unsubscribe = onSnapshot(
+      q,
+      async (snapshot) => {
+        const base = snapshot.docs
+          .map((d) => {
+            const a = d.data();
+            return {
+              docId: d.id,
+              dateTime: a.appointDateTime ?? "",
+              type: a.appointType ?? "",
+              clinicianId: a.clinician ?? "",
+              status: toDisplayStatus(a.status ?? ""),
+            };
+          })
+          .sort((a, b) => a.dateTime.localeCompare(b.dateTime));
 
-      // Show rows immediately with the raw ID, then swap in real names once
-      // resolved — avoids blocking the whole list on name lookups.
-      if (!cancelled) {
-        setAppointments(base.map((a) => ({ ...a, clinician: a.clinicianId })));
-      }
+        // Show rows immediately with the raw ID, then swap in real names once
+        // resolved — avoids blocking the whole list on name lookups.
+        if (!cancelled) {
+          setAppointments(
+            base.map((a) => ({ ...a, clinician: a.clinicianId })),
+          );
+        }
 
-      const uniqueIds = [...new Set(base.map((a) => a.clinicianId))].filter(
-        Boolean,
-      );
-      await Promise.all(uniqueIds.map((id) => resolveClinicianName(id)));
-
-      if (!cancelled) {
-        setAppointments(
-          base.map((a) => ({
-            ...a,
-            clinician: clinicianNameCache.get(a.clinicianId) ?? a.clinicianId,
-          })),
+        const uniqueIds = [...new Set(base.map((a) => a.clinicianId))].filter(
+          Boolean,
         );
-      }
-    },
+        await Promise.all(uniqueIds.map((id) => resolveClinicianName(id)));
+
+        if (!cancelled) {
+          setAppointments(
+            base.map((a) => ({
+              ...a,
+              clinician: clinicianNameCache.get(a.clinicianId) ?? a.clinicianId,
+            })),
+          );
+        }
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
@@ -414,21 +422,23 @@ export function usePatientNotifications(
       collection(db, "notifications"),
       where("userId", "==", userId),
     );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const rows: PatientNotification[] = snapshot.docs
-        .map((d) => {
-          const n = d.data();
-          return {
-            docId: d.id,
-            title: n.title ?? "",
-            message: n.message ?? "",
-            timeSent: n.timeSent ?? "",
-            isRead: !!n.isRead,
-          };
-        })
-        .sort((a, b) => b.timeSent.localeCompare(a.timeSent));
-      setItems(rows);
-    },
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const rows: PatientNotification[] = snapshot.docs
+          .map((d) => {
+            const n = d.data();
+            return {
+              docId: d.id,
+              title: n.title ?? "",
+              message: n.message ?? "",
+              timeSent: n.timeSent ?? "",
+              isRead: !!n.isRead,
+            };
+          })
+          .sort((a, b) => b.timeSent.localeCompare(a.timeSent));
+        setItems(rows);
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
@@ -503,17 +513,19 @@ export function usePatientVisitHistory(
       collection(db, "medicalRecordsHistory"),
       where("medicalRecordNo", "==", medicalRecordNo),
     );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const rows: VisitHistoryEntry[] = snapshot.docs
-        .map((d) => ({
-          docId: d.id,
-          description: d.data().description ?? "",
-          historyId: Number(d.data().historyId ?? 0),
-        }))
-        .sort((a, b) => b.historyId - a.historyId)
-        .map(({ docId, description }) => ({ docId, description }));
-      setVisits(rows);
-    },
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const rows: VisitHistoryEntry[] = snapshot.docs
+          .map((d) => ({
+            docId: d.id,
+            description: d.data().description ?? "",
+            historyId: Number(d.data().historyId ?? 0),
+          }))
+          .sort((a, b) => b.historyId - a.historyId)
+          .map(({ docId, description }) => ({ docId, description }));
+        setVisits(rows);
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
@@ -523,4 +535,214 @@ export function usePatientVisitHistory(
   }, [medicalRecordNo]);
 
   return visits;
+}
+// ---------------------------------------------------------------------------
+// Privacy settings and data-deletion requests.
+//
+// Both were previously written to localStorage. That meant a patient's
+// privacy preferences lived in one browser and vanished on cache clear, and —
+// more seriously — a POPIA deletion request was saved to the patient's own
+// device while the UI told them "admin will confirm within 48 hours". No
+// admin ever saw it. The app was making a promise about a legal right that
+// nothing behind it could keep.
+// ---------------------------------------------------------------------------
+
+export interface PrivacySettings {
+  showIdNumber: boolean;
+  showContact: boolean;
+  showEmergencyContact: boolean;
+  showAddress: boolean;
+}
+
+const PRIVACY_DEFAULTS: PrivacySettings = {
+  showIdNumber: true,
+  showContact: true,
+  showEmergencyContact: true,
+  showAddress: true,
+};
+
+/** Live privacy settings, stored on the patient's own record. */
+export function usePrivacySettings(patientId?: string): {
+  settings: PrivacySettings;
+  loading: boolean;
+} {
+  const [settings, setSettings] = useState<PrivacySettings>(PRIVACY_DEFAULTS);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!patientId) {
+      setLoading(false);
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(db, "patients", patientId),
+      (snap) => {
+        const data = snap.exists() ? snap.data() : {};
+        setSettings({ ...PRIVACY_DEFAULTS, ...(data.privacy ?? {}) });
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Privacy settings read failed:", err);
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [patientId]);
+
+  return { settings, loading };
+}
+
+export async function savePrivacySetting(
+  patientId: string,
+  key: keyof PrivacySettings,
+  value: boolean,
+): Promise<void> {
+  await setDoc(
+    doc(db, "patients", patientId),
+    { privacy: { [key]: value } },
+    { merge: true },
+  );
+}
+
+/**
+ * Records a real deletion request against the patient, so an admin can
+ * actually see and act on it.
+ *
+ * NOTE: this raises a request — it does not delete anything. Under POPIA a
+ * clinic must retain medical records for a defined period, so deletion is a
+ * reviewed decision, not an automatic one. The UI must not imply otherwise.
+ */
+export async function requestDataDeletion(input: {
+  patientId: string;
+  clinicId?: number;
+  reason?: string;
+}): Promise<void> {
+  await setDoc(
+    doc(db, "patients", input.patientId),
+    {
+      deletionRequest: {
+        status: "pending",
+        requestedAt: new Date().toISOString(),
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+    },
+    { merge: true },
+  );
+
+  await addDoc(collection(db, "systemAudit"), {
+    clinicId: input.clinicId ?? null,
+    actor_id: input.patientId,
+    action_type: "privacy.deletion_request",
+    description: `${input.patientId} requested deactivation of their account and data`,
+    timestamp: serverTimestamp(),
+  });
+}
+// ---------------------------------------------------------------------------
+// Medication collection status.
+//
+// The dashboard previously said "Available — ready for collection" to every
+// patient, always, regardless of whether anything was actually waiting.
+// Telling someone their medication is ready when it isn't sends them on a
+// wasted trip to a clinic — which for a patient without transport money is a
+// real cost, not a cosmetic bug.
+//
+// What the data can honestly support: whether they have a prescription on
+// record, and when they last collected. It cannot tell us a parcel is
+// packed and waiting — nothing in the system tracks that yet.
+// ---------------------------------------------------------------------------
+
+export type MedicationStatus =
+  | { state: "none"; label: string; detail: string }
+  | { state: "prescribed"; label: string; detail: string; medication: string }
+  | { state: "collected"; label: string; detail: string; medication: string };
+
+export function useMedicationStatus(
+  patientId?: string,
+  prescription?: string,
+): { status: MedicationStatus; loading: boolean } {
+  const [lastCollected, setLastCollected] = useState<{
+    med: string;
+    when: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!patientId) {
+      setLoading(false);
+      return;
+    }
+    const unsub = onSnapshot(
+      query(
+        collection(db, "patientDispensing"),
+        where("patientId", "==", patientId),
+      ),
+      (snap) => {
+        const rows = snap.docs
+          .map((d) => d.data())
+          .filter((r) => r.createdAt?.toDate)
+          .sort(
+            (a, b) =>
+              b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime(),
+          );
+        const latest = rows[0];
+        setLastCollected(
+          latest
+            ? {
+                med: latest.medName ?? "medication",
+                when: latest.createdAt.toDate().toISOString(),
+              }
+            : null,
+        );
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Dispensing history read failed:", err);
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [patientId]);
+
+  const med = prescription?.trim();
+
+  if (!med) {
+    return {
+      status: {
+        state: "none",
+        label: "None on record",
+        detail: "No medication is currently prescribed for you.",
+      },
+      loading,
+    };
+  }
+
+  if (lastCollected) {
+    const days = Math.floor(
+      (Date.now() - new Date(lastCollected.when).getTime()) / 86_400_000,
+    );
+    return {
+      status: {
+        state: "collected",
+        label: "Last collected",
+        detail:
+          days === 0
+            ? `You collected ${lastCollected.med} today.`
+            : days === 1
+              ? `You collected ${lastCollected.med} yesterday.`
+              : `You collected ${lastCollected.med} ${days} days ago.`,
+        medication: med,
+      },
+      loading,
+    };
+  }
+
+  return {
+    status: {
+      state: "prescribed",
+      label: "Prescribed",
+      detail: "Check with your clinic before travelling to collect.",
+      medication: med,
+    },
+    loading,
+  };
 }
