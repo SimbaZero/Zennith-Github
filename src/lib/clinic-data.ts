@@ -2077,3 +2077,89 @@ export async function resolveDeletionRequest(
     timestamp: serverTimestamp(),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Real clinical staff at a clinic.
+//
+// The Staff Directory previously listed only login PROFILES, so a doctor or
+// nurse who works at the clinic but has never been given a login simply
+// didn't exist as far as an admin was concerned — the page showed 0 doctors
+// at a clinic that plainly has them.
+//
+// This reads the actual doctors/nurses/pharmacists/receptionists records and
+// marks which of them have a login, so an admin can see both who works here
+// and who still needs an account.
+// ---------------------------------------------------------------------------
+
+export interface ClinicStaffMember {
+  staffId: string; // e.g. "Doc-1"
+  role: "doctor" | "nurse" | "pharmacist" | "receptionist";
+  fullName: string;
+  userId?: number;
+  /** Login username, when they have one. */
+  username?: string;
+  hasLogin: boolean;
+  /** True when they serve this clinic among others, rather than being based here. */
+  visiting: boolean;
+}
+
+const STAFF_COLLECTIONS = [
+  ["doctors", "doctor"],
+  ["nurses", "nurse"],
+  ["pharmacists", "pharmacist"],
+  ["receptionists", "receptionist"],
+] as const;
+
+export async function fetchClinicStaff(
+  clinicId: number,
+): Promise<ClinicStaffMember[]> {
+  const [profileSnap, userSnap] = await Promise.all([
+    getDocs(collection(db, "profiles")),
+    getDocs(collection(db, "users")),
+  ]);
+
+  const usernameByUserId = new Map<number, string>();
+  for (const p of profileSnap.docs) {
+    const d = p.data();
+    if (d.legacyUserId != null)
+      usernameByUserId.set(Number(d.legacyUserId), d.username ?? "");
+  }
+  const nameByUserId = new Map<number, string>();
+  for (const u of userSnap.docs) {
+    const d = u.data();
+    const name = [d.names, d.surname].filter(Boolean).join(" ");
+    if (d.userId != null && name) nameByUserId.set(Number(d.userId), name);
+  }
+
+  const out: ClinicStaffMember[] = [];
+
+  for (const [colName, role] of STAFF_COLLECTIONS) {
+    const snap = await getDocs(collection(db, colName));
+    for (const d of snap.docs) {
+      const data = d.data();
+      const primary = Number(data.clinicId);
+      const serves = Array.isArray(data.clinicIds)
+        ? data.clinicIds.map(Number)
+        : [];
+      const isHere = primary === clinicId || serves.includes(clinicId);
+      if (!isHere) continue;
+
+      const userId = data.userId != null ? Number(data.userId) : undefined;
+      const username =
+        userId != null ? usernameByUserId.get(userId) : undefined;
+
+      out.push({
+        staffId: d.id,
+        role,
+        fullName:
+          (userId != null ? nameByUserId.get(userId) : undefined) ?? d.id,
+        userId,
+        username: username || undefined,
+        hasLogin: !!username,
+        visiting: primary !== clinicId,
+      });
+    }
+  }
+
+  return out.sort((a, b) => a.fullName.localeCompare(b.fullName));
+}

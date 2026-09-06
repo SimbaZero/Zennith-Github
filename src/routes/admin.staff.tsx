@@ -1,100 +1,87 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
-import {
-  getUsers,
-  removeUser,
-  useCurrentAdmin,
-  type StaffRole,
-} from "@/lib/auth";
+import { removeUser, useCurrentAdmin } from "@/lib/auth";
+import { fetchClinicStaff, type ClinicStaffMember } from "@/lib/clinic-data";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Trash2,
-  X,
   Stethoscope,
   Syringe,
   Pill,
   ClipboardList,
-  Shield,
   Search,
+  KeyRound,
+  MapPin,
 } from "lucide-react";
 
 export const Route = createFileRoute("/admin/staff")({ component: Staff });
 
-type StaffRow = {
-  username: string;
-  fullName: string;
-  role: StaffRole | "admin";
-  builtin: boolean;
-  createdAt: string;
-};
+type Role = ClinicStaffMember["role"];
 
-const ROLE_ICON: Record<StaffRow["role"], any> = {
+const ROLE_ICON: Record<Role, any> = {
   doctor: Stethoscope,
   nurse: Syringe,
   pharmacist: Pill,
   receptionist: ClipboardList,
-  admin: Shield,
+};
+
+const ROLE_TONE: Record<Role, string> = {
+  doctor: "oklch(0.55 0.18 245)",
+  nurse: "oklch(0.55 0.18 160)",
+  pharmacist: "oklch(0.55 0.2 25)",
+  receptionist: "oklch(0.55 0.17 70)",
 };
 
 function Staff() {
   const queryClient = useQueryClient();
   const { admin } = useCurrentAdmin();
-  const { data: allUsers = [], isLoading } = useQuery({
-    queryKey: ["profiles"],
-    queryFn: getUsers,
+
+  // Reads the real doctors/nurses/... records, not just login profiles.
+  // Previously this listed profiles only, so anyone without a login was
+  // invisible — which is why a clinic full of doctors reported zero.
+  const { data: staff = [], isLoading } = useQuery({
+    queryKey: ["clinic-staff", admin?.clinicId],
+    queryFn: () => fetchClinicStaff(admin!.clinicId!),
+    enabled: admin?.clinicId != null,
   });
-  const [roleFilter, setRoleFilter] = useState<StaffRow["role"] | "all">("all");
+
+  const [roleFilter, setRoleFilter] = useState<Role | "all">("all");
   const [q, setQ] = useState("");
-  const [selected, setSelected] = useState<StaffRow | null>(null);
 
   const remove = useMutation({
-    mutationFn: (u: string) => removeUser(u),
+    mutationFn: (username: string) => removeUser(username),
     onSuccess: (_, u) => {
-      toast.success(`Account "${u}" removed`);
+      toast.success(`Login "${u}" removed`);
+      queryClient.invalidateQueries({ queryKey: ["clinic-staff"] });
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
     onError: () => toast.error("Could not remove account"),
   });
 
-  // Real staff at THIS admin's clinic only. Previously this list invented one
-  // fake row per role, so it always looked populated even when the clinic had
-  // no staff at all — that's why the dashboard count and this list disagreed.
-  const allRows: StaffRow[] = useMemo(() => {
-    if (admin?.clinicId == null) return [];
-    return allUsers
-      .filter(
-        (u) =>
-          u.clinicId === admin.clinicId &&
-          u.role !== "super_admin" &&
-          u.role !== "patient",
-      )
-      .map((u) => ({
-        username: u.username,
-        role: u.role as StaffRow["role"],
-        fullName: u.fullName ?? u.username,
-        builtin: !!u.builtin,
-        createdAt: u.createdAt ?? "—",
-      }));
-  }, [allUsers, admin?.clinicId]);
-
-  const filtered = allRows.filter((r) => {
-    if (roleFilter !== "all" && r.role !== roleFilter) return false;
-    if (!q.trim()) return true;
-    const needle = q.toLowerCase();
-    return (
-      r.fullName.toLowerCase().includes(needle) ||
-      r.username.toLowerCase().includes(needle)
-    );
-  });
+  const filtered = useMemo(
+    () =>
+      staff.filter((s) => {
+        if (roleFilter !== "all" && s.role !== roleFilter) return false;
+        if (!q.trim()) return true;
+        const needle = q.toLowerCase();
+        return (
+          s.fullName.toLowerCase().includes(needle) ||
+          s.staffId.toLowerCase().includes(needle) ||
+          (s.username ?? "").toLowerCase().includes(needle)
+        );
+      }),
+    [staff, roleFilter, q],
+  );
 
   const counts = {
-    doctor: allRows.filter((r) => r.role === "doctor").length,
-    nurse: allRows.filter((r) => r.role === "nurse").length,
-    pharmacist: allRows.filter((r) => r.role === "pharmacist").length,
-    receptionist: allRows.filter((r) => r.role === "receptionist").length,
+    doctor: staff.filter((s) => s.role === "doctor").length,
+    nurse: staff.filter((s) => s.role === "nurse").length,
+    pharmacist: staff.filter((s) => s.role === "pharmacist").length,
+    receptionist: staff.filter((s) => s.role === "receptionist").length,
   };
+  const noLogin = staff.filter((s) => !s.hasLogin).length;
 
   return (
     <AppShell
@@ -104,42 +91,56 @@ function Staff() {
       clinicNameOverride={admin?.clinicName}
     >
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-        <MetricCard
-          icon={Stethoscope}
-          label="DOCTORS"
-          value={counts.doctor}
-          tone="oklch(0.55_0.18_245)"
-        />
-        <MetricCard
-          icon={Syringe}
-          label="NURSES"
-          value={counts.nurse}
-          tone="oklch(0.55_0.18_160)"
-        />
-        <MetricCard
-          icon={Pill}
-          label="PHARMACISTS"
-          value={counts.pharmacist}
-          tone="oklch(0.55_0.2_25)"
-        />
-        <MetricCard
-          icon={ClipboardList}
-          label="RECEPTIONISTS"
-          value={counts.receptionist}
-          tone="oklch(0.55_0.17_70)"
-        />
+        {(
+          [
+            ["doctor", "DOCTORS", counts.doctor],
+            ["nurse", "NURSES", counts.nurse],
+            ["pharmacist", "PHARMACISTS", counts.pharmacist],
+            ["receptionist", "RECEPTIONISTS", counts.receptionist],
+          ] as const
+        ).map(([role, label, value]) => {
+          const Icon = ROLE_ICON[role];
+          return (
+            <div
+              key={role}
+              className="bg-white rounded-xl border p-4 flex items-center gap-3"
+            >
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center"
+                style={{
+                  background: `color-mix(in oklab, ${ROLE_TONE[role]} 12%, white)`,
+                  color: ROLE_TONE[role],
+                }}
+              >
+                <Icon size={18} />
+              </div>
+              <div>
+                <p className="text-[10px] tracking-wider text-muted-foreground">
+                  {label}
+                </p>
+                <p className="text-xl font-bold leading-none mt-1">{value}</p>
+              </div>
+            </div>
+          );
+        })}
       </div>
+
+      {/* Staff without a login can't use the system at all — worth surfacing
+          rather than leaving an admin to notice one at a time. */}
+      {noLogin > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex items-center gap-2">
+          <KeyRound size={15} className="text-amber-700 shrink-0" />
+          <p className="text-sm text-amber-900">
+            <strong>{noLogin}</strong> staff member{noLogin === 1 ? "" : "s"} at
+            this clinic {noLogin === 1 ? "has" : "have"} no login yet — they
+            can't sign in until you create one.
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {(
-          [
-            "all",
-            "doctor",
-            "nurse",
-            "pharmacist",
-            "receptionist",
-            "admin",
-          ] as const
+          ["all", "doctor", "nurse", "pharmacist", "receptionist"] as const
         ).map((r) => (
           <button
             key={r}
@@ -150,7 +151,7 @@ function Staff() {
                 : "bg-white hover:bg-secondary"
             }`}
           >
-            {r === "all" ? "Show all" : `Only ${r}s`}
+            {r === "all" ? "Everyone" : `${r}s`}
           </button>
         ))}
         <div className="relative ml-auto">
@@ -161,8 +162,8 @@ function Staff() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search by name or username…"
-            className="border rounded-md pl-9 pr-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-64"
+            placeholder="Search name, ID or username…"
+            className="border rounded-md pl-9 pr-3 py-1.5 text-sm w-64"
           />
         </div>
       </div>
@@ -180,48 +181,55 @@ function Staff() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-muted-foreground border-b">
-                <th className="px-5 py-3 font-medium">Username</th>
-                <th className="px-5 py-3 font-medium">Full name</th>
+                <th className="px-5 py-3 font-medium">Name</th>
+                <th className="px-5 py-3 font-medium">Staff ID</th>
                 <th className="px-5 py-3 font-medium">Role</th>
-                <th className="px-5 py-3 font-medium">Source</th>
-                <th className="px-5 py-3"></th>
+                <th className="px-5 py-3 font-medium">Login</th>
+                <th className="px-5 py-3" />
               </tr>
             </thead>
             <tbody>
-              {filtered.map((u) => (
+              {filtered.map((s) => (
                 <tr
-                  key={u.username + u.role}
-                  className="border-b last:border-0 hover:bg-secondary/40 cursor-pointer"
-                  onClick={() => setSelected(u)}
+                  key={s.staffId}
+                  className="border-b last:border-0 hover:bg-secondary/40"
                 >
-                  <td className="px-5 py-3 font-mono">{u.username}</td>
-                  <td className="px-5 py-3">{u.fullName}</td>
-                  <td className="px-5 py-3 capitalize">{u.role}</td>
-                  <td className="px-5 py-3 text-muted-foreground">
-                    {u.builtin
-                      ? "Seeded"
-                      : `Created ${u.createdAt.slice(0, 10)}`}
+                  <td className="px-5 py-3 font-medium">
+                    {s.fullName}
+                    {s.visiting && (
+                      <span className="ml-2 text-[10px] text-muted-foreground inline-flex items-center gap-1">
+                        <MapPin size={10} /> also works elsewhere
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3 font-mono text-xs text-muted-foreground">
+                    {s.staffId}
+                  </td>
+                  <td className="px-5 py-3 capitalize">{s.role}</td>
+                  <td className="px-5 py-3">
+                    {s.hasLogin ? (
+                      <span className="font-mono text-xs">{s.username}</span>
+                    ) : (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200">
+                        No login
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-3 text-right">
-                    {!u.builtin && (
+                    {s.hasLogin && s.username && (
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Removing staff deletes BOTH the login and the
-                          // underlying doctors/nurses/... record, and can't
-                          // be undone from the app — one stray click was
-                          // enough to lose an account entirely.
+                        onClick={() => {
                           const ok = window.confirm(
-                            `Remove ${u.fullName} (${u.username})?\n\n` +
-                              `This deletes their login and their ${u.role} record. ` +
+                            `Remove ${s.fullName}'s login (${s.username})?\n\n` +
+                              `This deletes their login and their ${s.role} record. ` +
                               `Past activity they recorded stays, but their name ` +
                               `will no longer resolve against it.\n\n` +
                               `This cannot be undone from here.`,
                           );
-                          if (ok) remove.mutate(u.username);
+                          if (ok) remove.mutate(s.username!);
                         }}
                         className="text-destructive hover:bg-destructive/10 p-1.5 rounded"
-                        aria-label="Delete"
+                        aria-label="Remove login"
                       >
                         <Trash2 size={15} />
                       </button>
@@ -235,9 +243,9 @@ function Staff() {
                     colSpan={5}
                     className="px-5 py-8 text-center text-muted-foreground text-sm"
                   >
-                    {allRows.length === 0
-                      ? "No staff accounts at this clinic yet — create one from Create User."
-                      : "No staff match your search."}
+                    {q.trim()
+                      ? "No staff match your search."
+                      : "No staff recorded at this clinic yet."}
                   </td>
                 </tr>
               )}
@@ -245,113 +253,6 @@ function Staff() {
           </table>
         </div>
       </div>
-
-      {selected && (
-        <StaffDrawer row={selected} onClose={() => setSelected(null)} />
-      )}
     </AppShell>
-  );
-}
-
-function MetricCard({
-  icon: Icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: any;
-  label: string;
-  value: number;
-  tone: string;
-}) {
-  return (
-    <div className="bg-white rounded-xl border p-4 flex items-center gap-3">
-      <div
-        className="w-10 h-10 rounded-full flex items-center justify-center"
-        style={{
-          background: `oklch(from ${tone} l c h / 0.12)`,
-          color: `oklch(${tone})`,
-        }}
-      >
-        <Icon size={18} />
-      </div>
-      <div>
-        <p className="text-[10px] tracking-wider text-muted-foreground">
-          {label}
-        </p>
-        <p className="text-xl font-bold leading-none mt-1">{value}</p>
-      </div>
-    </div>
-  );
-}
-
-function StaffDrawer({ row, onClose }: { row: StaffRow; onClose: () => void }) {
-  const Icon = ROLE_ICON[row.role];
-  return (
-    <div className="fixed inset-0 z-50 flex">
-      <div className="flex-1 bg-black/40" onClick={onClose} />
-      <div className="w-full max-w-md bg-white border-l shadow-xl h-full overflow-y-auto flex flex-col">
-        <div className="p-5 border-b flex items-start justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-[oklch(0.97_0.03_245)] flex items-center justify-center">
-              <Icon size={22} className="text-[oklch(0.4_0.15_245)]" />
-            </div>
-            <div>
-              <p className="font-semibold text-lg">{row.fullName}</p>
-              <p className="text-xs text-muted-foreground capitalize">
-                {row.role} · @{row.username}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 hover:bg-secondary rounded-md"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="p-5 space-y-5">
-          <Section title="Account">
-            <p className="text-sm capitalize">Role: {row.role}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {row.builtin
-                ? "Seeded demo account"
-                : `Created ${row.createdAt.slice(0, 10)}`}
-            </p>
-          </Section>
-
-          {/* The previous version of this drawer showed shift times, tenure,
-              qualifications and permission toggles — all invented from a hash
-              of the username, none of it real, and none of that data exists
-              anywhere in the database. Removed rather than left looking real.
-              TODO(db): if you want these for real, they need actual fields on
-              the staff records first — that's a schema decision, not a UI one. */}
-          <Section title="Not tracked yet">
-            <p className="text-xs text-muted-foreground">
-              Shift patterns, tenure, qualifications and per-user permissions
-              aren't stored in the database yet, so they aren't shown here.
-            </p>
-          </Section>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section>
-      <p className="text-[10px] tracking-wider text-muted-foreground mb-1.5">
-        {title.toUpperCase()}
-      </p>
-      {children}
-    </section>
   );
 }
