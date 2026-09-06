@@ -2,7 +2,16 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Package, Check, X, Plus, Boxes, Search } from "lucide-react";
+import {
+  Package,
+  Check,
+  X,
+  Plus,
+  Boxes,
+  Search,
+  MapPin,
+  ArrowRight,
+} from "lucide-react";
 import { useCurrentNurse } from "@/lib/nurse-service";
 import {
   useStockDeliveries,
@@ -10,7 +19,9 @@ import {
   rejectStockDelivery,
   recordExternalStock,
   useInventory,
+  findMedicationAtOtherClinics,
   type StockDelivery,
+  type StockElsewhere,
 } from "@/lib/pharmacist-service";
 
 export const Route = createFileRoute("/nurse/stock")({ component: NurseStock });
@@ -92,6 +103,11 @@ function NurseStock() {
           </ul>
         )}
       </div>
+
+      {/* Nurses described this as a real daily problem: a patient needs
+          something the clinic has run out of, and there's no way to know
+          whether another clinic has it without phoning around. */}
+      <FindElsewhere clinicId={nurse?.clinicId} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Current stock */}
@@ -516,5 +532,99 @@ function ExternalStockForm({
         {busy ? "Recording…" : "Add to clinic stock"}
       </button>
     </form>
+  );
+}
+function FindElsewhere({ clinicId }: { clinicId?: number }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<StockElsewhere[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  const search = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setSearching(true);
+    try {
+      const rows = await findMedicationAtOtherClinics(query, clinicId);
+      setResults(rows);
+    } catch (err) {
+      console.error("Cross-clinic lookup failed:", err);
+      setResults([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border p-5 mb-6">
+      <div className="flex items-center gap-2 mb-1">
+        <MapPin size={16} className="text-[oklch(0.55_0.18_245)]" />
+        <h3 className="font-semibold">Out of something? Find it nearby</h3>
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">
+        Shows which other clinics currently have a medication in stock, so you
+        can direct a patient instead of turning them away.
+      </p>
+
+      <form onSubmit={search} className="flex gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Medication name — e.g. Metformin"
+          className="flex-1 border rounded-md px-3 py-2 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={searching || !query.trim()}
+          className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm disabled:opacity-50"
+        >
+          {searching ? "Searching…" : "Search"}
+        </button>
+      </form>
+
+      {results !== null && (
+        <div className="mt-4">
+          {results.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-3 text-center">
+              No other clinic currently has "{query}" in stock.
+            </p>
+          ) : (
+            <>
+              <p className="text-[11px] tracking-wider text-muted-foreground mb-2">
+                AVAILABLE AT {results.length} OTHER CLINIC
+                {results.length === 1 ? "" : "S"}
+              </p>
+              <ul className="divide-y border rounded-lg">
+                {results.slice(0, 8).map((r, i) => (
+                  <li
+                    key={`${r.clinicId}-${i}`}
+                    className="flex items-center gap-3 px-4 py-2.5"
+                  >
+                    <ArrowRight
+                      size={14}
+                      className="text-muted-foreground shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{r.clinicName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {r.medName}
+                      </p>
+                    </div>
+                    <span className="text-sm font-semibold shrink-0">
+                      {r.quantity}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {/* Deliberately no "request transfer" button — moving stock
+                  between public facilities has real governance rules, and
+                  the app shouldn't imply it can be done with a click. */}
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Contact the clinic directly to arrange a transfer.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

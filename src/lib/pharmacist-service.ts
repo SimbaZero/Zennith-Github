@@ -1168,3 +1168,71 @@ export function summariseForecasts(
 
   return { headline, points };
 }
+// ---------------------------------------------------------------------------
+// Cross-clinic medication lookup.
+//
+// From a real problem nurses described: a patient needs a medication the
+// clinic has run out of, and there's no way to know whether the clinic down
+// the road has it. Without this the nurse either phones around or sends the
+// patient away.
+//
+// Read-only on purpose — this shows where stock IS, it doesn't move it.
+// Transferring stock between public facilities has governance rules the app
+// shouldn't quietly bypass.
+// ---------------------------------------------------------------------------
+
+export interface StockElsewhere {
+  clinicId: number;
+  clinicName: string;
+  quantity: number;
+  medName: string;
+}
+
+export async function findMedicationAtOtherClinics(
+  medName: string,
+  excludeClinicId?: number,
+): Promise<StockElsewhere[]> {
+  const term = medName.trim().toLowerCase();
+  if (!term) return [];
+
+  const [invSnap, clinicSnap] = await Promise.all([
+    getDocs(collection(db, "inventory")),
+    getDocs(collection(db, "clinics")),
+  ]);
+
+  const clinicNames = new Map<number, string>();
+  for (const c of clinicSnap.docs) {
+    clinicNames.set(
+      Number(c.data().clinicId),
+      c.data().clinicName ?? `Clinic ${c.data().clinicId}`,
+    );
+  }
+
+  // Loose match so "Metformin" finds "Metformin 850mg" — a nurse searching
+  // for a drug shouldn't have to know the exact strength string on file.
+  const loosen = (n: string) =>
+    n
+      .toLowerCase()
+      .replace(/\d+\s*(mg|ml|g|mcg|iu)\b/g, "")
+      .replace(/[^a-z/]/g, "");
+  const target = loosen(term);
+
+  return invSnap.docs
+    .map((d) => {
+      const data = d.data();
+      return {
+        clinicId: Number(data.clinicId),
+        clinicName: clinicNames.get(Number(data.clinicId)) ?? "Unknown clinic",
+        quantity: toNumber(data.quantity),
+        medName: String(data.medName ?? ""),
+      };
+    })
+    .filter(
+      (r) =>
+        r.quantity > 0 &&
+        r.clinicId !== excludeClinicId &&
+        (loosen(r.medName) === target ||
+          r.medName.toLowerCase().includes(term)),
+    )
+    .sort((a, b) => b.quantity - a.quantity);
+}
