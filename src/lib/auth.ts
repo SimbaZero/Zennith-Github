@@ -623,3 +623,71 @@ export async function createLoginForExistingStaff(input: {
     await deleteApp(secondary);
   }
 }
+/**
+ * Lets an admin correct a staff member's display name or contact email.
+ *
+ * Deliberately narrow. Role and clinic are NOT editable here: changing
+ * either would silently move someone between clinics or hand them different
+ * access, which should be a deliberate remove-and-recreate rather than an
+ * inline edit. Passwords aren't editable either — an admin should never be
+ * able to set or see one, which is the whole point of the invite flow.
+ *
+ * Fixing a typo previously meant deleting the account and starting over,
+ * which threw away their linked staff record and history.
+ */
+export async function updateStaffDetails(input: {
+  username: string;
+  fullName: string;
+  email?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const name = input.fullName.trim();
+  if (!name) return { ok: false, error: "Name can't be empty." };
+
+  try {
+    const snap = await getDocs(
+      query(
+        collection(db, USERS),
+        where("username", "==", input.username.trim().toLowerCase()),
+      ),
+    );
+    if (snap.empty)
+      return { ok: false, error: "That account no longer exists." };
+
+    const profileRef = snap.docs[0].ref;
+    const profile = snap.docs[0].data();
+
+    await updateDoc(profileRef, {
+      fullName: name,
+      ...(input.email ? { email: input.email.trim().toLowerCase() } : {}),
+    });
+
+    // The users record holds the name the rest of the app actually reads —
+    // staff lists, appointments, handover notes all resolve names from
+    // there, so updating only the profile would leave the old name showing
+    // everywhere that matters.
+    if (profile.legacyUserId != null) {
+      const [names, ...rest] = name.split(/\s+/);
+      await setDoc(
+        doc(db, "users", String(profile.legacyUserId)),
+        {
+          names,
+          surname: rest.join(" "),
+          ...(input.email ? { email: input.email.trim().toLowerCase() } : {}),
+        },
+        { merge: true },
+      );
+    }
+
+    logAction({
+      clinicId: profile.clinicId ?? null,
+      actor_id: getUsername() || "system",
+      action_type: "staff.update",
+      description: `Updated details for "${input.username}" (name: ${name})`,
+    });
+
+    return { ok: true };
+  } catch (err: any) {
+    console.error("updateStaffDetails failed:", err);
+    return { ok: false, error: "Could not save those changes." };
+  }
+}

@@ -4,6 +4,7 @@ import {
   removeUser,
   useCurrentAdmin,
   createLoginForExistingStaff,
+  updateStaffDetails,
 } from "@/lib/auth";
 import { fetchClinicStaff, type ClinicStaffMember } from "@/lib/clinic-data";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +20,7 @@ import {
   KeyRound,
   MapPin,
   UserPlus,
+  Pencil,
 } from "lucide-react";
 
 export const Route = createFileRoute("/admin/staff")({ component: Staff });
@@ -57,6 +59,7 @@ function Staff() {
   const [creatingFor, setCreatingFor] = useState<ClinicStaffMember | null>(
     null,
   );
+  const [editing, setEditing] = useState<ClinicStaffMember | null>(null);
 
   const remove = useMutation({
     mutationFn: (username: string) => removeUser(username),
@@ -176,6 +179,17 @@ function Staff() {
         </div>
       </div>
 
+      {editing && (
+        <EditStaffPanel
+          staff={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
+            queryClient.invalidateQueries({ queryKey: ["clinic-staff"] });
+          }}
+        />
+      )}
+
       {creatingFor && (
         <CreateLoginPanel
           staff={creatingFor}
@@ -238,7 +252,16 @@ function Staff() {
                       </button>
                     )}
                   </td>
-                  <td className="px-5 py-3 text-right">
+                  <td className="px-5 py-3 text-right whitespace-nowrap">
+                    {s.hasLogin && s.username && (
+                      <button
+                        onClick={() => setEditing(s)}
+                        className="text-muted-foreground hover:text-foreground hover:bg-secondary p-1.5 rounded mr-1"
+                        aria-label="Edit details"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
                     {s.hasLogin && s.username && (
                       <button
                         onClick={() => {
@@ -383,6 +406,96 @@ function CreateLoginPanel({
           className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm disabled:opacity-60"
         >
           {busy ? "Creating…" : "Create login"}
+        </button>
+      </form>
+    </div>
+  );
+}
+function EditStaffPanel({
+  staff,
+  onClose,
+  onDone,
+}: {
+  staff: ClinicStaffMember;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [fullName, setFullName] = useState(staff.fullName);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const res = await updateStaffDetails({
+      username: staff.username!,
+      fullName,
+      email: email.trim() || undefined,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not save changes");
+      return;
+    }
+    toast.success("Details updated");
+    onDone();
+  };
+
+  return (
+    <div className="mb-4 bg-white rounded-xl border border-[oklch(0.55_0.18_245)] p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 className="font-semibold">Edit {staff.staffId}</h3>
+          {/* Role and clinic are deliberately not editable: changing either
+              would move someone between clinics or alter their access
+              without it being an explicit decision. Passwords are never
+              editable by an admin. */}
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Name and email only. Role, clinic and password can't be changed here
+            — those need a deliberate account change, not a quick edit.
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-xs border px-3 py-1.5 rounded-md hover:bg-secondary shrink-0"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <form
+        onSubmit={submit}
+        className="grid grid-cols-1 md:grid-cols-[1.2fr_1.4fr_auto] gap-3 items-end"
+      >
+        <div>
+          <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+            FULL NAME
+          </label>
+          <input
+            required
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            className="w-full px-3 py-2 border rounded-md text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+            EMAIL (leave blank to keep current)
+          </label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Only fill this in to change it"
+            className="w-full px-3 py-2 border rounded-md text-sm"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={busy}
+          className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm disabled:opacity-60"
+        >
+          {busy ? "Saving…" : "Save"}
         </button>
       </form>
     </div>
