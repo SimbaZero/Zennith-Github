@@ -1328,6 +1328,9 @@ export interface PatientSignupInput {
   phone: string;
   password: string;
   clinicId: number;
+  /** SA ID or passport number — used to stop one person ending up with two
+   *  patient records, which would split their medical history. */
+  idNumber?: string;
 }
 
 // Real clinic list — reads the actual `clinics` collection, unlike the old
@@ -1382,6 +1385,17 @@ export async function signUpPatient(
   input: PatientSignupInput,
 ): Promise<{ ok: boolean; patientId?: string; error?: string }> {
   const email = input.email.trim().toLowerCase();
+  const idNumber = input.idNumber?.trim() ?? "";
+
+  // Checked again here, not just in the form — the form check can be
+  // bypassed, and a duplicate patient record is worse than a rejected signup.
+  if (idNumber && (await idNumberInUse(idNumber))) {
+    return {
+      ok: false,
+      error:
+        "An account already exists with this ID number. Try signing in, or use 'Forgot password'.",
+    };
+  }
   const secondary = initializeApp(
     firebaseConfig,
     `patient-signup-${Date.now()}`,
@@ -1423,7 +1437,7 @@ export async function signUpPatient(
         names,
         surname,
         role: "Patient",
-        idNumber: "",
+        idNumber,
         contactNum: input.phone.trim(),
         city: "",
         suburb: "",
@@ -1957,4 +1971,109 @@ export function usePublicQueueSummary(clinicId?: number | null): {
   }, [clinicId]);
 
   return state;
+}
+// ---------------------------------------------------------------------------
+// Data-deletion requests (POPIA).
+//
+// A patient can ask for their account to be deactivated. The request is
+// written onto their own patient record; this surfaces the pending ones so
+// an admin can actually act on them. Without this the request would sit in
+// the database unseen — which was the original bug.
+// ---------------------------------------------------------------------------
+
+export interface DeletionRequest {
+  patientId: string;
+  patientName: string;
+  requestedAt: string;
+  reason?: string;
+  status: "pending" | "actioned" | "declined";
+}
+
+export function useDeletionRequests(clinicId?: number): {
+  requests: DeletionRequest[];
+  loading: boolean;
+} {
+  const [requests, setRequests] = useState<DeletionRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (clinicId == null) {
+      setRequests([]);
+      setLoading(false);
+      return;
+    }
+    const unsub = onSnapshot(
+      query(collection(db, "patients"), where("clinicId", "==", clinicId)),
+      async (snap) => {
+        const withRequests = snap.docs.filter(
+          (d) => d.data().deletionRequest?.status === "pending",
+        );
+        const rows = await Promise.all(
+          withRequests.map(async (d) => {
+            const data = d.data();
+            let patientName = d.id;
+            if (data.userId != null) {
+              const u = await getDoc(doc(db, "users", String(data.userId)));
+              if (u.exists()) {
+                const ud = u.data();
+                patientName =
+                  [ud.names, ud.surname].filter(Boolean).join(" ") || d.id;
+              }
+            }
+            return {
+              patientId: d.id,
+              patientName,
+              requestedAt: data.deletionRequest.requestedAt ?? "",
+              reason: data.deletionRequest.reason,
+              status: "pending" as const,
+            };
+          }),
+        );
+        rows.sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+        setRequests(rows);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Deletion requests read failed:", err);
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [clinicId]);
+
+  return { requests, loading };
+}
+
+/**
+ * Marks a request as handled. Deliberately does NOT delete anything —
+ * clinics must retain medical records for a legally defined period, so
+ * "actioned" means an admin has dealt with it offline (contacted the
+ * patient, arranged retention, etc.), not that data was erased.
+ */
+export async function resolveDeletionRequest(
+  patientId: string,
+  outcome: "actioned" | "declined",
+  note: string,
+  actor: string,
+): Promise<void> {
+  await setDoc(
+    doc(db, "patients", patientId),
+    {
+      deletionRequest: {
+        status: outcome,
+        resolvedAt: new Date().toISOString(),
+        resolvedBy: actor,
+        resolutionNote: note,
+      },
+    },
+    { merge: true },
+  );
+
+  await addDoc(collection(db, "systemAudit"), {
+    clinicId: null,
+    actor_id: actor,
+    action_type: "privacy.deletion_resolved",
+    description: `Deletion request for ${patientId} marked ${outcome}: ${note}`,
+    timestamp: serverTimestamp(),
+  });
 }

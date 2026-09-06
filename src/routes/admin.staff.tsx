@@ -207,7 +207,18 @@ function Staff() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          remove.mutate(u.username);
+                          // Removing staff deletes BOTH the login and the
+                          // underlying doctors/nurses/... record, and can't
+                          // be undone from the app — one stray click was
+                          // enough to lose an account entirely.
+                          const ok = window.confirm(
+                            `Remove ${u.fullName} (${u.username})?\n\n` +
+                              `This deletes their login and their ${u.role} record. ` +
+                              `Past activity they recorded stays, but their name ` +
+                              `will no longer resolve against it.\n\n` +
+                              `This cannot be undone from here.`,
+                          );
+                          if (ok) remove.mutate(u.username);
                         }}
                         className="text-destructive hover:bg-destructive/10 p-1.5 rounded"
                         aria-label="Delete"

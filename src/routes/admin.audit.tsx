@@ -2,7 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { useLogs } from "@/lib/audit";
 import { useCurrentAdmin } from "@/lib/auth";
-import { subscribeQueueAudit } from "@/lib/clinic-data";
+import {
+  subscribeQueueAudit,
+  useDeletionRequests,
+  resolveDeletionRequest,
+} from "@/lib/clinic-data";
+import { toast } from "sonner";
+import { UserX } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   ShieldCheck,
@@ -41,6 +47,7 @@ function AdminAudit() {
   // Patient queue events (queueAudit). These were previously visible ONLY to
   // reception, so an admin had no way to review how the queue actually ran —
   // arguably the thing they'd most want to look back on.
+  const { requests: deletionRequests } = useDeletionRequests(admin?.clinicId);
   const [queueRows, setQueueRows] = useState<Row[]>([]);
   const [rawQueue, setRawQueue] = useState<QueueAuditEvent[]>([]);
   useEffect(() => {
@@ -146,6 +153,33 @@ function AdminAudit() {
       staffNameOverride={admin?.fullName}
       clinicNameOverride={admin?.clinicName}
     >
+      {/* Patients can request account deactivation under POPIA. Previously
+          those requests were written to the patient's own browser and no
+          admin ever saw them, while the patient was told an admin had been
+          notified. */}
+      {deletionRequests.length > 0 && (
+        <div className="mb-6 bg-white rounded-xl border border-amber-300 overflow-hidden">
+          <div className="px-5 py-3 border-b bg-amber-50 flex items-center gap-2">
+            <UserX size={15} className="text-amber-700" />
+            <h3 className="font-semibold text-sm text-amber-900">
+              Data deletion requests
+            </h3>
+            <span className="text-xs text-amber-800 ml-auto">
+              {deletionRequests.length} awaiting response
+            </span>
+          </div>
+          <ul className="divide-y">
+            {deletionRequests.map((r) => (
+              <DeletionRequestRow
+                key={r.patientId}
+                request={r}
+                actor={admin?.fullName ?? admin?.username ?? "admin"}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+
       <InsightsPanel flags={flags} stats={stats} onDismiss={dismissFlag} />
 
       <div className="bg-white rounded-xl border">
@@ -386,5 +420,130 @@ function MiniStat({
         {value}
       </p>
     </div>
+  );
+}
+function DeletionRequestRow({
+  request,
+  actor,
+}: {
+  request: {
+    patientId: string;
+    patientName: string;
+    requestedAt: string;
+    reason?: string;
+  };
+  actor: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const resolve = async (outcome: "actioned" | "declined") => {
+    if (!note.trim()) {
+      toast.error("Record what you did — this is a legal request.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await resolveDeletionRequest(
+        request.patientId,
+        outcome,
+        note.trim(),
+        actor,
+      );
+      toast.success(`Request marked ${outcome}`);
+      setOpen(false);
+      setNote("");
+    } catch (err) {
+      console.error(err);
+      toast.error("Couldn't save that — please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const when = new Date(request.requestedAt);
+  const days = Number.isNaN(when.getTime())
+    ? null
+    : Math.floor((Date.now() - when.getTime()) / 86_400_000);
+
+  return (
+    <li className="p-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p className="font-medium text-sm">
+            {request.patientName}{" "}
+            <span className="text-muted-foreground font-normal">
+              · {request.patientId}
+            </span>
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Requested{" "}
+            {days == null
+              ? "—"
+              : days === 0
+                ? "today"
+                : days === 1
+                  ? "yesterday"
+                  : `${days} days ago`}
+            {days != null && days > 2 && (
+              <span className="text-amber-700 font-medium">
+                {" "}
+                · overdue a response
+              </span>
+            )}
+          </p>
+          {request.reason && (
+            <p className="text-xs mt-1.5 italic">"{request.reason}"</p>
+          )}
+        </div>
+        {!open && (
+          <button
+            onClick={() => setOpen(true)}
+            className="text-xs font-medium border px-3 py-1.5 rounded-md hover:bg-secondary shrink-0"
+          >
+            Respond
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-3 rounded-md border bg-secondary/30 p-3">
+          <p className="text-xs text-muted-foreground mb-2">
+            Marking this handled does not delete anything — medical records must
+            be retained for a legally defined period. Record what you actually
+            did, including how the patient was contacted.
+          </p>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. called patient, account deactivated, records retained until 2031"
+            className="w-full border rounded-md px-3 py-2 text-sm bg-white"
+          />
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={() => setOpen(false)}
+              className="flex-1 border bg-white py-2 rounded-md text-xs"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => resolve("declined")}
+              disabled={busy}
+              className="flex-1 border bg-white py-2 rounded-md text-xs disabled:opacity-60"
+            >
+              Decline
+            </button>
+            <button
+              onClick={() => resolve("actioned")}
+              disabled={busy}
+              className="flex-1 bg-[oklch(0.18_0.06_260)] text-white py-2 rounded-md text-xs disabled:opacity-60"
+            >
+              {busy ? "Saving…" : "Mark handled"}
+            </button>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
