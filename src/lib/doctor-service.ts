@@ -283,35 +283,37 @@ export function useDoctorAppointments(doctorId: string | undefined): {
       collection(db, "appointments"),
       where("clinician", "==", doctorId),
     );
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const raw = snapshot.docs.map((d) => {
-        const a = d.data();
-        const dt = new Date(a.appointDateTime);
-        return {
-          docId: d.id,
-          date: dt.toISOString().slice(0, 10),
-          time: dt.toISOString().slice(11, 16),
-          dateTime: a.appointDateTime as string,
-          type: a.appointType ?? "",
-          rawStatus: a.status ?? "",
-          status: toBadgeStatus(a.status ?? ""),
-          patientId: a.patientId ?? "",
-        };
-      });
+    const unsubscribe = onSnapshot(
+      q,
+      async (snapshot) => {
+        const raw = snapshot.docs.map((d) => {
+          const a = d.data();
+          const dt = new Date(a.appointDateTime);
+          return {
+            docId: d.id,
+            date: dt.toISOString().slice(0, 10),
+            time: dt.toISOString().slice(11, 16),
+            dateTime: a.appointDateTime as string,
+            type: a.appointType ?? "",
+            rawStatus: a.status ?? "",
+            status: toBadgeStatus(a.status ?? ""),
+            patientId: a.patientId ?? "",
+          };
+        });
 
-      const names = await resolvePatientNames(raw.map((a) => a.patientId));
-      const withNames: DoctorAppointment[] = raw
-        .map((a) => ({
-          ...a,
-          patientName: names.get(a.patientId)?.name ?? a.patientId,
-          condition: names.get(a.patientId)?.condition ?? "",
-        }))
-        .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+        const names = await resolvePatientNames(raw.map((a) => a.patientId));
+        const withNames: DoctorAppointment[] = raw
+          .map((a) => ({
+            ...a,
+            patientName: names.get(a.patientId)?.name ?? a.patientId,
+            condition: names.get(a.patientId)?.condition ?? "",
+          }))
+          .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 
-      namesReady.current = true;
-      setAppointments(withNames);
-      setLoading(false);
-    },
+        namesReady.current = true;
+        setAppointments(withNames);
+        setLoading(false);
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
@@ -741,9 +743,11 @@ export function usePatientRecord(pid: string | undefined): {
   // 2. Once we know userId / medicalRecordNo, subscribe to those docs too.
   useEffect(() => {
     if (userId == null) return;
-    const unsubscribe = onSnapshot(doc(db, "users", String(userId)), (snap) => {
-      setUserData(snap.exists() ? snap.data() : {});
-    },
+    const unsubscribe = onSnapshot(
+      doc(db, "users", String(userId)),
+      (snap) => {
+        setUserData(snap.exists() ? snap.data() : {});
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
@@ -773,16 +777,18 @@ export function usePatientRecord(pid: string | undefined): {
       collection(db, "medicalRecordsHistory"),
       where("patientId", "==", pid),
     );
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const items = snap.docs
-        .map((d) => ({
-          id: d.id,
-          description: d.data().description ?? "",
-          historyId: Number(d.data().historyId ?? 0),
-        }))
-        .sort((a, b) => b.historyId - a.historyId);
-      setHistory(items);
-    },
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const items = snap.docs
+          .map((d) => ({
+            id: d.id,
+            description: d.data().description ?? "",
+            historyId: Number(d.data().historyId ?? 0),
+          }))
+          .sort((a, b) => b.historyId - a.historyId);
+        setHistory(items);
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
@@ -797,16 +803,18 @@ export function usePatientRecord(pid: string | undefined): {
       collection(db, "appointments"),
       where("patientId", "==", pid),
     );
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const now = new Date().toISOString();
-      const upcoming = snap.docs
-        .map((d) => d.data())
-        .filter((a) => (a.appointDateTime ?? "") > now)
-        .sort((a, b) =>
-          (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""),
-        )[0];
-      setNextAppt(upcoming);
-    },
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const now = new Date().toISOString();
+        const upcoming = snap.docs
+          .map((d) => d.data())
+          .filter((a) => (a.appointDateTime ?? "") > now)
+          .sort((a, b) =>
+            (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""),
+          )[0];
+        setNextAppt(upcoming);
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
