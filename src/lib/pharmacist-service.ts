@@ -135,7 +135,7 @@ export async function addInventoryStock(
   if (!snap.exists()) throw new Error("Medication not found in inventory");
 
   const current = toNumber(snap.data().quantity);
-  const newQuantity = current + amount;
+  const newQuantity = current + (Number(amount) || 0);
 
   await updateDoc(ref, {
     quantity: newQuantity, // always written as a real number, fixing the bad data as we go
@@ -747,7 +747,11 @@ export async function confirmStockDelivery(input: {
       } else {
         await addDoc(collection(db, "inventory"), {
           medName: item.name,
-          quantity: item.quantity,
+          // Coerced explicitly: TypeScript types this as a number, but a
+          // value that came from a form input is a string at runtime, and
+          // Firestore stores whatever type it's given. A string quantity
+          // then breaks every comparison and sum downstream.
+          quantity: Number(item.quantity) || 0,
           threshold: 0,
           clinicId: input.clinicId,
           category: "Delivered",
@@ -867,7 +871,7 @@ export async function recordExternalStock(input: {
   if (existing.empty) {
     await addDoc(collection(db, "inventory"), {
       medName: input.medName,
-      quantity: input.quantity,
+      quantity: Number(input.quantity) || 0, // see note in confirmStockDelivery
       threshold: 0,
       clinicId: input.clinicId,
       category: "External",
