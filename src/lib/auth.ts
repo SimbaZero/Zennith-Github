@@ -339,8 +339,20 @@ export async function removeUser(username: string): Promise<void> {
       where("username", "==", username.trim().toLowerCase()),
     );
     const snap = await getDocs(q);
+    // Fall back to the acting admin's own clinic. Some profiles carry no
+    // clinicId of their own, which logged the removal as "Platform-wide" —
+    // so the event disappeared when Super Admin filtered by clinic, even
+    // though it plainly happened at one.
+    const actingProfile = auth.currentUser
+      ? await getDoc(doc(db, USERS, auth.currentUser.uid))
+      : null;
+    const actingClinicId = actingProfile?.exists()
+      ? (actingProfile.data().clinicId as number | undefined)
+      : undefined;
     const removedClinicId =
-      (snap.docs[0]?.data()?.clinicId as number | undefined) ?? null;
+      (snap.docs[0]?.data()?.clinicId as number | undefined) ??
+      actingClinicId ??
+      null;
     await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
     logAction({
       clinicId: removedClinicId,
