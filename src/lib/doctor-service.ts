@@ -311,7 +311,12 @@ export function useDoctorAppointments(doctorId: string | undefined): {
       namesReady.current = true;
       setAppointments(withNames);
       setLoading(false);
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
 
     return () => unsubscribe();
   }, [doctorId]);
@@ -629,6 +634,10 @@ export function useFindPatientById(
         setPatient(await enrichPatient(snap.id, data));
         setLoading(false);
       },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
     );
     return () => unsubscribe();
   }, [patientId, clinicId]);
@@ -734,7 +743,12 @@ export function usePatientRecord(pid: string | undefined): {
     if (userId == null) return;
     const unsubscribe = onSnapshot(doc(db, "users", String(userId)), (snap) => {
       setUserData(snap.exists() ? snap.data() : {});
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsubscribe();
   }, [userId]);
 
@@ -744,6 +758,10 @@ export function usePatientRecord(pid: string | undefined): {
       doc(db, "medicalRecords", String(medicalRecordNo)),
       (snap) => {
         setMrData(snap.exists() ? snap.data() : {});
+      },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
       },
     );
     return () => unsubscribe();
@@ -764,7 +782,12 @@ export function usePatientRecord(pid: string | undefined): {
         }))
         .sort((a, b) => b.historyId - a.historyId);
       setHistory(items);
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsubscribe();
   }, [pid]);
 
@@ -783,7 +806,12 @@ export function usePatientRecord(pid: string | undefined): {
           (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""),
         )[0];
       setNextAppt(upcoming);
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsubscribe();
   }, [pid]);
 

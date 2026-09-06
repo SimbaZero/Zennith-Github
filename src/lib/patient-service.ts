@@ -157,7 +157,12 @@ export function useCurrentPatient(): {
       if (cancelled) return;
       unsubscribe = onSnapshot(doc(db, "patients", patientId), (snap) => {
         setPatientBase(snap.exists() ? snap.data() : null);
-      });
+      },
+        (err) => {
+          // Added so this listener can't fail silently.
+          console.error("Firestore listener failed:", err);
+        },
+      );
     });
 
     return () => {
@@ -174,6 +179,10 @@ export function useCurrentPatient(): {
       (snap) => {
         setUserData(snap.exists() ? snap.data() : {});
       },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
     );
     return () => unsubscribe();
   }, [patientBase?.userId]);
@@ -185,6 +194,10 @@ export function useCurrentPatient(): {
       (snap) => {
         setMrData(snap.exists() ? snap.data() : {});
       },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
     );
     return () => unsubscribe();
   }, [patientBase?.medicalRecordNo]);
@@ -195,6 +208,10 @@ export function useCurrentPatient(): {
       doc(db, "clinics", String(patientBase.clinicId)),
       (snap) => {
         setClinicData(snap.exists() ? snap.data() : {});
+      },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
       },
     );
     return () => unsubscribe();
@@ -342,7 +359,12 @@ export function usePatientAppointments(
           })),
         );
       }
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => {
       cancelled = true;
       unsubscribe();
@@ -406,7 +428,12 @@ export function usePatientNotifications(
         })
         .sort((a, b) => b.timeSent.localeCompare(a.timeSent));
       setItems(rows);
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsubscribe();
   }, [userId]);
 
@@ -486,7 +513,12 @@ export function usePatientVisitHistory(
         .sort((a, b) => b.historyId - a.historyId)
         .map(({ docId, description }) => ({ docId, description }));
       setVisits(rows);
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsubscribe();
   }, [medicalRecordNo]);
 

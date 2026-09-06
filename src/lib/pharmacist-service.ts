@@ -239,7 +239,12 @@ export function useRecentDistributions(max = 20): DistributionRecord[] {
           date: d.data().date,
         })),
       );
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsubscribe();
   }, [max]);
 
@@ -370,6 +375,10 @@ export function useMedicationDispenseTrends(): Record<string, number[]> {
         });
 
         setTrends(byMed);
+      },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
       },
     );
 
@@ -977,7 +986,12 @@ export function useMedicationUsage(days = 30): UsageMap {
         out[med] = counts.map((units, i) => ({ date: dayKeys[i], units }));
       }
       setUsage(out);
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsub();
   }, [days]);
 

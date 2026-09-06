@@ -710,7 +710,12 @@ export function useClinicInventory(clinicId: number | undefined): {
         .filter((i) => i.quantity > 0);
       setItems(rows);
       setLoading(false);
-    });
+    },
+      (err) => {
+        // Added so this listener can't fail silently.
+        console.error("Firestore listener failed:", err);
+      },
+    );
     return () => unsubscribe();
   }, [clinicId]);
 
