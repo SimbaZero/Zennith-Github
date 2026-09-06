@@ -339,6 +339,7 @@ export interface DoctorDashboardData {
     dayCompleted: number;
     pendingReviews: number;
     weekPatients: number;
+    weekAppointments: number;
     upcoming: number;
   };
 }
@@ -398,6 +399,11 @@ export function useDoctorDashboard(): {
         );
       }).length,
       weekPatients: new Set(week.map((a) => a.patientId)).size,
+      // Distinct from weekPatients: one patient can have several
+      // appointments in a week. The dashboard previously showed
+      // weekPatients under BOTH labels, so the two always matched even
+      // when they shouldn't.
+      weekAppointments: week.length,
       upcoming: appointments.filter((a) => a.date > scheduleDate).length,
     },
   };

@@ -131,7 +131,7 @@ function DoctorDashboard() {
             />
             <Row
               label="Appointments"
-              value={data ? String(data.stats.weekPatients) : "—"}
+              value={data ? String(data.stats.weekAppointments) : "—"}
             />
             <Row label="Clinician" value={data?.doctorId ?? "—"} />
           </div>
