@@ -55,6 +55,7 @@ import { Route as AdminAuditRouteImport } from './routes/admin.audit'
 import { Route as ReceptionistProfilesPidRouteImport } from './routes/receptionist.profiles_.$pid'
 import { Route as NursePatientRecordPidRouteImport } from './routes/nurse.patient-record.$pid'
 import { Route as DoctorPatientRecordPidRouteImport } from './routes/doctor.patient-record.$pid'
+import { Route as DoctorPatientRecordRouteImport } from './routes/doctor.patient-record.'
 
 const TwoFactorRoute = TwoFactorRouteImport.update({
   id: '/two-factor',
@@ -288,6 +289,11 @@ const DoctorPatientRecordPidRoute = DoctorPatientRecordPidRouteImport.update({
   path: '/patient-record/$pid',
   getParentRoute: () => DoctorRoute,
 } as any)
+const DoctorPatientRecordRoute = DoctorPatientRecordRouteImport.update({
+  id: '/patient-record/',
+  path: '/patient-record/',
+  getParentRoute: () => DoctorRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -333,6 +339,7 @@ export interface FileRoutesByFullPath {
   '/pharmacist/': typeof PharmacistIndexRoute
   '/receptionist/': typeof ReceptionistIndexRoute
   '/super-admin/': typeof SuperAdminIndexRoute
+  '/doctor/patient-record/': typeof DoctorPatientRecordRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
   '/receptionist/profiles/$pid': typeof ReceptionistProfilesPidRoute
@@ -374,6 +381,7 @@ export interface FileRoutesByTo {
   '/pharmacist': typeof PharmacistIndexRoute
   '/receptionist': typeof ReceptionistIndexRoute
   '/super-admin': typeof SuperAdminIndexRoute
+  '/doctor/patient-record': typeof DoctorPatientRecordRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
   '/receptionist/profiles/$pid': typeof ReceptionistProfilesPidRoute
@@ -423,6 +431,7 @@ export interface FileRoutesById {
   '/pharmacist/': typeof PharmacistIndexRoute
   '/receptionist/': typeof ReceptionistIndexRoute
   '/super-admin/': typeof SuperAdminIndexRoute
+  '/doctor/patient-record/': typeof DoctorPatientRecordRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
   '/receptionist/profiles_/$pid': typeof ReceptionistProfilesPidRoute
@@ -473,6 +482,7 @@ export interface FileRouteTypes {
     | '/pharmacist/'
     | '/receptionist/'
     | '/super-admin/'
+    | '/doctor/patient-record/'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
     | '/receptionist/profiles/$pid'
@@ -514,6 +524,7 @@ export interface FileRouteTypes {
     | '/pharmacist'
     | '/receptionist'
     | '/super-admin'
+    | '/doctor/patient-record'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
     | '/receptionist/profiles/$pid'
@@ -562,6 +573,7 @@ export interface FileRouteTypes {
     | '/pharmacist/'
     | '/receptionist/'
     | '/super-admin/'
+    | '/doctor/patient-record/'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
     | '/receptionist/profiles_/$pid'
@@ -907,6 +919,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DoctorPatientRecordPidRouteImport
       parentRoute: typeof DoctorRoute
     }
+    '/doctor/patient-record/': {
+      id: '/doctor/patient-record/'
+      path: '/patient-record'
+      fullPath: '/doctor/patient-record/'
+      preLoaderRoute: typeof DoctorPatientRecordRouteImport
+      parentRoute: typeof DoctorRoute
+    }
   }
 }
 
@@ -930,6 +949,7 @@ interface DoctorRouteChildren {
   DoctorAppointmentsRoute: typeof DoctorAppointmentsRoute
   DoctorPatientsRoute: typeof DoctorPatientsRoute
   DoctorIndexRoute: typeof DoctorIndexRoute
+  DoctorPatientRecordRoute: typeof DoctorPatientRecordRoute
   DoctorPatientRecordPidRoute: typeof DoctorPatientRecordPidRoute
 }
 
@@ -937,6 +957,7 @@ const DoctorRouteChildren: DoctorRouteChildren = {
   DoctorAppointmentsRoute: DoctorAppointmentsRoute,
   DoctorPatientsRoute: DoctorPatientsRoute,
   DoctorIndexRoute: DoctorIndexRoute,
+  DoctorPatientRecordRoute: DoctorPatientRecordRoute,
   DoctorPatientRecordPidRoute: DoctorPatientRecordPidRoute,
 }
 
