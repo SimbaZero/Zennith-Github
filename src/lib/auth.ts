@@ -538,3 +538,76 @@ export function useCurrentAdmin(): {
 
   return { admin, loading, error };
 }
+/**
+ * Creates a login for someone who ALREADY exists as staff.
+ *
+ * Distinct from addUser, which creates a brand-new person. Without this, an
+ * admin looking at "Aisha Botha · Doc-99 · No login" had to go to Create User
+ * and retype her details — which would mint a second doctor record, Doc-107,
+ * with none of her history. The same human would then exist twice, and
+ * whichever record her appointments pointed at would be the one she couldn't
+ * see when she logged in.
+ *
+ * This attaches an Auth account to the existing staff record instead.
+ */
+export async function createLoginForExistingStaff(input: {
+  staffId: string; // e.g. "Doc-99"
+  role: StaffRole;
+  username: string;
+  email: string;
+  fullName: string;
+  userId: number; // the staff record's existing users.userId
+  clinicId: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  const throwawayPassword =
+    crypto.randomUUID() + crypto.randomUUID().toUpperCase();
+
+  const secondary = initializeApp(firebaseConfig, `staff-login-${Date.now()}`);
+  try {
+    const cred = await createUserWithEmailAndPassword(
+      getFbAuth(secondary),
+      input.email.trim().toLowerCase(),
+      throwawayPassword,
+    );
+
+    // Links to the EXISTING record via legacyUserId — no new staff document
+    // is created, so their appointments, notes and history stay attached.
+    await setDoc(doc(getFirestore(secondary), USERS, cred.user.uid), {
+      username: input.username.trim().toLowerCase(),
+      role: input.role,
+      fullName: input.fullName,
+      email: input.email.trim().toLowerCase(),
+      createdAt: new Date().toISOString(),
+      builtin: false,
+      clinicId: input.clinicId,
+      legacyUserId: input.userId,
+    });
+
+    try {
+      await sendPasswordResetEmail(auth, input.email.trim().toLowerCase());
+    } catch (err) {
+      console.error("Invite email failed to send:", err);
+    }
+
+    logAction({
+      clinicId: input.clinicId,
+      actor_id: getUsername() || "system",
+      action_type: "staff.login_created",
+      description: `Created a login for existing ${input.role} ${input.staffId} (${input.fullName})`,
+    });
+
+    return { ok: true };
+  } catch (err: any) {
+    if (err.code === "auth/email-already-in-use")
+      return { ok: false, error: "That email already has an account" };
+    if (err.code === "auth/invalid-email")
+      return { ok: false, error: "Enter a valid email address" };
+    console.error("createLoginForExistingStaff failed:", err.code, err.message);
+    return {
+      ok: false,
+      error: `Could not create login (${err.code ?? "unknown"})`,
+    };
+  } finally {
+    await deleteApp(secondary);
+  }
+}

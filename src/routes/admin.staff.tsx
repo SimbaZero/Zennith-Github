@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
-import { removeUser, useCurrentAdmin } from "@/lib/auth";
+import {
+  removeUser,
+  useCurrentAdmin,
+  createLoginForExistingStaff,
+} from "@/lib/auth";
 import { fetchClinicStaff, type ClinicStaffMember } from "@/lib/clinic-data";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
@@ -14,6 +18,7 @@ import {
   Search,
   KeyRound,
   MapPin,
+  UserPlus,
 } from "lucide-react";
 
 export const Route = createFileRoute("/admin/staff")({ component: Staff });
@@ -49,6 +54,9 @@ function Staff() {
 
   const [roleFilter, setRoleFilter] = useState<Role | "all">("all");
   const [q, setQ] = useState("");
+  const [creatingFor, setCreatingFor] = useState<ClinicStaffMember | null>(
+    null,
+  );
 
   const remove = useMutation({
     mutationFn: (username: string) => removeUser(username),
@@ -168,6 +176,18 @@ function Staff() {
         </div>
       </div>
 
+      {creatingFor && (
+        <CreateLoginPanel
+          staff={creatingFor}
+          clinicId={admin?.clinicId ?? 0}
+          onClose={() => setCreatingFor(null)}
+          onDone={() => {
+            setCreatingFor(null);
+            queryClient.invalidateQueries({ queryKey: ["clinic-staff"] });
+          }}
+        />
+      )}
+
       <div className="bg-white rounded-xl border">
         <div className="p-5 border-b flex items-center gap-2">
           <h2 className="font-semibold">Staff Directory</h2>
@@ -210,9 +230,12 @@ function Staff() {
                     {s.hasLogin ? (
                       <span className="font-mono text-xs">{s.username}</span>
                     ) : (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200">
-                        No login
-                      </span>
+                      <button
+                        onClick={() => setCreatingFor(s)}
+                        className="text-[11px] font-medium px-2.5 py-1 rounded-md border bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100 inline-flex items-center gap-1"
+                      >
+                        <UserPlus size={11} /> Create login
+                      </button>
                     )}
                   </td>
                   <td className="px-5 py-3 text-right">
@@ -254,5 +277,114 @@ function Staff() {
         </div>
       </div>
     </AppShell>
+  );
+}
+function CreateLoginPanel({
+  staff,
+  clinicId,
+  onClose,
+  onDone,
+}: {
+  staff: ClinicStaffMember;
+  clinicId: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  // Pre-filled from the existing record, so the admin doesn't retype a name
+  // and accidentally create a second version of the same person.
+  const [username, setUsername] = useState(
+    staff.fullName
+      .toLowerCase()
+      .replace(/[^a-z]/g, "")
+      .slice(0, 12),
+  );
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (staff.userId == null) {
+      toast.error(
+        "This staff record has no linked user id, so a login can't be attached to it.",
+      );
+      return;
+    }
+    setBusy(true);
+    const res = await createLoginForExistingStaff({
+      staffId: staff.staffId,
+      role: staff.role,
+      username: username.trim(),
+      email: email.trim(),
+      fullName: staff.fullName,
+      userId: staff.userId,
+      clinicId,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not create login");
+      return;
+    }
+    toast.success(
+      `Login created for ${staff.fullName} — a set-password email was sent to ${email}`,
+    );
+    onDone();
+  };
+
+  return (
+    <div className="mb-4 bg-white rounded-xl border border-[oklch(0.55_0.18_245)] p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 className="font-semibold">Create a login for {staff.fullName}</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Attaches to their existing record ({staff.staffId}), so their
+            appointments and history stay with them. They'll set their own
+            password by email — you never see it.
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-xs border px-3 py-1.5 rounded-md hover:bg-secondary shrink-0"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <form
+        onSubmit={submit}
+        className="grid grid-cols-1 md:grid-cols-[1fr_1.4fr_auto] gap-3 items-end"
+      >
+        <div>
+          <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+            USERNAME
+          </label>
+          <input
+            required
+            value={username}
+            onChange={(e) => setUsername(e.target.value.toLowerCase())}
+            className="w-full px-3 py-2 border rounded-md text-sm"
+          />
+        </div>
+        <div>
+          <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+            EMAIL ADDRESS
+          </label>
+          <input
+            required
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="their.name@example.com"
+            className="w-full px-3 py-2 border rounded-md text-sm"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={busy}
+          className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm disabled:opacity-60"
+        >
+          {busy ? "Creating…" : "Create login"}
+        </button>
+      </form>
+    </div>
   );
 }
