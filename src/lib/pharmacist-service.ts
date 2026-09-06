@@ -229,17 +229,19 @@ export function useRecentDistributions(max = 20): DistributionRecord[] {
       orderBy("createdAt", "desc"),
       limit(max),
     );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setRecords(
-        snapshot.docs.map((d) => ({
-          docId: d.id,
-          medName: d.data().medName,
-          nurseName: d.data().nurseName,
-          unitsGiven: d.data().unitsGiven,
-          date: d.data().date,
-        })),
-      );
-    },
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setRecords(
+          snapshot.docs.map((d) => ({
+            docId: d.id,
+            medName: d.data().medName,
+            nurseName: d.data().nurseName,
+            unitsGiven: d.data().unitsGiven,
+            date: d.data().date,
+          })),
+        );
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);
@@ -963,30 +965,32 @@ export function useMedicationUsage(days = 30): UsageMap {
   const [usage, setUsage] = useState<UsageMap>({});
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "distributions"), (snap) => {
-      const dayKeys: string[] = [];
-      for (let i = days - 1; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        dayKeys.push(d.toISOString().slice(0, 10));
-      }
+    const unsub = onSnapshot(
+      collection(db, "distributions"),
+      (snap) => {
+        const dayKeys: string[] = [];
+        for (let i = days - 1; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          dayKeys.push(d.toISOString().slice(0, 10));
+        }
 
-      const byMed: Record<string, number[]> = {};
-      snap.docs.forEach((docSnap) => {
-        const data = docSnap.data();
-        const medName = data.medName as string;
-        const idx = dayKeys.indexOf(data.date as string);
-        if (idx === -1 || !medName) return;
-        if (!byMed[medName]) byMed[medName] = new Array(days).fill(0);
-        byMed[medName][idx] += toNumber(data.unitsGiven);
-      });
+        const byMed: Record<string, number[]> = {};
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data();
+          const medName = data.medName as string;
+          const idx = dayKeys.indexOf(data.date as string);
+          if (idx === -1 || !medName) return;
+          if (!byMed[medName]) byMed[medName] = new Array(days).fill(0);
+          byMed[medName][idx] += toNumber(data.unitsGiven);
+        });
 
-      const out: Record<string, { date: string; units: number }[]> = {};
-      for (const [med, counts] of Object.entries(byMed)) {
-        out[med] = counts.map((units, i) => ({ date: dayKeys[i], units }));
-      }
-      setUsage(out);
-    },
+        const out: Record<string, { date: string; units: number }[]> = {};
+        for (const [med, counts] of Object.entries(byMed)) {
+          out[med] = counts.map((units, i) => ({ date: dayKeys[i], units }));
+        }
+        setUsage(out);
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);

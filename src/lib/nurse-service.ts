@@ -696,21 +696,23 @@ export function useClinicInventory(clinicId: number | undefined): {
       collection(db, "inventory"),
       where("clinicId", "==", clinicId),
     );
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const rows = snap.docs
-        .map((d) => {
-          const data = d.data();
-          return {
-            docId: d.id,
-            inventId: Number(data.inventId),
-            medName: data.medName ?? "Unknown medication",
-            quantity: Number(data.quantity) || 0,
-          };
-        })
-        .filter((i) => i.quantity > 0);
-      setItems(rows);
-      setLoading(false);
-    },
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs
+          .map((d) => {
+            const data = d.data();
+            return {
+              docId: d.id,
+              inventId: Number(data.inventId),
+              medName: data.medName ?? "Unknown medication",
+              quantity: Number(data.quantity) || 0,
+            };
+          })
+          .filter((i) => i.quantity > 0);
+        setItems(rows);
+        setLoading(false);
+      },
       (err) => {
         // Added so this listener can't fail silently.
         console.error("Firestore listener failed:", err);

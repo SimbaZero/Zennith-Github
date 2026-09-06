@@ -515,18 +515,15 @@ async function enrichPatient(
   patientId: string,
   p: Record<string, any>,
 ): Promise<PatientDirectoryEntry> {
-  const cached = patientDetailCache.get(patientId);
-  if (cached) {
-    return {
-      patientId,
-      name: cached.name,
-      condition: p.chronicCondition ?? "—",
-      lastVisit: cached.lastVisit,
-    };
-  }
+  // Only the NAME is cached. lastVisit used to be cached too, which is why
+  // dispensing medication or editing a record didn't update this list —
+  // the patients listener fired correctly, then this returned the stale
+  // cached row anyway. A name comes from the users doc and effectively
+  // never changes; lastVisit changes every time a patient is seen.
+  const cachedName = patientDetailCache.get(patientId)?.name;
 
   const [uSnap, mrSnap] = await Promise.all([
-    p.userId != null
+    cachedName == null && p.userId != null
       ? getDoc(doc(db, "users", String(p.userId)))
       : Promise.resolve(null),
     p.medicalRecordNo != null
@@ -536,7 +533,8 @@ async function enrichPatient(
   const u = uSnap?.exists() ? uSnap.data() : {};
   const mr = mrSnap?.exists() ? mrSnap.data() : {};
 
-  const name = [u.names, u.surname].filter(Boolean).join(" ") || patientId;
+  const name =
+    cachedName ?? ([u.names, u.surname].filter(Boolean).join(" ") || patientId);
   const lastVisit = (mr.lastVisit ?? "").slice(0, 10) || "—";
   patientDetailCache.set(patientId, { name, lastVisit });
 

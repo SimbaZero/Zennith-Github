@@ -1,5 +1,5 @@
 import { createFileRoute, useSearch } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   useCurrentPatient,
@@ -64,6 +64,7 @@ function PatientAppointments() {
   // real confirmation to Firestore once. The ref guards against re-firing
   // on every re-render.
   const confirmedRef = useRef<string | null>(null);
+  const [pastLimit, setPastLimit] = useState(5);
   useEffect(() => {
     if (confirm && confirmedRef.current !== confirm) {
       confirmedRef.current = confirm;
@@ -276,7 +277,9 @@ function PatientAppointments() {
                   </td>
                 </tr>
               )}
-              {past.map((a) => {
+              {/* A chronic patient can accumulate hundreds of past visits,
+                  so this shows the most recent few rather than everything. */}
+              {past.slice(0, pastLimit).map((a) => {
                 const dt = new Date(a.dateTime);
                 return (
                   <tr key={a.docId} className="border-t text-muted-foreground">
@@ -299,6 +302,26 @@ function PatientAppointments() {
               })}
             </tbody>
           </table>
+          {past.length > 5 && (
+            <div className="flex gap-2 p-4 border-t">
+              {past.length > pastLimit && (
+                <button
+                  onClick={() => setPastLimit((n) => n + 10)}
+                  className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
+                >
+                  Show more ({past.length - pastLimit} older)
+                </button>
+              )}
+              {pastLimit > 5 && (
+                <button
+                  onClick={() => setPastLimit(5)}
+                  className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
+                >
+                  Collapse
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </AppShell>
