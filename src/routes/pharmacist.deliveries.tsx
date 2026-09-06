@@ -42,8 +42,29 @@ function Deliveries() {
   const available = useMemo(() => stock.filter((s) => s.docId), [stock]);
 
   const { deliveries } = useStockDeliveries(targetClinicId ?? undefined);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyLimit, setHistoryLimit] = useState(5);
+
   const pending = deliveries.filter((d) => d.status === "Pending");
-  const settled = deliveries.filter((d) => d.status !== "Pending");
+  // Completed deliveries accumulate forever, so this is capped and
+  // searchable rather than becoming an endless scroll.
+  const settled = deliveries
+    .filter((d) => d.status !== "Pending")
+    .filter((d) => {
+      if (!historyQuery.trim()) return true;
+      const needle = historyQuery.toLowerCase();
+      const ref = String(d.id ?? "")
+        .slice(-6)
+        .toLowerCase();
+      return (
+        ref.includes(needle.replace("#", "")) ||
+        (d.items ?? []).some((i: any) =>
+          String(i.name ?? "")
+            .toLowerCase()
+            .includes(needle),
+        )
+      );
+    });
 
   const addLine = () => {
     const first = available.find(
@@ -239,23 +260,54 @@ function Deliveries() {
           </div>
 
           <div className="bg-white rounded-xl border p-5">
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
               <Package size={16} className="text-muted-foreground" />
               <h3 className="font-semibold">Completed</h3>
-              <span className="text-xs text-muted-foreground ml-auto">
+              <span className="text-xs text-muted-foreground">
                 {settled.length}
               </span>
+              <input
+                value={historyQuery}
+                onChange={(e) => {
+                  setHistoryQuery(e.target.value);
+                  setHistoryLimit(5);
+                }}
+                placeholder="Search medication…"
+                className="ml-auto border rounded-md px-2.5 py-1 text-xs w-40"
+              />
             </div>
             {settled.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                No completed deliveries yet.
+                {historyQuery
+                  ? "No deliveries match."
+                  : "No completed deliveries yet."}
               </p>
             ) : (
-              <ul className="space-y-2 max-h-96 overflow-y-auto">
-                {settled.map((d) => (
-                  <DeliveryCard key={d.id} d={d} />
-                ))}
-              </ul>
+              <>
+                <ul className="space-y-2">
+                  {settled.slice(0, historyLimit).map((d) => (
+                    <DeliveryCard key={d.id} d={d} />
+                  ))}
+                </ul>
+                <div className="flex gap-2 mt-3">
+                  {settled.length > historyLimit && (
+                    <button
+                      onClick={() => setHistoryLimit((n) => n + 10)}
+                      className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
+                    >
+                      Show more ({settled.length - historyLimit} older)
+                    </button>
+                  )}
+                  {historyLimit > 5 && (
+                    <button
+                      onClick={() => setHistoryLimit(5)}
+                      className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
+                    >
+                      Collapse
+                    </button>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -267,9 +319,19 @@ function Deliveries() {
 function DeliveryCard({ d }: { d: any }) {
   const when = new Date(d.sentAt);
   const validDate = !Number.isNaN(when.getTime());
+  // A delivery had no human-readable identity, so there was no way to refer
+  // to one — "the Metformin delivery" is ambiguous once there are several.
+  // The Firestore document id is long and random, so this shows a short
+  // uppercase tail of it: enough to quote on a phone call or search for.
+  const ref = String(d.id ?? "")
+    .slice(-6)
+    .toUpperCase();
   return (
     <li className="border rounded-lg p-3">
       <div className="flex items-center gap-2 mb-1">
+        <span className="text-[10px] font-mono bg-secondary px-1.5 py-0.5 rounded">
+          #{ref}
+        </span>
         <span
           className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
             d.status === "Pending"

@@ -20,8 +20,26 @@ function NurseStock() {
   const { deliveries } = useStockDeliveries(nurse?.clinicId);
   const { stock } = useInventory();
 
+  const [historyQuery, setHistoryQuery] = useState("");
+
   const pending = deliveries.filter((d) => d.status === "Pending");
-  const history = deliveries.filter((d) => d.status !== "Pending");
+  const history = deliveries
+    .filter((d) => d.status !== "Pending")
+    .filter((d) => {
+      if (!historyQuery.trim()) return true;
+      const needle = historyQuery.toLowerCase().replace("#", "");
+      const ref = String(d.id ?? "")
+        .slice(-6)
+        .toLowerCase();
+      return (
+        ref.includes(needle) ||
+        (d.items ?? []).some((i) =>
+          String(i.name ?? "")
+            .toLowerCase()
+            .includes(needle),
+        )
+      );
+    });
 
   const [showExternal, setShowExternal] = useState(false);
   const [historyLimit, setHistoryLimit] = useState(5);
@@ -133,7 +151,21 @@ function NurseStock() {
 
         {/* History */}
         <div className="bg-white rounded-xl border p-5">
-          <h3 className="font-semibold mb-3">Delivery history</h3>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <h3 className="font-semibold">Delivery history</h3>
+            <span className="text-xs text-muted-foreground">
+              {history.length}
+            </span>
+            <input
+              value={historyQuery}
+              onChange={(e) => {
+                setHistoryQuery(e.target.value);
+                setHistoryLimit(5);
+              }}
+              placeholder="Search medication or #ref…"
+              className="ml-auto border rounded-md px-2.5 py-1 text-xs w-44"
+            />
+          </div>
           {history.length === 0 ? (
             <p className="text-sm text-muted-foreground py-6 text-center">
               No past deliveries.
@@ -144,6 +176,12 @@ function NurseStock() {
                 {history.slice(0, historyLimit).map((d) => (
                   <li key={d.id} className="border rounded-lg p-3">
                     <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[10px] font-mono bg-secondary px-1.5 py-0.5 rounded">
+                        #
+                        {String(d.id ?? "")
+                          .slice(-6)
+                          .toUpperCase()}
+                      </span>
                       <span
                         className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
                           d.status === "Confirmed"
@@ -168,14 +206,24 @@ function NurseStock() {
                   </li>
                 ))}
               </ul>
-              {history.length > historyLimit && (
-                <button
-                  onClick={() => setHistoryLimit((n) => n + 10)}
-                  className="mt-3 w-full text-xs border py-2 rounded-md hover:bg-secondary"
-                >
-                  Show more ({history.length - historyLimit} older)
-                </button>
-              )}
+              <div className="flex gap-2 mt-3">
+                {history.length > historyLimit && (
+                  <button
+                    onClick={() => setHistoryLimit((n) => n + 10)}
+                    className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
+                  >
+                    Show more ({history.length - historyLimit} older)
+                  </button>
+                )}
+                {historyLimit > 5 && (
+                  <button
+                    onClick={() => setHistoryLimit(5)}
+                    className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
+                  >
+                    Collapse
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -258,6 +306,14 @@ function PendingDelivery({
   return (
     <li className="border rounded-lg p-4">
       <div className="flex items-center gap-2 mb-3">
+        {/* Same short reference the pharmacy sees, so both sides can quote
+            the same delivery on a phone call. */}
+        <span className="text-[10px] font-mono bg-secondary px-1.5 py-0.5 rounded">
+          #
+          {String(delivery.id ?? "")
+            .slice(-6)
+            .toUpperCase()}
+        </span>
         <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200">
           In transit
         </span>
