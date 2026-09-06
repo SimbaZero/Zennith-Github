@@ -1435,6 +1435,10 @@ export async function signUpPatient(
         fullName: input.fullName.trim(),
         email,
         legacyUserId: ids.userNo,
+        // Stored directly so Firestore security rules can check "is this
+        // patient reading their own record?" without following a chain of
+        // lookups a rule can't perform.
+        patientId,
         builtin: false,
         createdAt: new Date().toISOString(),
       }),
