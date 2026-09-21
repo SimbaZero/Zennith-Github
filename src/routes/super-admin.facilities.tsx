@@ -8,10 +8,19 @@ import {
   deleteClinicIfEmpty,
   type ClinicRecord,
 } from "@/lib/clinic-data";
-import { addUser, getUsers } from "@/lib/auth";
+import { getUsers } from "@/lib/auth";
+import { assignClinicAdmin } from "@/lib/super-admin-service";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Building2, Check, X, Trash2, ShieldCheck, Clock } from "lucide-react";
+import {
+  Building2,
+  Check,
+  X,
+  Trash2,
+  ShieldCheck,
+  Clock,
+  Search,
+} from "lucide-react";
 
 export const Route = createFileRoute("/super-admin/facilities")({
   component: SuperFacilities,
@@ -34,9 +43,22 @@ function SuperFacilities() {
     open: false,
     clinic: null,
   });
+  const [search, setSearch] = useState("");
 
   const pending = clinics.filter((c) => c.status === "pending");
   const active = clinics.filter((c) => c.status === "active");
+
+  // Matches on clinic name (partial, case-insensitive) or clinic ID
+  // (partial string match, so typing "1" also surfaces 1, 14, 15 etc.,
+  // same behaviour people expect from an ID search box).
+  const q = search.trim().toLowerCase();
+  const filteredActive = q
+    ? active.filter(
+        (c) =>
+          c.clinicName.toLowerCase().includes(q) ||
+          String(c.clinicId).includes(q),
+      )
+    : active;
 
   const approve = useMutation({
     mutationFn: (clinicId: number) => approveClinic(clinicId),
@@ -140,11 +162,27 @@ function SuperFacilities() {
       )}
 
       <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="p-5 border-b flex items-center gap-2">
-          <Building2 size={16} />{" "}
+        <div className="p-5 border-b flex items-center gap-3">
+          <Building2 size={16} />
           <h3 className="font-semibold">Active clinics</h3>
+          <div className="relative ml-4 flex-1 max-w-xs">
+            <Search
+              size={14}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name or clinic ID…"
+              className="w-full border rounded-md pl-8 pr-3 py-1.5 text-sm"
+            />
+          </div>
           <span className="text-xs text-muted-foreground ml-auto">
-            {isLoading ? "Loading..." : `${active.length} live`}
+            {isLoading
+              ? "Loading..."
+              : q
+                ? `${filteredActive.length} of ${active.length}`
+                : `${active.length} live`}
           </span>
         </div>
         <table className="w-full text-sm">
@@ -157,7 +195,7 @@ function SuperFacilities() {
             </tr>
           </thead>
           <tbody>
-            {active.map((c) => {
+            {filteredActive.map((c) => {
               const admins = users.filter(
                 (u) => u.role === "admin" && u.clinicId === c.clinicId,
               );
@@ -194,13 +232,15 @@ function SuperFacilities() {
                 </tr>
               );
             })}
-            {!isLoading && active.length === 0 && (
+            {!isLoading && filteredActive.length === 0 && (
               <tr>
                 <td
                   colSpan={4}
                   className="px-5 py-8 text-center text-muted-foreground text-sm"
                 >
-                  No active clinics yet.
+                  {q
+                    ? `No clinics match "${search}".`
+                    : "No active clinics yet."}
                 </td>
               </tr>
             )}
@@ -229,16 +269,15 @@ function AssignAdmin({
   const [form, setForm] = useState({
     fullName: "",
     username: "",
-    password: "",
+    email: "",
   });
 
   const assign = useMutation({
     mutationFn: () =>
-      addUser({
-        username: form.username.trim().toLowerCase(),
-        password: form.password,
-        role: "admin",
-        fullName: form.fullName.trim(),
+      assignClinicAdmin({
+        username: form.username,
+        email: form.email,
+        fullName: form.fullName,
         clinicId: clinic.clinicId,
       }),
     onSuccess: (res) => {
@@ -247,7 +286,7 @@ function AssignAdmin({
         return;
       }
       toast.success(
-        `Assigned ${form.fullName} as Admin of ${clinic.clinicName}`,
+        `Invited ${form.fullName} as Admin of ${clinic.clinicName} — they'll get an email to set their password.`,
       );
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
       onClose();
@@ -257,12 +296,13 @@ function AssignAdmin({
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.fullName || !form.username || !form.password) {
+    if (!form.fullName || !form.username || !form.email) {
       toast.error("All fields required");
       return;
     }
     assign.mutate();
   };
+
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className="flex-1 bg-black/40" onClick={onClose} />
@@ -293,13 +333,14 @@ function AssignAdmin({
               className="w-full border rounded-md px-3 py-2 text-sm"
             />
           </Field>
-          <Field label="Password">
+          <Field label="Email">
             <input
               required
-              type="text"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              type="email"
+              value={form.email}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
               className="w-full border rounded-md px-3 py-2 text-sm"
+              placeholder="admin will set their password via this address"
             />
           </Field>
           <div className="flex gap-2 pt-2">
@@ -315,7 +356,7 @@ function AssignAdmin({
               disabled={assign.isPending}
               className="flex-1 bg-[oklch(0.18_0.06_260)] text-white py-2 rounded-md text-sm disabled:opacity-60"
             >
-              {assign.isPending ? "Assigning…" : "Assign"}
+              {assign.isPending ? "Inviting…" : "Assign"}
             </button>
           </div>
         </form>

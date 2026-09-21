@@ -1,8 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
-import { listClinics } from "@/lib/clinic-data";
-import { useQuery } from "@tanstack/react-query";
-import { useLogs } from "@/lib/audit";
+import { useSuperAdminDashboard } from "@/lib/super-admin-service";
 import { Building2, Activity, Users } from "lucide-react";
 
 export const Route = createFileRoute("/super-admin/")({
@@ -10,34 +8,30 @@ export const Route = createFileRoute("/super-admin/")({
 });
 
 function SuperAdminDashboard() {
-  const { data: facilities = [] } = useQuery({
-    queryKey: ["clinics"],
-    queryFn: listClinics,
-  });
-  const { rows: logs } = useLogs(undefined);
-  const last24 = logs.filter(
-    (l) => Date.now() - new Date(l.timestamp).getTime() < 86_400_000,
-  ).length;
+  const { data, loading, error } = useSuperAdminDashboard();
 
   return (
     <AppShell role="super_admin" title="Platform Overview" showBack={false}>
+      {error && (
+        <p className="text-sm text-red-600 mb-4">{error}</p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat
           icon={Building2}
           label="REGISTERED FACILITIES"
-          value={String(facilities.length)}
+          value={loading ? "-" : String(data?.facilitiesCount ?? 0)}
           sub="hospitals, clinics & centres"
         />
         <Stat
           icon={Activity}
           label="EVENTS (24H)"
-          value={String(last24)}
+          value={loading ? "-" : String(data?.events24h ?? 0)}
           sub="across all facilities"
         />
         <Stat
           icon={Users}
           label="AUDIT ENTRIES"
-          value={String(logs.length)}
+          value={loading ? "-" : String(data?.auditEntriesCount ?? 0)}
           sub="full platform history"
         />
       </div>
