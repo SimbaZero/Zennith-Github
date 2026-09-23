@@ -1,4 +1,9 @@
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import {
+  Link,
+  useNavigate,
+  useRouterState,
+  useRouter,
+} from "@tanstack/react-router";
 import { ZennithStar } from "./ZennithStar";
 import {
   Bell,
@@ -126,6 +131,81 @@ const staffCanSwitch: Partial<Record<Role, boolean>> = {
   super_admin: true,
 };
 
+// ---------------------------------------------------------------------------
+// Cache warming.
+//
+// The service worker can only serve a page back offline if that page was
+// fetched at least once while online. Left to chance, that means only the
+// screens a nurse happened to click before losing signal work offline —
+// which is exactly the wrong set, since you find out what you needed only
+// once you can't reach it.
+//
+// So as soon as we know which role is signed in, we deliberately fetch every
+// page in THAT role's sidebar while the connection is still good.
+//
+// Two separate things have to be saved, which is why there are two calls per
+// path and not one:
+//   - postMessage WARM_PAGES  → the service worker fetches and saves the page
+//                               shell (the HTML), see public/sw.js.
+//   - router.preloadRoute()   → the router downloads that route's JS chunk.
+//                               Without it the shell loads offline and then
+//                               stalls, because the code for the page itself
+//                               was never requested and so never cached by
+//                               the sw's /assets/* rule.
+// ---------------------------------------------------------------------------
+
+/** Ask the service worker to save these pages. Safe to call any time: it
+ *  no-ops where there is no worker (dev, SSR, unsupported browser). */
+function warmPagesInServiceWorker(paths: string[]) {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+    return;
+  }
+  if (paths.length === 0) return;
+  // `ready` resolves once a worker is actually controlling this page, so this
+  // works on the very first load too, where registration is still in flight.
+  navigator.serviceWorker.ready
+    .then((registration) => {
+      registration.active?.postMessage({ type: "WARM_PAGES", paths });
+    })
+    .catch((err) => console.error("Cache warming failed:", err));
+}
+
+function useWarmRoleCache(role: Role, items: NavItem[], pathname: string) {
+  const router = useRouter();
+  const online = useOnline();
+
+  // Every page in this role's sidebar, warmed once the role is known.
+  useEffect(() => {
+    // Offline there is nothing to fetch — the SW would just fail each request.
+    // The next time the connection returns, `online` flips and this re-runs.
+    if (!online) return;
+
+    const paths = items.map((i) => i.to);
+    warmPagesInServiceWorker(paths);
+
+    for (const path of paths) {
+      // Typed to the route union, but these are literal in-app paths from
+      // navByRole — same cast the search box above uses to navigate.
+      (
+        router.preloadRoute as unknown as (opts: {
+          to: string;
+        }) => Promise<unknown> | undefined
+      )({ to: path })
+        // A route that fails to preload is not an error worth surfacing: the
+        // user hasn't asked for it yet, and it'll load normally when they do.
+        ?.catch(() => {});
+    }
+  }, [online, items, router, role]);
+
+  // The sidebar is only part of the app. Pages reached by clicking through —
+  // a patient's record, a specific appointment — also need saving, so add
+  // wherever the user actually is to the saved set on every navigation.
+  useEffect(() => {
+    if (!online || !pathname) return;
+    warmPagesInServiceWorker([pathname]);
+  }, [online, pathname]);
+}
+
 export function AppShell({
   role,
   title,
@@ -157,6 +237,8 @@ export function AppShell({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const items = navByRole[role];
   const [open, setOpen] = useState(false);
+  // Save this role's pages (and wherever the user navigates) for offline use.
+  useWarmRoleCache(role, items, pathname);
 
   const handleSignOut = () => {
     clearAuth();

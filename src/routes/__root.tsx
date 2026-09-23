@@ -12,6 +12,39 @@ import {
 
 import appCss from "../styles.css?url";
 import { Toaster } from "@/components/ui/sonner";
+import { useEffect } from "react";
+
+/**
+ * Registers the hand-written service worker in public/sw.js.
+ *
+ * WHY here: the root route is the one component guaranteed to mount once for
+ * every page of the app, whatever the user opens first. Registering from a
+ * role dashboard would mean the app is only saved offline for people who
+ * happen to reach that page.
+ *
+ * WHY production only: in `bun run dev` Vite serves modules fresh on every
+ * edit, and a worker that caches /assets/* would happily serve yesterday's
+ * code back — so changes stop appearing and the cause is invisible. PROD is
+ * statically replaced at build time, so this whole block is dropped from the
+ * dev bundle rather than merely skipped at runtime.
+ *
+ * WHY in an effect, not at module scope: this module is also evaluated during
+ * SSR, where `navigator` does not exist. An effect only ever runs in the
+ * browser.
+ */
+function useRegisterServiceWorker() {
+  useEffect(() => {
+    if (!import.meta.env.PROD) return;
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return;
+    }
+    navigator.serviceWorker
+      .register("/sw.js")
+      // A failed registration must never take the app down with it — the app
+      // still works online, it just won't be available offline.
+      .catch((err) => console.error("Service worker registration failed:", err));
+  }, []);
+}
 
 function NotFoundComponent() {
   return (
@@ -113,6 +146,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  useRegisterServiceWorker();
 
   return (
    <QueryClientProvider client={queryClient}>
