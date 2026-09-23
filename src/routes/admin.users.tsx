@@ -57,9 +57,7 @@ function CreateUser() {
       );
       setForm({ ...form, fullName: "", username: "", email: "" });
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not create user",
-      );
+      toast.error(err instanceof Error ? err.message : "Could not create user");
     } finally {
       setSaving(false);
     }

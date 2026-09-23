@@ -622,9 +622,7 @@ export async function savePrivacySetting(
   // either way, which for a privacy control reads as "my choice was
   // ignored" — the worst possible thing for this screen to imply.
   if (isOffline()) {
-    write.catch((err) =>
-      console.error("Queued privacy setting failed:", err),
-    );
+    write.catch((err) => console.error("Queued privacy setting failed:", err));
     return;
   }
   await write;

@@ -42,7 +42,9 @@ function useRegisterServiceWorker() {
       .register("/sw.js")
       // A failed registration must never take the app down with it — the app
       // still works online, it just won't be available offline.
-      .catch((err) => console.error("Service worker registration failed:", err));
+      .catch((err) =>
+        console.error("Service worker registration failed:", err),
+      );
   }, []);
 }
 

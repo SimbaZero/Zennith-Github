@@ -114,7 +114,7 @@ function PharmacistDashboard() {
               <Activity size={16} /> View Diagnostics
             </Link>
             <Link
-              to="/pharmacist/distribution"
+              to="/pharmacist/deliveries"
               className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary"
             >
               <Share2 size={16} /> Distribute to Nurses

@@ -64,7 +64,7 @@ function Stock() {
           </p>
         </div>
         <button
-          onClick={() => navigate({ to: "/pharmacist/distribution" })}
+          onClick={() => navigate({ to: "/pharmacist/deliveries" })}
           className="bg-[oklch(0.18_0.06_260)] text-white px-3 py-1.5 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)]"
         >
           Go to Distribution →
@@ -80,7 +80,7 @@ function Stock() {
           return (
             <button
               key={s.name}
-              onClick={() => navigate({ to: "/pharmacist/distribution" })}
+              onClick={() => navigate({ to: "/pharmacist/deliveries" })}
               className="text-left bg-white rounded-xl border p-5 hover:border-[oklch(0.55_0.18_245)] hover:shadow-md transition"
             >
               <div className="flex items-start justify-between gap-2">
