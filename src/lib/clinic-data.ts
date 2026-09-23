@@ -16,7 +16,6 @@ import {
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
   setDoc,
   updateDoc,
   where,
@@ -24,6 +23,7 @@ import {
   type DocumentData,
   type Timestamp,
 } from "firebase/firestore";
+import { runTransactionOnline as runTransaction } from "@/lib/offline";
 import { initializeApp, deleteApp } from "firebase/app";
 import {
   createUserWithEmailAndPassword,

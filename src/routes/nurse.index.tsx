@@ -186,13 +186,19 @@ function HandoverLog() {
   const refresh = async () => {
     if (!nurse?.clinicId) return;
     setLoading(true);
-    const [entriesResult, statusResult] = await Promise.all([
-      fetchHandoverEntries(nurse.clinicId, shift),
-      fetchShiftStatus(nurse.clinicId, shift),
-    ]);
-    setEntries(entriesResult);
-    setFinalized(!!statusResult?.finalized);
-    setLoading(false);
+    // try/finally so a failed read can never leave "Loading…" on screen.
+    try {
+      const [entriesResult, statusResult] = await Promise.all([
+        fetchHandoverEntries(nurse.clinicId, shift),
+        fetchShiftStatus(nurse.clinicId, shift),
+      ]);
+      setEntries(entriesResult);
+      setFinalized(!!statusResult?.finalized);
+    } catch (err) {
+      console.error("Handover refresh failed:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -219,12 +225,18 @@ function HandoverLog() {
         patientId: patient.trim() || undefined,
         note: note.trim(),
       });
-      toast.success("Handover logged");
+      toast.success(
+        navigator.onLine
+          ? "Handover logged"
+          : "Handover saved on this device — it will upload when you reconnect",
+      );
       setPatient("");
       setNote("");
       await refresh();
-    } catch {
-      toast.error("Could not save handover note");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not save handover note",
+      );
     } finally {
       setSubmitting(false);
     }

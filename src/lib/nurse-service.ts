@@ -7,14 +7,19 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocsFromCache,
   onSnapshot,
   query,
-  runTransaction,
   serverTimestamp,
   setDoc,
   Timestamp,
   where,
 } from "firebase/firestore";
+import {
+  runTransactionOnline as runTransaction,
+  assertOnline,
+  isOffline,
+} from "@/lib/offline";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 
@@ -365,36 +370,71 @@ export function todayIso(): string {
 
 /** Today's entries for the whole clinic — every nurse's notes, not just
  * the signed-in one — classified into Day/Night by createdAt's hour. */
+type HandoverData = Omit<HandoverEntry, "id">;
+
 export async function fetchHandoverEntries(
   clinicId: number,
   shift: "Day" | "Night",
 ): Promise<HandoverEntry[]> {
-  const snap = await getDocs(
-    query(collection(db, "handoverEntries"), where("clinicId", "==", clinicId)),
+  const q = query(
+    collection(db, "handoverEntries"),
+    where("clinicId", "==", clinicId),
   );
-  return snap.docs
-    .map((d) => ({ id: d.id, ...(d.data() as Omit<HandoverEntry, "id">) }))
-    .filter((e) => isToday(e.createdAt) && isInShiftWindow(e.createdAt, shift))
+  // Offline, read straight from the local copy. getDocs() would first try the
+  // server and wait for that attempt to time out, leaving "Loading…" on
+  // screen for no reason.
+  const snap = isOffline() ? await getDocsFromCache(q) : await getDocs(q);
+
+  const entries: HandoverEntry[] = snap.docs.map((d) => {
+    // A note written offline has no server timestamp yet — without
+    // "estimate" its createdAt reads as null and the date filter below
+    // crashed, which is what left the list stuck on "Loading…".
+    const data = d.data({ serverTimestamps: "estimate" }) as HandoverData;
+    return { id: d.id, ...data };
+  });
+
+  return entries
+    .filter(
+      (e) =>
+        e.createdAt &&
+        isToday(e.createdAt) &&
+        isInShiftWindow(e.createdAt, shift),
+    )
     .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis());
 }
-
 export async function addHandoverEntry(input: {
   clinicId: number;
   nurseId: string;
   patientId?: string;
   note: string;
 }): Promise<void> {
-  await addDoc(collection(db, "handoverEntries"), {
+  const write = addDoc(collection(db, "handoverEntries"), {
     clinicId: input.clinicId,
     nurseId: input.nurseId,
     patientId: input.patientId ?? null,
     note: input.note,
     createdAt: serverTimestamp(),
   });
+  // A Firestore write promise only settles once the SERVER confirms it. The
+  // note is saved on this device the moment addDoc is called, but offline the
+  // promise waits for a reconnect — which kept the button on "Saving…"
+  // forever. Offline, treat the local save as done; it uploads on reconnect.
+  if (isOffline()) {
+    write.catch((err) => console.error("Queued handover note failed:", err));
+    return;
+  }
+  await write;
 }
 
 export async function removeHandoverEntry(entryId: string): Promise<void> {
-  await deleteDoc(doc(db, "handoverEntries", entryId));
+  // Same as adding: offline, the delete is applied locally at once and synced
+  // later, so don't wait on a server confirmation that can't arrive yet.
+  const write = deleteDoc(doc(db, "handoverEntries", entryId));
+  if (isOffline()) {
+    write.catch((err) => console.error("Queued handover delete failed:", err));
+    return;
+  }
+  await write;
 }
 
 /** Whether ANY nurse at this clinic has already finalized today's given
@@ -407,14 +447,13 @@ export async function fetchShiftStatus(
   finalizedAt?: Timestamp;
   finalizedBy?: string;
 } | null> {
-  const snap = await getDocs(
-    query(
-      collection(db, "shifts"),
-      where("clinicId", "==", clinicId),
-      where("date", "==", todayIso()),
-      where("shiftType", "==", shift),
-    ),
+  const q = query(
+    collection(db, "shifts"),
+    where("clinicId", "==", clinicId),
+    where("date", "==", todayIso()),
+    where("shiftType", "==", shift),
   );
+  const snap = isOffline() ? await getDocsFromCache(q) : await getDocs(q);
   const finalizedDoc = snap.docs.find((d) => d.data().finalized);
   if (!finalizedDoc) return snap.empty ? null : { finalized: false };
   const data = finalizedDoc.data();
@@ -434,6 +473,9 @@ export async function finalizeShift(input: {
   nurseId: string; // who is finalizing — recorded, not the scope of the lock
   shift: "Day" | "Night";
 }): Promise<void> {
+  // Finalizing locks the shift for the whole clinic. Offline, two nurses
+  // could each "finalize" without seeing the other — so this needs the server.
+  assertOnline();
   const existing = await fetchShiftStatus(input.clinicId, input.shift);
   if (existing?.finalized) return; // already finalized by someone — no-op, not an error
 
@@ -741,6 +783,10 @@ export interface DispenseInput {
  *  wrapped in a transaction so two nurses dispensing the same medication
  *  at the same moment can't both succeed past the real stock level. */
 export async function dispenseMedication(input: DispenseInput): Promise<void> {
+  // Checked first: the stock lookup below runs before the transaction, and
+  // offline it comes back empty — so the user was told "medication not found"
+  // rather than that they were offline.
+  assertOnline();
   if (input.unitsGiven <= 0) throw new Error("Units must be greater than 0");
 
   const invSnap = await getDocs(

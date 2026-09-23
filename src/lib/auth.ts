@@ -20,8 +20,8 @@ import {
   where,
   getFirestore,
   updateDoc,
-  runTransaction,
 } from "firebase/firestore";
+import { runTransactionOnline as runTransaction } from "@/lib/offline";
 import { auth, db, firebaseConfig } from "@/firebase";
 import { logAction } from "./audit";
 

@@ -29,6 +29,10 @@ import {
 } from "lucide-react";
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { waitForPendingWrites } from "firebase/firestore";
+import { db } from "@/firebase";
+import { useOnline } from "@/lib/offline";
+import { WifiOff, CloudUpload, CheckCircle2 } from "lucide-react";
 import { getRoleSearchIndex, type SearchEntry } from "@/lib/search-index";
 import { getNotifications, type Notification } from "@/lib/notifications";
 import {
@@ -344,6 +348,7 @@ export function AppShell({
           </button>
         </header>
 
+        <ConnectionBanner />
         <div className="flex-1 p-4 lg:p-6 animate-fade-in">{children}</div>
       </main>
     </div>
@@ -703,4 +708,76 @@ export function StatusBadge({ status }: { status: AnyStatus }) {
       {labels[status]}
     </span>
   );
+}
+/**
+ * One app-wide connection indicator, shown on every page.
+ *
+ * Offline: tells staff they can keep working with what's on screen, and that
+ * their changes are being kept. Reconnecting: shows that queued changes are
+ * uploading, then confirms once Firestore reports they've all been sent —
+ * so "it synced" is something the app actually checked, not an assumption.
+ */
+function ConnectionBanner() {
+  const online = useOnline();
+  const wasOffline = useRef(false);
+  const [phase, setPhase] = useState<"idle" | "syncing" | "synced">("idle");
+
+  useEffect(() => {
+    if (!online) {
+      wasOffline.current = true;
+      setPhase("idle");
+      return;
+    }
+    if (!wasOffline.current) return;
+    wasOffline.current = false;
+
+    let cancelled = false;
+    let hideTimer: ReturnType<typeof setTimeout> | undefined;
+    setPhase("syncing");
+    waitForPendingWrites(db)
+      .catch((err) => console.error("Sync after reconnect failed:", err))
+      .finally(() => {
+        if (cancelled) return;
+        setPhase("synced");
+        hideTimer = setTimeout(() => setPhase("idle"), 3000);
+      });
+    return () => {
+      cancelled = true;
+      if (hideTimer) clearTimeout(hideTimer);
+    };
+  }, [online]);
+
+  if (!online) {
+    return (
+      <div className="bg-amber-50 border-b border-amber-300 px-4 lg:px-6 py-2.5 flex items-center gap-2 text-sm text-amber-900">
+        <WifiOff size={15} className="shrink-0" />
+        <span>
+          <strong>You're offline.</strong> You can keep working with what's
+          already loaded — changes are saved on this device and will upload when
+          you reconnect. Some actions, like dispensing or booking, need a
+          connection.
+        </span>
+      </div>
+    );
+  }
+
+  if (phase === "syncing") {
+    return (
+      <div className="bg-blue-50 border-b border-blue-200 px-4 lg:px-6 py-2.5 flex items-center gap-2 text-sm text-blue-900">
+        <CloudUpload size={15} className="shrink-0 animate-pulse" />
+        <span>Back online — uploading changes made while offline…</span>
+      </div>
+    );
+  }
+
+  if (phase === "synced") {
+    return (
+      <div className="bg-emerald-50 border-b border-emerald-200 px-4 lg:px-6 py-2.5 flex items-center gap-2 text-sm text-emerald-900">
+        <CheckCircle2 size={15} className="shrink-0" />
+        <span>All changes saved.</span>
+      </div>
+    );
+  }
+
+  return null;
 }

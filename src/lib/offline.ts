@@ -62,18 +62,29 @@ export function useMounted() {
 // and that nothing was saved.
 // ---------------------------------------------------------------------------
 
+const OFFLINE_MESSAGE =
+  "You're offline. This has to be confirmed with the server, so it " +
+  "can't be done without a connection — nothing was saved. " +
+  "Reconnect and try again.";
+
+export function isOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/**
+ * Call at the very START of an action that can't work offline. Some actions
+ * read before they reach their transaction — dispensing looks the medication
+ * up first — and offline that read comes back empty, so the user saw
+ * "medication not found" instead of being told they were offline.
+ */
+export function assertOnline(): void {
+  if (isOffline()) throw new Error(OFFLINE_MESSAGE);
+}
+
 export function runTransactionOnline<T>(
   db: Firestore,
   update: (tx: Transaction) => Promise<T>,
 ): Promise<T> {
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    return Promise.reject(
-      new Error(
-        "You're offline. This has to be confirmed with the server, so it " +
-          "can't be done without a connection — nothing was saved. " +
-          "Reconnect and try again.",
-      ),
-    );
-  }
+  if (isOffline()) return Promise.reject(new Error(OFFLINE_MESSAGE));
   return runTransaction(db, update);
 }
