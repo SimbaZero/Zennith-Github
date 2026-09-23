@@ -22,6 +22,7 @@ import {
   userIdForStaff,
 } from "@/lib/notify";
 import { logAction } from "@/lib/audit";
+import { assertOnline } from "@/lib/offline";
 
 // Shape the existing UI already expects (see pharmacist.index.tsx, pharmacist.stock.tsx).
 // Real Firestore `inventory` docs use different field names (medName, quantity) —
@@ -127,6 +128,11 @@ export async function addInventoryStock(
   docId: string,
   amount: number,
 ): Promise<void> {
+  // Stock counts are a shared number that several people adjust. This reads
+  // the current quantity and writes current+amount, so two offline additions
+  // would both read the same starting figure and one would overwrite the
+  // other — the stock would silently end up short. Refuse instead.
+  assertOnline();
   if (!docId)
     throw new Error("Cannot write stock update: missing Firestore document ID");
 
@@ -596,6 +602,10 @@ export async function sendStockDelivery(input: {
   items: DeliveryItem[];
   note?: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  // Sending a delivery moves stock between two clinics and notifies the
+  // receiving nurses. Queued offline, the pharmacy would believe medication
+  // is on its way while the clinic expecting it has been told nothing.
+  assertOnline();
   if (input.items.length === 0)
     return { ok: false, error: "Add at least one medication." };
 
@@ -716,6 +726,11 @@ export async function confirmStockDelivery(input: {
   /** Required when received quantities differ from what was sent. */
   discrepancyNote?: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  // Confirming receipt adds the stock to the clinic's inventory and closes
+  // the delivery for the pharmacy. It reads the delivery's current status
+  // first to reject a double-confirmation — offline that check reads a stale
+  // cache, so the same delivery could be banked twice.
+  assertOnline();
   const ref = doc(db, "stockDeliveries", input.deliveryId);
   const snap = await getDoc(ref);
   if (!snap.exists()) return { ok: false, error: "Delivery not found." };
@@ -826,6 +841,9 @@ export async function rejectStockDelivery(
   nurseId: string,
   reason: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  // The pharmacy has to hear a rejection promptly — they are holding stock
+  // for this clinic until they do. Same stale-status problem as confirming.
+  assertOnline();
   const ref = doc(db, "stockDeliveries", deliveryId);
   const snap = await getDoc(ref);
   if (!snap.exists()) return { ok: false, error: "Delivery not found." };
@@ -869,6 +887,11 @@ export async function recordExternalStock(input: {
   quantity: number;
   source: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  // Recording outside stock looks up whether this medication already exists
+  // for the clinic and either tops it up or creates it. Offline the lookup
+  // misses and you get a duplicate inventory line for the same drug, which
+  // then splits the stock count in two.
+  assertOnline();
   if (input.quantity <= 0)
     return { ok: false, error: "Quantity must be more than zero." };
 

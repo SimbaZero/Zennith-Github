@@ -287,32 +287,49 @@ function PendingDelivery({
       );
     }
     setBusy(true);
-    const res = await confirmStockDelivery({
-      deliveryId: delivery.id,
-      nurseId,
-      clinicId,
-      receivedItems: Object.entries(received).map(([name, quantity]) => ({
-        name,
-        quantity,
-      })),
-      discrepancyNote: changed ? note.trim() : undefined,
-    });
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Could not confirm");
-    toast.success(
-      changed
-        ? "Confirmed with a recorded difference — the pharmacy will see it"
-        : "Delivery confirmed — stock added",
-    );
+    // confirmStockDelivery now THROWS when offline (assertOnline) rather than
+    // returning { ok: false }, so without this catch the rejection would be
+    // unhandled and the button would stay stuck on busy.
+    try {
+      const res = await confirmStockDelivery({
+        deliveryId: delivery.id,
+        nurseId,
+        clinicId,
+        receivedItems: Object.entries(received).map(([name, quantity]) => ({
+          name,
+          quantity,
+        })),
+        discrepancyNote: changed ? note.trim() : undefined,
+      });
+      if (!res.ok) return toast.error(res.error ?? "Could not confirm");
+      toast.success(
+        changed
+          ? "Confirmed with a recorded difference — the pharmacy will see it"
+          : "Delivery confirmed — stock added",
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not confirm");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const reject = async () => {
     if (!reason.trim()) return toast.error("Give a reason for rejecting.");
     setBusy(true);
-    const res = await rejectStockDelivery(delivery.id, nurseId, reason.trim());
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Could not reject");
-    toast.success("Delivery rejected");
+    try {
+      const res = await rejectStockDelivery(
+        delivery.id,
+        nurseId,
+        reason.trim(),
+      );
+      if (!res.ok) return toast.error(res.error ?? "Could not reject");
+      toast.success("Delivery rejected");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not reject");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const changed = (delivery.items ?? []).some(
@@ -467,20 +484,27 @@ function ExternalStockForm({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    const res = await recordExternalStock({
-      clinicId,
-      nurseId,
-      medName: medName.trim(),
-      quantity: Number(quantity),
-      source: source.trim() || "Outside supplier",
-    });
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Could not record stock");
-    toast.success(`${quantity} × ${medName} added to clinic stock`);
-    setMedName("");
-    setQuantity("");
-    setSource("");
-    onDone();
+    try {
+      const res = await recordExternalStock({
+        clinicId,
+        nurseId,
+        medName: medName.trim(),
+        quantity: Number(quantity),
+        source: source.trim() || "Outside supplier",
+      });
+      if (!res.ok) return toast.error(res.error ?? "Could not record stock");
+      toast.success(`${quantity} × ${medName} added to clinic stock`);
+      setMedName("");
+      setQuantity("");
+      setSource("");
+      onDone();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not record stock",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

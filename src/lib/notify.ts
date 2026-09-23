@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { db } from "@/lib/firebase";
+import { isOffline } from "@/lib/offline";
 
 // One notification system for every role.
 //
@@ -151,10 +152,23 @@ export async function userIdForStaff(
 }
 
 export async function markRead(docId: string): Promise<void> {
-  await updateDoc(doc(db, "notifications", docId), { isRead: true });
+  const write = updateDoc(doc(db, "notifications", docId), { isRead: true });
+  // Marking something read is a local, low-stakes fact about what the user
+  // has already seen — there is nothing to confirm with the server. Offline
+  // the write promise hangs until reconnect, which froze the bell's unread
+  // count and left the panel looking broken. The updateDoc has already
+  // applied to the local cache, and the live onSnapshot above reads from
+  // that cache, so the badge updates immediately either way.
+  if (isOffline()) {
+    write.catch((err) => console.error("Queued mark-read failed:", err));
+    return;
+  }
+  await write;
 }
 
 export async function markAllRead(docIds: string[]): Promise<void> {
+  // Each markRead already returns immediately when offline, so this resolves
+  // at once rather than waiting on every queued write at the same time.
   await Promise.all(docIds.map((id) => markRead(id)));
 }
 /**

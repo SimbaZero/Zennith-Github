@@ -117,7 +117,15 @@ function Registration() {
       );
       setF(initial);
     },
-    onError: () => toast.error("Could not register patient — please try again"),
+    // registerPatient refuses offline (it allocates shared IDs in a
+    // transaction). Its message explains that and says nothing was saved —
+    // far more use than "please try again", which invites doing exactly that.
+    onError: (err) =>
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Could not register patient — please try again",
+      ),
   });
 
   const submit = (e: React.FormEvent) => {

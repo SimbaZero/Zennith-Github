@@ -8,6 +8,7 @@ import {
   requestAppointmentReminder,
   type PatientAppointmentRow,
 } from "@/lib/patient-service";
+import { isOffline } from "@/lib/offline";
 import { Check, X, Bell, Lock } from "lucide-react";
 import { toast } from "sonner";
 
@@ -69,7 +70,13 @@ function PatientAppointments() {
     if (confirm && confirmedRef.current !== confirm) {
       confirmedRef.current = confirm;
       updateAppointmentStatus(confirm, "Confirmed")
-        .then(() => toast.success("Appointment confirmed via SMS link"))
+        .then(() =>
+          toast.success(
+            isOffline()
+              ? "Confirmation saved on this device — it will reach the clinic when you're back online"
+              : "Appointment confirmed via SMS link",
+          ),
+        )
         .catch((err) => {
           console.error(err);
           toast.error("Couldn't confirm appointment. Please try again.");
@@ -102,12 +109,17 @@ function PatientAppointments() {
         docId,
         nextStatus as "Confirmed" | "Cancelled",
       );
+      // Offline these are queued, so the clinic hasn't seen them yet — a
+      // patient told "clinic will be notified" would reasonably stop there
+      // and not follow up.
       toast.success(
-        nextStatus === "Scheduled"
-          ? "Reverted to scheduled"
-          : nextStatus === "Confirmed"
-            ? "Appointment confirmed"
-            : "Appointment cancelled — clinic will be notified",
+        isOffline()
+          ? "Saved on this device — it will reach the clinic when you're back online"
+          : nextStatus === "Scheduled"
+            ? "Reverted to scheduled"
+            : nextStatus === "Confirmed"
+              ? "Appointment confirmed"
+              : "Appointment cancelled — clinic will be notified",
       );
     } catch (err) {
       console.error(err);

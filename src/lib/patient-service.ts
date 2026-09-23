@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
+import { isOffline } from "@/lib/offline";
 
 // ---------------------------------------------------------------------------
 // AUTH RACE FIX — same pattern as doctor-service.ts. On a hard reload our
@@ -390,7 +391,21 @@ export async function updateAppointmentStatus(
   docId: string,
   status: "Confirmed" | "Cancelled",
 ): Promise<void> {
-  await updateDoc(doc(db, "appointments", docId), { status });
+  const write = updateDoc(doc(db, "appointments", docId), { status });
+  // Confirming or cancelling an appointment you ALREADY have is a statement
+  // of intent, not a booking — there is no slot to contend for and nothing
+  // the server has to arbitrate, so it is safe to queue. (Creating a new
+  // appointment is different and refuses offline; see createAppointment in
+  // clinic-data.ts, which has to check for a double-booked clinician.)
+  // Offline the promise waits for the server, which left the Confirm/Cancel
+  // buttons dead with no feedback at all.
+  if (isOffline()) {
+    write.catch((err) =>
+      console.error("Queued appointment status change failed:", err),
+    );
+    return;
+  }
+  await write;
 }
 
 // ---------------------------------------------------------------------------
@@ -597,11 +612,22 @@ export async function savePrivacySetting(
   key: keyof PrivacySettings,
   value: boolean,
 ): Promise<void> {
-  await setDoc(
+  const write = setDoc(
     doc(db, "patients", patientId),
     { privacy: { [key]: value } },
     { merge: true },
   );
+  // A merge write of one field by its owner — nothing to contend for, so it
+  // queues safely. Offline the toggle otherwise sat mid-flip with no toast
+  // either way, which for a privacy control reads as "my choice was
+  // ignored" — the worst possible thing for this screen to imply.
+  if (isOffline()) {
+    write.catch((err) =>
+      console.error("Queued privacy setting failed:", err),
+    );
+    return;
+  }
+  await write;
 }
 
 /**
@@ -617,7 +643,7 @@ export async function requestDataDeletion(input: {
   clinicId?: number;
   reason?: string;
 }): Promise<void> {
-  await setDoc(
+  const request = setDoc(
     doc(db, "patients", input.patientId),
     {
       deletionRequest: {
@@ -629,13 +655,32 @@ export async function requestDataDeletion(input: {
     { merge: true },
   );
 
-  await addDoc(collection(db, "systemAudit"), {
+  const audit = addDoc(collection(db, "systemAudit"), {
     clinicId: input.clinicId ?? null,
     actor_id: input.patientId,
     action_type: "privacy.deletion_request",
     description: `${input.patientId} requested deactivation of their account and data`,
     timestamp: serverTimestamp(),
   });
+
+  // Raising the request is a record of what the patient asked for, and the
+  // timestamp is captured client-side above — so a queued request still
+  // reaches the admin with the moment it was actually made. Refusing offline
+  // would mean telling someone exercising a POPIA right to come back later.
+  // Both writes queue together, so the request and its audit entry can't be
+  // separated by a reconnect.
+  if (isOffline()) {
+    request.catch((err) =>
+      console.error("Queued deletion request failed:", err),
+    );
+    audit.catch((err) =>
+      console.error("Queued deletion request audit failed:", err),
+    );
+    return;
+  }
+
+  await request;
+  await audit;
 }
 // ---------------------------------------------------------------------------
 // Medication collection status.

@@ -68,7 +68,12 @@ function Staff() {
       queryClient.invalidateQueries({ queryKey: ["clinic-staff"] });
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
-    onError: () => toast.error("Could not remove account"),
+    // removeUser refuses offline — show its message, which says nothing was
+    // changed, rather than a generic line the admin can't act on.
+    onError: (err) =>
+      toast.error(
+        err instanceof Error ? err.message : "Could not remove account",
+      ),
   });
 
   const filtered = useMemo(
@@ -333,24 +338,32 @@ function CreateLoginPanel({
       return;
     }
     setBusy(true);
-    const res = await createLoginForExistingStaff({
-      staffId: staff.staffId,
-      role: staff.role,
-      username: username.trim(),
-      email: email.trim(),
-      fullName: staff.fullName,
-      userId: staff.userId,
-      clinicId,
-    });
-    setBusy(false);
-    if (!res.ok) {
-      toast.error(res.error ?? "Could not create login");
-      return;
+    // Throws when offline — see addUser in admin.users.tsx for why.
+    try {
+      const res = await createLoginForExistingStaff({
+        staffId: staff.staffId,
+        role: staff.role,
+        username: username.trim(),
+        email: email.trim(),
+        fullName: staff.fullName,
+        userId: staff.userId,
+        clinicId,
+      });
+      if (!res.ok) {
+        toast.error(res.error ?? "Could not create login");
+        return;
+      }
+      toast.success(
+        `Login created for ${staff.fullName} — a set-password email was sent to ${email}`,
+      );
+      onDone();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not create login",
+      );
+    } finally {
+      setBusy(false);
     }
-    toast.success(
-      `Login created for ${staff.fullName} — a set-password email was sent to ${email}`,
-    );
-    onDone();
   };
 
   return (
@@ -427,18 +440,25 @@ function EditStaffPanel({
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    const res = await updateStaffDetails({
-      username: staff.username!,
-      fullName,
-      email: email.trim() || undefined,
-    });
-    setBusy(false);
-    if (!res.ok) {
-      toast.error(res.error ?? "Could not save changes");
-      return;
+    try {
+      const res = await updateStaffDetails({
+        username: staff.username!,
+        fullName,
+        email: email.trim() || undefined,
+      });
+      if (!res.ok) {
+        toast.error(res.error ?? "Could not save changes");
+        return;
+      }
+      toast.success("Details updated");
+      onDone();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not save changes",
+      );
+    } finally {
+      setBusy(false);
     }
-    toast.success("Details updated");
-    onDone();
   };
 
   return (

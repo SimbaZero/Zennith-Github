@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { generatePatientRecordPdf } from "@/lib/pdf-export";
 import { useState } from "react";
+import { isOffline } from "@/lib/offline";
 import { toast } from "sonner";
 import type { Role } from "@/lib/auth";
 
@@ -143,7 +144,15 @@ export function PatientRecordView({
             } as any)
           : Promise.resolve(),
       ]);
-      toast.success("Medical record updated");
+      // Offline the edit is already in the local cache and will upload on
+      // reconnect — but "Medical record updated" would imply the clinic can
+      // see it now. Say where it actually is, so the nurse knows whether a
+      // colleague on another device can rely on it yet.
+      toast.success(
+        isOffline()
+          ? "Saved on this device — it will sync when you're back online"
+          : "Medical record updated",
+      );
       setEditing(false);
       setForm(null);
     } catch (err) {

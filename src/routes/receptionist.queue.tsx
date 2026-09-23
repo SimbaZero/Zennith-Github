@@ -370,29 +370,42 @@ function QueuePage() {
     e.preventDefault();
     if (!draft.patientId.trim()) return toast.error("Patient ID is required");
     setBusy(true);
-    const { addToQueue } = await getClinicData();
-    const res = await addToQueue({
-      patientId: draft.patientId,
-      reason: [
-        draft.reason,
-        ...TRIAGE_QUESTIONS.filter((q) => triageFlags.has(q.id)).map(
-          (q) => q.label,
-        ),
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      clinician: draft.clinician || undefined,
-      triage: finalTriage,
-      facilityId: realFacilityId,
-    });
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Could not add to queue");
-    toast.success(`${draft.patientId} added — ${TRIAGE_LABELS[finalTriage]}`);
-    setDraft({ patientId: "", reason: "", clinician: "" });
-    setTriageFlags(new Set());
-    setEscalate(false);
-    setWalkInQuery("");
-    setAdding(false);
+    // The queue functions now refuse offline by THROWING (assertOnline), not
+    // by returning { ok: false }. Without this catch the rejection would be
+    // unhandled and `busy` would stay true, leaving the button stuck — the
+    // exact failure the offline work is meant to remove.
+    try {
+      const { addToQueue } = await getClinicData();
+      const res = await addToQueue({
+        patientId: draft.patientId,
+        reason: [
+          draft.reason,
+          ...TRIAGE_QUESTIONS.filter((q) => triageFlags.has(q.id)).map(
+            (q) => q.label,
+          ),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        clinician: draft.clinician || undefined,
+        triage: finalTriage,
+        facilityId: realFacilityId,
+      });
+      if (!res.ok) return toast.error(res.error ?? "Could not add to queue");
+      toast.success(`${draft.patientId} added — ${TRIAGE_LABELS[finalTriage]}`);
+      setDraft({ patientId: "", reason: "", clinician: "" });
+      setTriageFlags(new Set());
+      setEscalate(false);
+      setWalkInQuery("");
+      setAdding(false);
+    } catch (err) {
+      // err.message, not a generic string — assertOnline's message explains
+      // that nothing was saved and why.
+      toast.error(
+        err instanceof Error ? err.message : "Could not add to queue",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const notifyNext = async () => {
@@ -413,8 +426,12 @@ function QueuePage() {
       toast.success(
         `${next.patientName} called — proceed to ${next.clinician || "triage"}`,
       );
-    } catch {
-      toast.error("Could not notify patient");
+    } catch (err) {
+      // Surface the real reason (e.g. the offline message) instead of a
+      // generic line that tells the user nothing about what to do next.
+      toast.error(
+        err instanceof Error ? err.message : "Could not notify patient",
+      );
     } finally {
       setBusy(false);
     }
@@ -423,34 +440,60 @@ function QueuePage() {
   const handleHandoff = async (entryId: string, targetClinician: string) => {
     if (!targetClinician.trim()) return toast.error("Enter target clinician");
     setBusy(true);
-    const { handoffPatient } = await getClinicData();
-    const res = await handoffPatient(entryId, targetClinician);
-    setHandoffTarget(null);
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Handoff failed");
-    toast.success(`Handed off to ${targetClinician}`);
+    // Same as addWalkIn: handoffPatient can now throw when offline.
+    try {
+      const { handoffPatient } = await getClinicData();
+      const res = await handoffPatient(entryId, targetClinician);
+      setHandoffTarget(null);
+      if (!res.ok) return toast.error(res.error ?? "Handoff failed");
+      toast.success(`Handed off to ${targetClinician}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Handoff failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleAcceptHandoff = async (entryId: string, clinicianId: string) => {
     setBusy(true);
-    const { acceptHandoff } = await getClinicData();
-    const res = await acceptHandoff(entryId, clinicianId);
-    setBusy(false);
-    if (!res.ok) return toast.error(res.error ?? "Accept failed");
-    toast.success("Handoff accepted — patient is now yours");
+    try {
+      const { acceptHandoff } = await getClinicData();
+      const res = await acceptHandoff(entryId, clinicianId);
+      if (!res.ok) return toast.error(res.error ?? "Accept failed");
+      toast.success("Handoff accepted — patient is now yours");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Accept failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleSetQueueStatus = async (
     id: string,
     status: QueueEntry["status"],
   ) => {
-    const { setQueueStatus } = await getClinicData();
-    await setQueueStatus(id, status);
+    // These two had no error handling at all — a rejection went nowhere and
+    // the row simply didn't move, with nothing said. Now that they refuse
+    // offline, the user has to be told why.
+    try {
+      const { setQueueStatus } = await getClinicData();
+      await setQueueStatus(id, status);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not update the queue",
+      );
+    }
   };
 
   const handleRemoveFromQueue = async (id: string) => {
-    const { removeFromQueue } = await getClinicData();
-    await removeFromQueue(id);
+    try {
+      const { removeFromQueue } = await getClinicData();
+      await removeFromQueue(id);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not remove from the queue",
+      );
+    }
   };
 
   const getWaitTime = (joinedAt: string) =>

@@ -37,22 +37,32 @@ function CreateUser() {
       return;
     }
     setSaving(true);
-    const res = await addUser({
-      username: form.username.trim(),
-      email: form.email.trim(),
-      role: form.role,
-      fullName: form.fullName.trim(),
-      clinicId: admin.clinicId,
-    });
-    setSaving(false);
-    if (!res.ok) {
-      toast.error(res.error || "Could not create user");
-      return;
+    // addUser now throws when offline (it calls Firebase Auth and sends an
+    // email, neither of which Firestore's offline queue can carry). Catch it
+    // so the admin sees why, instead of a form stuck on "Saving".
+    try {
+      const res = await addUser({
+        username: form.username.trim(),
+        email: form.email.trim(),
+        role: form.role,
+        fullName: form.fullName.trim(),
+        clinicId: admin.clinicId,
+      });
+      if (!res.ok) {
+        toast.error(res.error || "Could not create user");
+        return;
+      }
+      toast.success(
+        `${form.fullName} created — a set-password email was sent to ${form.email}`,
+      );
+      setForm({ ...form, fullName: "", username: "", email: "" });
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not create user",
+      );
+    } finally {
+      setSaving(false);
     }
-    toast.success(
-      `${form.fullName} created — a set-password email was sent to ${form.email}`,
-    );
-    setForm({ ...form, fullName: "", username: "", email: "" });
   };
 
   return (

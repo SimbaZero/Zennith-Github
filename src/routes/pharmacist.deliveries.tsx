@@ -83,19 +83,28 @@ function Deliveries() {
     if (!pharmacist?.pharmacistId)
       return toast.error("Pharmacist not identified.");
     setSending(true);
-    const res = await sendStockDelivery({
-      clinicId: targetClinicId,
-      pharmacistId: pharmacist.pharmacistId,
-      items: lines,
-      note: note.trim() || undefined,
-    });
-    setSending(false);
-    if (!res.ok) return toast.error(res.error ?? "Could not send delivery");
-    toast.success(
-      `Delivery sent to ${targetClinicName ?? "the clinic"} — awaiting confirmation`,
-    );
-    setLines([]);
-    setNote("");
+    // sendStockDelivery now throws when offline, so catch it here rather than
+    // leaving an unhandled rejection with the Send button stuck on "sending".
+    try {
+      const res = await sendStockDelivery({
+        clinicId: targetClinicId,
+        pharmacistId: pharmacist.pharmacistId,
+        items: lines,
+        note: note.trim() || undefined,
+      });
+      if (!res.ok) return toast.error(res.error ?? "Could not send delivery");
+      toast.success(
+        `Delivery sent to ${targetClinicName ?? "the clinic"} — awaiting confirmation`,
+      );
+      setLines([]);
+      setNote("");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not send delivery",
+      );
+    } finally {
+      setSending(false);
+    }
   };
 
   const canSend =
@@ -426,7 +435,13 @@ function SupplierIntake({
       setOpen(false);
     } catch (err) {
       console.error(err);
-      toast.error("Could not update stock. Please try again.");
+      // Show the real reason — addInventoryStock refuses offline with a
+      // message explaining that nothing was saved.
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Could not update stock. Please try again.",
+      );
     } finally {
       setSaving(false);
     }

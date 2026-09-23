@@ -535,7 +535,7 @@ export async function setAdherence(
   nurseId: string,
 ): Promise<void> {
   const date = todayIso();
-  await setDoc(
+  const write = setDoc(
     doc(db, "patients", patientId, "adherenceLogs", `${date}_${med}`),
     {
       med,
@@ -545,6 +545,17 @@ export async function setAdherence(
       updatedAt: serverTimestamp(),
     },
   );
+  // Same as addHandoverEntry above: the dose is recorded in the local cache
+  // the moment setDoc is called, but the promise only settles on server
+  // confirmation. Awaiting it offline leaves the tick stuck mid-toggle — and
+  // the caller in nurse.patients.tsx REVERTS its optimistic update when this
+  // rejects, so a nurse would watch a dose they just recorded un-tick itself.
+  // Offline, treat the local write as done; it uploads on reconnect.
+  if (isOffline()) {
+    write.catch((err) => console.error("Queued adherence update failed:", err));
+    return;
+  }
+  await write;
 }
 
 // ---------------------------------------------------------------------------

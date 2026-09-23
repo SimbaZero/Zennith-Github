@@ -66,7 +66,10 @@ function SuperFacilities() {
       toast.success("Clinic approved — now live");
       queryClient.invalidateQueries({ queryKey: ["clinics"] });
     },
-    onError: () => toast.error("Could not approve"),
+    // approveClinic refuses offline — its message says nothing changed on
+    // the platform, which is what the Super Admin needs to know.
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "Could not approve"),
   });
 
   const reject = useMutation({
@@ -75,7 +78,8 @@ function SuperFacilities() {
       toast.success("Application rejected");
       queryClient.invalidateQueries({ queryKey: ["clinics"] });
     },
-    onError: () => toast.error("Could not reject"),
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "Could not reject"),
   });
 
   const remove = useMutation({

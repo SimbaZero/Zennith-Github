@@ -23,7 +23,11 @@ import {
   type DocumentData,
   type Timestamp,
 } from "firebase/firestore";
-import { runTransactionOnline as runTransaction } from "@/lib/offline";
+import {
+  runTransactionOnline as runTransaction,
+  assertOnline,
+  isOffline,
+} from "@/lib/offline";
 import { initializeApp, deleteApp } from "firebase/app";
 import {
   createUserWithEmailAndPassword,
@@ -308,6 +312,13 @@ export async function addToQueue(input: {
   priority?: "normal" | "urgent";
   facilityId?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
+  // The queue is a SHARED, live view of who is physically in the waiting
+  // room — every other person on reception is looking at the same list. A
+  // queue change made on one device that nobody else can see is worse than
+  // no change at all, so these refuse rather than queue. First line, before
+  // the reads below: offline those reads come back empty from the cache and
+  // the user would be told "Patient not found" instead of "you're offline".
+  assertOnline();
   const pid = input.patientId.trim();
   const pSnap = await getDoc(doc(db, "patients", pid));
   if (!pSnap.exists())
@@ -357,6 +368,10 @@ export async function callPatient(
   entry: QueueEntry,
   deliverAt: Date,
 ): Promise<void> {
+  // Calling a patient through sends them a notification and moves them in a
+  // queue other staff are watching. Neither is any use if it sits in a write
+  // queue on one laptop — the patient would still be sitting there.
+  assertOnline();
   await updateDoc(doc(db, "queue", entry.id), {
     status: "called",
     calledAt: new Date().toISOString(),
@@ -392,6 +407,9 @@ export async function setQueueStatus(
   id: string,
   status: QueueStatus,
 ): Promise<void> {
+  // Shared queue state — see addToQueue. Also reads the entry back below to
+  // decide whether to notify, which offline returns stale cache data.
+  assertOnline();
   const updates: Record<string, unknown> = { status };
   if (status === "called") updates.calledAt = new Date().toISOString();
   if (status === "in-room") updates.inRoomAt = new Date().toISOString();
@@ -438,6 +456,11 @@ export async function handoffPatient(
   entryId: string,
   targetClinician: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  // A handoff is a transfer of responsibility for a patient to another
+  // clinician. If the other clinician can't see it, nobody is looking after
+  // that patient and both sides think the other is — this must never be
+  // allowed to happen silently offline.
+  assertOnline();
   try {
     const entrySnap = await getDoc(doc(db, "queue", entryId));
     const entry = entrySnap.exists()
@@ -474,6 +497,9 @@ export async function acceptHandoff(
   entryId: string,
   newClinician: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  // The other half of the transfer above, and the same reasoning: accepting
+  // a patient only means something if the handing-over side can see it.
+  assertOnline();
   try {
     const entrySnap = await getDoc(doc(db, "queue", entryId));
     const entry = entrySnap.exists()
@@ -507,6 +533,9 @@ export async function acceptHandoff(
 }
 
 export async function removeFromQueue(id: string): Promise<void> {
+  // Shared queue state — see addToQueue. Removing someone locally while
+  // colleagues still see them waiting is the same split-view problem.
+  assertOnline();
   const entrySnap = await getDoc(doc(db, "queue", id));
   const entry = entrySnap.exists() ? toQueueEntry(id, entrySnap.data()) : null;
 
@@ -1023,6 +1052,11 @@ export async function createAppointment(input: {
   type: string;
   clinician?: string;
 }): Promise<void> {
+  // Booking needs the server: it checks the clinician isn't already booked
+  // at that exact time (below), and offline that check reads a stale cache
+  // and would happily double-book. Assert first so the user is told they're
+  // offline, rather than getting "Patient not found" from an empty cache.
+  assertOnline();
   const patient = await getDoc(doc(db, "patients", input.patientId));
   if (!patient.exists())
     throw new Error(`Patient "${input.patientId}" not found`);
@@ -1240,6 +1274,11 @@ export interface RegistrationInput {
 export async function registerPatient(
   input: RegistrationInput,
 ): Promise<string> {
+  // Registration allocates IDs from a shared counter, which is why it runs
+  // in a transaction — two offline registrations would both claim the same
+  // Pat- number. runTransaction already rejects offline, but asserting here
+  // states the real reason before any work starts.
+  assertOnline();
   const ids = await runTransaction(db, async (tx) => {
     const ref = doc(db, "counters", "registration");
     const snap = await tx.get(ref);
@@ -1606,10 +1645,20 @@ export async function updatePatient(
   patientId: string,
   input: PatientUpdateInput,
 ): Promise<void> {
-  await updateDoc(doc(db, "patients", patientId), {
+  const write = updateDoc(doc(db, "patients", patientId), {
     ...stripUndefined(input),
     lastUpdated: new Date().toISOString(),
   });
+  // Editing a patient's own chart is exactly the work that has to keep going
+  // when the line drops — a nurse with the file open in front of them should
+  // not be blocked from writing down what they just found. The edit is in the
+  // local cache immediately and uploads on reconnect; awaiting the server
+  // instead left "Saving…" on the button indefinitely.
+  if (isOffline()) {
+    write.catch((err) => console.error("Queued patient update failed:", err));
+    return;
+  }
+  await write;
 }
 
 export async function updateUser(
@@ -1626,10 +1675,20 @@ export async function updateMedicalRecord(
   recordNo: string | number,
   input: MedicalRecordUpdateInput,
 ): Promise<void> {
-  await updateDoc(doc(db, "medicalRecords", String(recordNo)), {
+  const write = updateDoc(doc(db, "medicalRecords", String(recordNo)), {
     ...stripUndefined(input),
     lastUpdated: new Date().toISOString(),
   });
+  // Same reasoning as updatePatient: the Edit Record flow calls both of these
+  // together, so they have to behave the same way — otherwise the Promise.all
+  // in PatientRecordView still hangs on whichever half awaited the server.
+  if (isOffline()) {
+    write.catch((err) =>
+      console.error("Queued medical record update failed:", err),
+    );
+    return;
+  }
+  await write;
 }
 
 // ---------------------------------------------------------------------------
@@ -1723,10 +1782,17 @@ export async function submitClinicApplication(input: {
 }
 
 export async function approveClinic(clinicId: number): Promise<void> {
+  // Approving a clinic switches on access for everyone who works there. A
+  // Super Admin needs to know it has actually taken effect on the platform,
+  // not that it is sitting in a queue on their own machine.
+  assertOnline();
   await updateDoc(doc(db, "clinics", String(clinicId)), { status: "active" });
 }
 
 export async function rejectClinicApplication(clinicId: number): Promise<void> {
+  // Rejection DELETES the application. A destructive, irreversible decision
+  // must be confirmed by the server before we tell anyone it happened.
+  assertOnline();
   await deleteDoc(doc(db, "clinics", String(clinicId)));
 }
 
@@ -1872,6 +1938,10 @@ export async function alertOverdueQueueEntry(
   receptionistUserId: number,
   waitedMin: number,
 ): Promise<void> {
+  // An escalation about a patient who has waited too long is only worth
+  // raising while it can be acted on. Queued offline it would surface after
+  // reconnect describing a wait that is no longer the current situation.
+  assertOnline();
   await addDoc(collection(db, "notifications"), {
     notifId: Date.now(),
     userId: receptionistUserId,

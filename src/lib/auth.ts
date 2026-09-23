@@ -21,7 +21,10 @@ import {
   getFirestore,
   updateDoc,
 } from "firebase/firestore";
-import { runTransactionOnline as runTransaction } from "@/lib/offline";
+import {
+  runTransactionOnline as runTransaction,
+  assertOnline,
+} from "@/lib/offline";
 import { auth, db, firebaseConfig } from "@/firebase";
 import { logAction } from "./audit";
 
@@ -199,6 +202,11 @@ export async function addUser(u: {
   fullName?: string;
   clinicId?: number;
 }): Promise<{ ok: boolean; error?: string }> {
+  // Creating a staff account calls Firebase Auth and sends a set-password
+  // email — neither of which is a Firestore write, so neither can be queued
+  // offline. Without this the admin would watch the form hang and have no
+  // idea whether an account now exists.
+  assertOnline();
   if (u.clinicId == null) {
     return { ok: false, error: "A clinic must be selected." };
   }
@@ -333,6 +341,10 @@ export async function addUser(u: {
 // NOTE: the Firebase Auth record itself can only be deleted from the
 // console or an Admin SDK backend — client apps can't delete other users.
 export async function removeUser(username: string): Promise<void> {
+  // Revoking someone's access is a security action: it has to be true on the
+  // server, now. "Removed" that actually means "removed once this laptop
+  // reconnects" would leave a login working that an admin believes is gone.
+  assertOnline();
   try {
     const q = query(
       collection(db, USERS),
@@ -571,6 +583,9 @@ export async function createLoginForExistingStaff(input: {
   userId: number; // the staff record's existing users.userId
   clinicId: number;
 }): Promise<{ ok: boolean; error?: string }> {
+  // Same as addUser — real Firebase Auth calls plus a set-password email,
+  // none of which Firestore's offline queue covers.
+  assertOnline();
   const throwawayPassword =
     crypto.randomUUID() + crypto.randomUUID().toUpperCase();
 
@@ -640,6 +655,10 @@ export async function updateStaffDetails(input: {
   fullName: string;
   email?: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  // Looks the account up by username before writing; offline that query
+  // misses and the admin is told the staff member doesn't exist. Changing an
+  // email address also touches the auth record, not just Firestore.
+  assertOnline();
   const name = input.fullName.trim();
   if (!name) return { ok: false, error: "Name can't be empty." };
 

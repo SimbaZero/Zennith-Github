@@ -10,6 +10,7 @@ import {
   requestDataDeletion,
   type PrivacySettings,
 } from "@/lib/patient-service";
+import { isOffline } from "@/lib/offline";
 
 export const Route = createFileRoute("/patient/privacy")({
   component: PatientPrivacy,
@@ -53,7 +54,15 @@ function PatientPrivacy() {
     if (!patient?.patientId) return;
     try {
       await savePrivacySetting(patient.patientId, key, !settings[key]);
-      toast.success("Privacy preference updated");
+      // Offline the preference is saved locally and uploads on reconnect.
+      // Saying so matters more here than elsewhere: a patient changing who
+      // can see their data needs to know when it actually takes effect for
+      // the staff treating them.
+      toast.success(
+        isOffline()
+          ? "Saved on this device — it will sync when you're back online"
+          : "Privacy preference updated",
+      );
     } catch (err) {
       console.error(err);
       toast.error("Couldn't save that — please try again.");
@@ -72,7 +81,9 @@ function PatientPrivacy() {
       setStep(0);
       setReason("");
       toast.success(
-        "Request submitted — your clinic's admin has been notified.",
+        isOffline()
+          ? "Request saved on this device — it will be sent to your clinic's admin when you're back online."
+          : "Request submitted — your clinic's admin has been notified.",
       );
     } catch (err) {
       console.error(err);

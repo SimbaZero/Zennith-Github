@@ -138,8 +138,12 @@ function Digitize() {
       setResult(null);
       setPreview(null);
       setConfidence(null);
-    } catch {
-      toast.error("Could not save digitized file");
+    } catch (err) {
+      // saveDigitizedFile registers new patients, which refuses offline —
+      // show that reason rather than a generic failure.
+      toast.error(
+        err instanceof Error ? err.message : "Could not save digitized file",
+      );
     } finally {
       setSaving(false);
     }
