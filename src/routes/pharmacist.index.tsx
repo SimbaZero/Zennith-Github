@@ -19,7 +19,7 @@ function PharmacistDashboard() {
   const { stock } = useInventory();
 
   // Filtered to the clinic picked in the header — matches Stock,
-  // Distribution, and Analytics. Items with no clinicId at all
+  // Deliveries, and Analytics. Items with no clinicId at all
   // (older/legacy data) are included regardless.
   const clinicStock = useMemo(
     () =>
@@ -117,7 +117,7 @@ function PharmacistDashboard() {
               to="/pharmacist/deliveries"
               className="flex items-center justify-center gap-2 border py-2.5 rounded-md text-sm hover:bg-secondary"
             >
-              <Share2 size={16} /> Distribute to Nurses
+              <Share2 size={16} /> Send a Delivery
             </Link>
             <Link
               to="/pharmacist/analytics"

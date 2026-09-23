@@ -103,10 +103,12 @@ const pharmacistIndex: SearchEntry[] = [
     keywords: ["patients", "vitals", "labs"],
   },
   {
-    label: "Distribution",
+    label: "Deliveries",
     section: "Pharmacy",
-    path: "/pharmacist/distribution",
-    keywords: ["nurses", "allocate"],
+    path: "/pharmacist/deliveries",
+    // "distribution" kept as a keyword: the page was called Distribution
+    // until now, and anyone who learnt that name still needs to find it.
+    keywords: ["nurses", "allocate", "distribution"],
   },
   {
     label: "Predictive Analytics",

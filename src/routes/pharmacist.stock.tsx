@@ -60,14 +60,14 @@ function Stock() {
           <p className="text-sm text-muted-foreground">
             {enriched.length} medications at{" "}
             {realClinic.activeClinicName ?? "your clinic"} · live · updates from
-            Distribution
+            Deliveries
           </p>
         </div>
         <button
           onClick={() => navigate({ to: "/pharmacist/deliveries" })}
           className="bg-[oklch(0.18_0.06_260)] text-white px-3 py-1.5 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)]"
         >
-          Go to Distribution →
+          Go to Deliveries →
         </button>
       </div>
 
@@ -109,7 +109,7 @@ function Stock() {
                 <span>Avg/day: {s.avgDay}</span>
               </div>
               <p className="text-[11px] text-[oklch(0.55_0.18_245)] mt-3">
-                Manage in Distribution →
+                Manage in Deliveries →
               </p>
             </button>
           );
