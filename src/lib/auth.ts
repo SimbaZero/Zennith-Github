@@ -18,6 +18,8 @@ import {
   collection,
   query,
   where,
+  orderBy,
+  limit,
   getFirestore,
   updateDoc,
 } from "firebase/firestore";
@@ -78,6 +80,95 @@ export interface StoredUser {
   clinicId?: number; // real clinic scope — set for every role now, incl. admin
   /** For staff/facility admins: assigned facility. Unused for super_admin/patient. */
   facilityId?: string;
+  firstName?: string;
+  lastName?: string;
+  /** HPCSA (doctor) / SANC (nurse) / SAPC (pharmacist) registration number. */
+  licenseNumber?: string;
+  specialty?: string;
+  ward?: string;
+  contactNumber?: string;
+  idType?: "sa_id" | "passport";
+  idNumber?: string;
+}
+
+/** Roles whose licenseNumber must be checked for uniqueness on creation. */
+const LICENSED_ROLES: Role[] = ["doctor", "nurse", "pharmacist"];
+
+/* ================= LEGACY TABLES (users / doctors / nurses / ...) =================
+ * The app was seeded from an imported dataset that lives alongside "profiles":
+ *   - "users"        — one row per person, ANY role, keyed by a numeric legacyUserId
+ *                       (fields: names, surname, role ("Doctor"/"Nurse"/...), idNumber,
+ *                       contactNum, email, userId, + optional Age/DOB/Gender/city/suburb)
+ *   - "doctors" / "nurses" / "pharmacists" / "receptionists"
+ *                     — one row per staff member, doc ID like "Doc-12", keyed fields
+ *                       {role}Id (e.g. doctorId), userId (points back to "users"),
+ *                       clinicId / clinicIds, and licenseNo for doctor/pharmacist
+ *                       (doctors also have "specialisation")
+ *   - "adminRecords"  — one row per account created via the admin panel, doc ID is a
+ *                       plain incrementing number, fields adminRecordId + userIdAdded
+ * `addUser` below writes to all of these in addition to "profiles" so a new doctor
+ * actually shows up in the Firestore tables the rest of the app (doctor-service.ts
+ * etc.) queries — not just in the login/profile system.
+ */
+const ROLE_PREFIX: Partial<Record<Role, string>> = {
+  doctor: "Doc",
+  nurse: "Nur",
+  pharmacist: "Pharm",
+  receptionist: "Rec",
+};
+const ROLE_COLLECTION: Partial<Record<Role, string>> = {
+  doctor: "doctors",
+  nurse: "nurses",
+  pharmacist: "pharmacists",
+  receptionist: "receptionists",
+};
+const ROLE_ID_FIELD: Partial<Record<Role, string>> = {
+  doctor: "doctorId",
+  nurse: "nurseId",
+  pharmacist: "pharmacistId",
+  receptionist: "receptionistId",
+};
+
+/** users.userId is numeric, so we can let Firestore do the sort/limit for us. */
+async function nextLegacyUserId(firestore = db): Promise<number> {
+  const q = query(
+    collection(firestore, "users"),
+    orderBy("userId", "desc"),
+    limit(1),
+  );
+  const snap = await getDocs(q);
+  const max = snap.empty ? 0 : ((snap.docs[0].data().userId as number) ?? 0);
+  return max + 1;
+}
+
+/** Role tables are keyed like "Doc-12" (string doc IDs), which Firestore can't
+ *  sort numerically, so we scan the collection and take the highest suffix.
+ *  Fine at this data size; if these collections grow large, replace with a
+ *  dedicated counter document instead. */
+async function nextRoleRecordId(
+  role: StaffRole,
+  firestore = db,
+): Promise<string> {
+  const prefix = ROLE_PREFIX[role]!;
+  const coll = ROLE_COLLECTION[role]!;
+  const snap = await getDocs(collection(firestore, coll));
+  let max = 0;
+  for (const d of snap.docs) {
+    const m = /^([A-Za-z]+)-(\d+)$/.exec(d.id);
+    if (m && m[1] === prefix) max = Math.max(max, parseInt(m[2], 10));
+  }
+  return `${prefix}-${max + 1}`;
+}
+
+/** adminRecords doc IDs are plain numeric strings — same scan-based approach. */
+async function nextAdminRecordId(firestore = db): Promise<number> {
+  const snap = await getDocs(collection(firestore, "adminRecords"));
+  let max = 0;
+  for (const d of snap.docs) {
+    const n = Number(d.id);
+    if (!Number.isNaN(n)) max = Math.max(max, n);
+  }
+  return max + 1;
 }
 
 // Login profiles live in "profiles" (keyed by Firebase Auth UID), NOT in the
@@ -150,6 +241,40 @@ export async function getCustomUsers(): Promise<StoredUser[]> {
   return all.filter((u) => !u.builtin);
 }
 
+/** True if some existing profile already has this exact licenseNumber.
+ *  Pass excludeUsername to ignore a user editing their own record. */
+export async function licenseNumberExists(
+  licenseNumber: string,
+  excludeUsername?: string,
+): Promise<boolean> {
+  const value = licenseNumber.trim().toUpperCase();
+  if (!value) return false;
+  const q = query(collection(db, USERS), where("licenseNumber", "==", value));
+  const snap = await getDocs(q);
+  return snap.docs.some(
+    (d) =>
+      (d.data().username as string | undefined)?.toLowerCase() !==
+      excludeUsername?.trim().toLowerCase(),
+  );
+}
+
+/** True if some existing profile already has this exact SA ID / passport
+ *  number. Checked regardless of idType, since the two shouldn't collide. */
+export async function idNumberExists(
+  idNumber: string,
+  excludeUsername?: string,
+): Promise<boolean> {
+  const value = idNumber.trim();
+  if (!value) return false;
+  const q = query(collection(db, USERS), where("idNumber", "==", value));
+  const snap = await getDocs(q);
+  return snap.docs.some(
+    (d) =>
+      (d.data().username as string | undefined)?.toLowerCase() !==
+      excludeUsername?.trim().toLowerCase(),
+  );
+}
+
 // Creates the account on a throwaway secondary app instance: Firebase signs in
 // as any newly created user, so using the primary `auth` here would silently
 // replace the admin's session with the new user's.
@@ -200,6 +325,7 @@ export async function addUser(u: {
   email: string; // real address — where the set-password link is sent
   role: StaffRole; // now includes "admin" — see the branch below
   fullName?: string;
+<<<<<<< Updated upstream
   clinicId?: number;
 }): Promise<{ ok: boolean; error?: string }> {
   // Creating a staff account calls Firebase Auth and sends a set-password
@@ -219,6 +345,43 @@ export async function addUser(u: {
   const throwawayPassword =
     crypto.randomUUID() + crypto.randomUUID().toUpperCase();
 
+=======
+  firstName?: string;
+  lastName?: string;
+  facilityId?: string;
+  licenseNumber?: string;
+  specialty?: string;
+  ward?: string;
+  contactNumber?: string;
+  idType?: "sa_id" | "passport";
+  idNumber?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  // Validate uniqueness BEFORE touching Firebase Auth — if we checked
+  // after creating the Auth account, a duplicate would leave behind an
+  // orphaned Auth user with no Firestore profile (the account exists,
+  // can log in, but has no role/facility). Doing it here catches
+  // duplicates while it's still cheap to just return an error.
+  if (u.licenseNumber && LICENSED_ROLES.includes(u.role)) {
+    if (await licenseNumberExists(u.licenseNumber)) {
+      return {
+        ok: false,
+        error: `Registration number "${u.licenseNumber.trim().toUpperCase()}" is already assigned to another staff member`,
+      };
+    }
+  }
+  if (u.idNumber) {
+    if (await idNumberExists(u.idNumber)) {
+      return {
+        ok: false,
+        error:
+          u.idType === "passport"
+            ? `Passport number "${u.idNumber.trim()}" is already registered to another user`
+            : `ID number "${u.idNumber.trim()}" is already registered to another user`,
+      };
+    }
+  }
+
+>>>>>>> Stashed changes
   const secondary = initializeApp(
     firebaseConfig,
     `user-creation-${Date.now()}`,
@@ -283,16 +446,28 @@ export async function addUser(u: {
       u.email.trim().toLowerCase(),
       throwawayPassword,
     );
+<<<<<<< Updated upstream
 
     // Real profile. Doctor/nurse/pharmacist/receptionist link via
     // legacyUserId; admin carries clinicId directly since it has no
     // separate staff record to link to.
     await setDoc(doc(getFirestore(secondary), USERS, cred.user.uid), {
+=======
+    const secondaryDb = getFirestore(secondary);
+
+    // Legacy-table IDs are allocated against the ADMIN's own session
+    // (primary `db`) rather than the brand-new user's session.
+    const legacyUserId = await nextLegacyUserId(db);
+    const roleCapitalized = u.role.charAt(0).toUpperCase() + u.role.slice(1);
+
+    await setDoc(doc(secondaryDb, USERS, cred.user.uid), {
+>>>>>>> Stashed changes
       username: u.username.trim().toLowerCase(),
       role: u.role,
       fullName: u.fullName ?? "",
       createdAt: new Date().toISOString(),
       builtin: false,
+<<<<<<< Updated upstream
       clinicId: u.clinicId,
       email: u.email.trim().toLowerCase(),
       ...(legacyUserId != null ? { legacyUserId } : {}),
@@ -308,6 +483,85 @@ export async function addUser(u: {
       console.error("Invite email failed to send:", err);
       // Account is already created and valid — don't fail the whole thing.
       // The admin can resend from the staff list.
+=======
+      legacyUserId,
+      ...(u.facilityId ? { facilityId: u.facilityId } : {}),
+      ...(u.firstName ? { firstName: u.firstName.trim() } : {}),
+      ...(u.lastName ? { lastName: u.lastName.trim() } : {}),
+      ...(u.licenseNumber
+        ? { licenseNumber: u.licenseNumber.trim().toUpperCase() }
+        : {}),
+      ...(u.specialty ? { specialty: u.specialty.trim() } : {}),
+      ...(u.ward ? { ward: u.ward.trim() } : {}),
+      ...(u.contactNumber ? { contactNumber: u.contactNumber.trim() } : {}),
+      ...(u.idType ? { idType: u.idType } : {}),
+      ...(u.idNumber ? { idNumber: u.idNumber.trim() } : {}),
+    });
+
+    // Everything below writes via the PRIMARY `db` — i.e. still
+    // authenticated as the ADMIN, not the brand-new user on `secondaryDb`.
+    // "doctors" / "nurses" / "pharmacists" / "adminRecords" are admin-only
+    // per your Firestore rules, so writing them under the new user's own
+    // (permission-less) session was rejected with permission-denied even
+    // though the Auth account + profile above had already been created —
+    // that's the "access denied" you were seeing on an account that had,
+    // in fact, partially been created.
+    //
+    // Wrapped in its own try/catch: if a rule still blocks one of these,
+    // the account + login (created above) remain valid — we don't want a
+    // legacy-table hiccup to make the UI claim the whole thing failed.
+    try {
+      // "users" — shared legacy table every role record points back to.
+      await setDoc(doc(db, "users", String(legacyUserId)), {
+        userId: legacyUserId,
+        names: u.firstName?.trim() ?? "",
+        surname: u.lastName?.trim() ?? "",
+        role: roleCapitalized,
+        email: toEmail(u.username),
+        ...(u.contactNumber ? { contactNum: u.contactNumber.trim() } : {}),
+        ...(u.idNumber ? { idNumber: u.idNumber.trim() } : {}),
+      });
+
+      // Role-specific table ("doctors" / "nurses" / "pharmacists" / "receptionists").
+      const coll = ROLE_COLLECTION[u.role];
+      if (coll) {
+        const roleRecordId = await nextRoleRecordId(u.role as StaffRole, db);
+        const clinicIdNum = u.facilityId ? Number(u.facilityId) : undefined;
+        const clinicIdValue =
+          clinicIdNum !== undefined && !Number.isNaN(clinicIdNum)
+            ? clinicIdNum
+            : u.facilityId;
+        await setDoc(doc(db, coll, roleRecordId), {
+          [ROLE_ID_FIELD[u.role]!]: roleRecordId,
+          userId: legacyUserId,
+          ...(clinicIdValue !== undefined
+            ? { clinicId: clinicIdValue, clinicIds: [clinicIdValue] }
+            : {}),
+          ...(u.licenseNumber
+            ? { licenseNo: u.licenseNumber.trim().toUpperCase() }
+            : {}),
+          ...(u.role === "doctor" && u.specialty
+            ? { specialisation: u.specialty.trim() }
+            : {}),
+        });
+      }
+
+      // "adminRecords" — audit trail of accounts created via this panel.
+      const adminRecordId = await nextAdminRecordId(db);
+      await setDoc(doc(db, "adminRecords", String(adminRecordId)), {
+        adminRecordId,
+        timeStampCreated: new Date().toISOString(),
+        userIdAdded: legacyUserId,
+      });
+    } catch (legacyErr: any) {
+      // Account + profile are already good at this point — don't fail the
+      // whole operation over a secondary table. Surface it in the console
+      // so it's not silently lost, though.
+      console.error(
+        "addUser: legacy table sync (users/role table/adminRecords) failed:",
+        legacyErr.code ?? legacyErr.message ?? legacyErr,
+      );
+>>>>>>> Stashed changes
     }
 
     logAction({
@@ -480,6 +734,7 @@ export function displayNameFor(role: Role, username: string): string {
     case "patient":
       return name;
   }
+<<<<<<< Updated upstream
 }
 
 /* ================= CURRENT ADMIN (real clinic scoping) ================= */
@@ -710,3 +965,6 @@ export async function updateStaffDetails(input: {
     return { ok: false, error: "Could not save those changes." };
   }
 }
+=======
+}
+>>>>>>> Stashed changes
