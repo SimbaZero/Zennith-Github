@@ -23,10 +23,7 @@ import {
   getFirestore,
   updateDoc,
 } from "firebase/firestore";
-import {
-  runTransactionOnline as runTransaction,
-  assertOnline,
-} from "@/lib/offline";
+import { assertOnline } from "@/lib/offline";
 import { auth, db, firebaseConfig } from "@/firebase";
 import { logAction } from "./audit";
 
@@ -278,77 +275,15 @@ export async function idNumberExists(
 // Creates the account on a throwaway secondary app instance: Firebase signs in
 // as any newly created user, so using the primary `auth` here would silently
 // replace the admin's session with the new user's.
-const STAFF_META: Partial<
-  Record<
-    StaffRole,
-    {
-      collection: string;
-      idField: string;
-      prefix: string;
-      counterField: string;
-      multiClinic: boolean;
-    }
-  >
-> = {
-  doctor: {
-    collection: "doctors",
-    idField: "doctorId",
-    prefix: "Doc",
-    counterField: "doctorNo",
-    multiClinic: true,
-  },
-  nurse: {
-    collection: "nurses",
-    idField: "nurseId",
-    prefix: "Nur",
-    counterField: "nurseNo",
-    multiClinic: false,
-  },
-  pharmacist: {
-    collection: "pharmacists",
-    idField: "pharmacistId",
-    prefix: "Pharm",
-    counterField: "pharmacistNo",
-    multiClinic: true,
-  },
-  receptionist: {
-    collection: "receptionists",
-    idField: "receptionistId",
-    prefix: "Rec",
-    counterField: "receptionistNo",
-    multiClinic: false,
-  },
-};
-
 export async function addUser(u: {
   username: string;
   email: string; // real address — where the set-password link is sent
   role: StaffRole; // now includes "admin" — see the branch below
   fullName?: string;
-<<<<<<< Updated upstream
-  clinicId?: number;
-}): Promise<{ ok: boolean; error?: string }> {
-  // Creating a staff account calls Firebase Auth and sends a set-password
-  // email — neither of which is a Firestore write, so neither can be queued
-  // offline. Without this the admin would watch the form hang and have no
-  // idea whether an account now exists.
-  assertOnline();
-  if (u.clinicId == null) {
-    return { ok: false, error: "A clinic must be selected." };
-  }
-
-  // The admin never chooses or sees this. It exists only so the Firebase
-  // account can be created; the new staff member immediately sets their own
-  // via the reset link below. Previously the admin picked the password and
-  // read it out — meaning an admin permanently knew a clinician's login,
-  // which makes it impossible to tell who actually accessed a patient record.
-  const throwawayPassword =
-    crypto.randomUUID() + crypto.randomUUID().toUpperCase();
-
-=======
   firstName?: string;
   lastName?: string;
   facilityId?: string;
+  clinicId?: number;
   licenseNumber?: string;
   specialty?: string;
   ward?: string;
@@ -356,11 +291,19 @@ export async function addUser(u: {
   idType?: "sa_id" | "passport";
   idNumber?: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  // Creating a staff account calls Firebase Auth and sends a set-password
+  // email — neither of which is a Firestore write, so neither can be queued
+  // offline. Without this the admin would watch the form hang and have no
+  // idea whether an account now exists.
+  assertOnline();
+
+  if (u.clinicId == null && !u.facilityId) {
+    return { ok: false, error: "A clinic must be selected." };
+  }
+
   // Validate uniqueness BEFORE touching Firebase Auth — if we checked
   // after creating the Auth account, a duplicate would leave behind an
-  // orphaned Auth user with no Firestore profile (the account exists,
-  // can log in, but has no role/facility). Doing it here catches
-  // duplicates while it's still cheap to just return an error.
+  // orphaned Auth user with no Firestore profile.
   if (u.licenseNumber && LICENSED_ROLES.includes(u.role)) {
     if (await licenseNumberExists(u.licenseNumber)) {
       return {
@@ -381,78 +324,21 @@ export async function addUser(u: {
     }
   }
 
->>>>>>> Stashed changes
+  // The admin never chooses or sees this. It exists only so the Firebase
+  // account can be created; the new staff member immediately sets their own
+  // via the reset link below.
+  const throwawayPassword =
+    crypto.randomUUID() + crypto.randomUUID().toUpperCase();
   const secondary = initializeApp(
     firebaseConfig,
     `user-creation-${Date.now()}`,
   );
   try {
-    let legacyUserId: number | undefined;
-    let staffId: string | undefined;
-
-    if (u.role === "admin") {
-      // Admin doesn't need a numbered staff record like Doc-###/Nur-### —
-      // it's an access scope, not a clinical identity referenced anywhere
-      // else in the data. clinicId lives directly on the profile instead.
-    } else {
-      const meta = STAFF_META[u.role];
-      if (!meta) {
-        return {
-          ok: false,
-          error: `"${u.role}" isn't a role that can be created here.`,
-        };
-      }
-      // Reserve a real users.userId and this role's next Doc-###/Nur-###/
-      // etc., in one transaction against the same counters/registration doc
-      // signUpPatient() already uses for patients. Starting numbers were set
-      // safely from real data by scripts/setup-staff-id-counters.mjs.
-      const reserved = await runTransaction(db, async (tx) => {
-        const ref = doc(db, "counters", "registration");
-        const snap = await tx.get(ref);
-        const cur = snap.exists()
-          ? (snap.data() as Record<string, number>)
-          : {};
-        const nextUserId = (cur.userNo ?? 90000) + 1;
-        const nextStaffNo = (cur[meta.counterField] ?? 0) + 1;
-        tx.set(
-          ref,
-          { ...cur, userNo: nextUserId, [meta.counterField]: nextStaffNo },
-          { merge: true },
-        );
-        return { userId: nextUserId, staffId: `${meta.prefix}-${nextStaffNo}` };
-      });
-      legacyUserId = reserved.userId;
-      staffId = reserved.staffId;
-
-      // Real users record — same shape signUpPatient() already writes.
-      await setDoc(doc(db, "users", String(legacyUserId)), {
-        userId: legacyUserId,
-        names: u.fullName ?? "",
-        surname: "",
-        role: u.role.charAt(0).toUpperCase() + u.role.slice(1),
-      });
-
-      // Real role-specific record.
-      await setDoc(doc(db, meta.collection, staffId), {
-        [meta.idField]: staffId,
-        userId: legacyUserId,
-        clinicId: u.clinicId,
-        ...(meta.multiClinic ? { clinicIds: [u.clinicId] } : {}),
-      });
-    }
-
     const cred = await createUserWithEmailAndPassword(
       getFbAuth(secondary),
       u.email.trim().toLowerCase(),
       throwawayPassword,
     );
-<<<<<<< Updated upstream
-
-    // Real profile. Doctor/nurse/pharmacist/receptionist link via
-    // legacyUserId; admin carries clinicId directly since it has no
-    // separate staff record to link to.
-    await setDoc(doc(getFirestore(secondary), USERS, cred.user.uid), {
-=======
     const secondaryDb = getFirestore(secondary);
 
     // Legacy-table IDs are allocated against the ADMIN's own session
@@ -461,29 +347,12 @@ export async function addUser(u: {
     const roleCapitalized = u.role.charAt(0).toUpperCase() + u.role.slice(1);
 
     await setDoc(doc(secondaryDb, USERS, cred.user.uid), {
->>>>>>> Stashed changes
       username: u.username.trim().toLowerCase(),
       role: u.role,
       fullName: u.fullName ?? "",
       createdAt: new Date().toISOString(),
       builtin: false,
-<<<<<<< Updated upstream
-      clinicId: u.clinicId,
       email: u.email.trim().toLowerCase(),
-      ...(legacyUserId != null ? { legacyUserId } : {}),
-    });
-
-    // Firebase's own password-reset email doubles as the invite: the new
-    // staff member follows it and sets a password only they ever know.
-    // This uses Firebase's built-in sender (free, works for any address) —
-    // not Resend, which still needs a verified domain.
-    try {
-      await sendPasswordResetEmail(auth, u.email.trim().toLowerCase());
-    } catch (err) {
-      console.error("Invite email failed to send:", err);
-      // Account is already created and valid — don't fail the whole thing.
-      // The admin can resend from the staff list.
-=======
       legacyUserId,
       ...(u.facilityId ? { facilityId: u.facilityId } : {}),
       ...(u.firstName ? { firstName: u.firstName.trim() } : {}),
@@ -561,14 +430,13 @@ export async function addUser(u: {
         "addUser: legacy table sync (users/role table/adminRecords) failed:",
         legacyErr.code ?? legacyErr.message ?? legacyErr,
       );
->>>>>>> Stashed changes
     }
 
     logAction({
       clinicId: u.clinicId,
       actor_id: getUsername() || "system",
       action_type: "staff.create",
-      description: `Created ${u.role} account "${u.username}"${staffId ? ` (${staffId})` : ""} at clinicId ${u.clinicId}`,
+      description: `Created ${u.role} account "${u.username}" at clinicId ${u.clinicId}`,
     });
     return { ok: true };
   } catch (err: any) {
@@ -734,7 +602,6 @@ export function displayNameFor(role: Role, username: string): string {
     case "patient":
       return name;
   }
-<<<<<<< Updated upstream
 }
 
 /* ================= CURRENT ADMIN (real clinic scoping) ================= */
@@ -965,6 +832,3 @@ export async function updateStaffDetails(input: {
     return { ok: false, error: "Could not save those changes." };
   }
 }
-=======
-}
->>>>>>> Stashed changes

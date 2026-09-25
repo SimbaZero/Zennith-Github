@@ -1,20 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
-<<<<<<< Updated upstream
 import {
   addUser,
   STAFF_ROLES,
   useCurrentAdmin,
+  getUserFacility,
   type StaffRole,
 } from "@/lib/auth";
-import { useState } from "react";
-=======
-import { addUser, STAFF_ROLES, getUserFacility, type StaffRole } from "@/lib/auth";
-import { facilityName } from "@/lib/facilities";
 import { useMemo, useState } from "react";
->>>>>>> Stashed changes
 import { toast } from "sonner";
-import { RefreshCw } from "lucide-react";
 
 export const Route = createFileRoute("/admin/users")({ component: CreateUser });
 
@@ -54,14 +48,6 @@ const ROLE_FIELDS: Record<StaffRole, FieldDef[]> = {
   ],
 };
 
-function generatePassword(length = 12) {
-  // Mix of upper/lower/digits/symbols, avoids visually ambiguous chars.
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%";
-  const bytes = new Uint32Array(length);
-  (window.crypto || (window as any).msCrypto).getRandomValues(bytes);
-  return Array.from(bytes, (b) => chars[b % chars.length]).join("");
-}
-
 // Ensures a value always starts with the given locked prefix and strips
 // any attempt to type over/remove it. Whatever the user types after the
 // prefix is preserved as-is (so "MP" + "0123456" -> "MP0123456").
@@ -92,13 +78,8 @@ function CreateUser() {
   const [idType, setIdType] = useState<IdType>("sa_id");
   const [idValue, setIdValue] = useState("");
   const [saving, setSaving] = useState(false);
-<<<<<<< Updated upstream
-  const set = (k: keyof typeof form) => (v: any) =>
-    setForm({ ...form, [k]: v });
-=======
 
   const set = (k: keyof typeof form) => (v: any) => setForm({ ...form, [k]: v });
->>>>>>> Stashed changes
 
   const setExtraField = (field: FieldDef) => (v: string) => {
     const value = field.lockedPrefix ? withLockedPrefix(field.lockedPrefix, v) : v;
@@ -121,50 +102,9 @@ function CreateUser() {
     setExtra(seeded);
   };
 
-  const handleGeneratePassword = () => {
-    set("password")(generatePassword());
-  };
-
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-<<<<<<< Updated upstream
-    if (!form.username || !form.email || !form.fullName) {
-      toast.error("All fields are required");
-      return;
-    }
-    if (admin?.clinicId == null) {
-      toast.error(
-        "Your admin account isn't linked to a clinic — contact the platform owner.",
-      );
-      return;
-    }
-    setSaving(true);
-    // addUser now throws when offline (it calls Firebase Auth and sends an
-    // email, neither of which Firestore's offline queue can carry). Catch it
-    // so the admin sees why, instead of a form stuck on "Saving".
-    try {
-      const res = await addUser({
-        username: form.username.trim(),
-        email: form.email.trim(),
-        role: form.role,
-        fullName: form.fullName.trim(),
-        clinicId: admin.clinicId,
-      });
-      if (!res.ok) {
-        toast.error(res.error || "Could not create user");
-        return;
-      }
-      toast.success(
-        `${form.fullName} created — a set-password email was sent to ${form.email}`,
-      );
-      setForm({ ...form, fullName: "", username: "", email: "" });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not create user");
-    } finally {
-      setSaving(false);
-    }
-=======
-    if (!form.username || !form.password || !form.firstName || !form.lastName) {
+    if (!form.username || !form.email || !form.firstName || !form.lastName) {
       toast.error("All fields are required");
       return;
     }
@@ -192,44 +132,57 @@ function CreateUser() {
       return;
     }
 
-    setSaving(true);
-    // New staff are bound to the facility the signed-in admin is scoped to.
     const fid = getUserFacility();
+    if (admin?.clinicId == null && !fid) {
+      toast.error(
+        "Your admin account isn't linked to a clinic — contact the platform owner.",
+      );
+      return;
+    }
+
+    setSaving(true);
     const fullName = `${form.firstName.trim()} ${form.lastName.trim()}`;
 
-    // addUser (in lib/auth.ts) now accepts all of these directly and:
-    //  1. Checks licenseNumber / idNumber for duplicates first
-    //  2. Creates the Firebase Auth account (password is hashed by
-    //     Firebase — never touches Firestore or our own code)
-    //  3. Writes the profile doc with role, name, and role-specific fields
-    const res = await addUser({
-      username: form.username.trim(),
-      password: form.password,
-      role: form.role,
-      fullName,
-      firstName: form.firstName.trim(),
-      lastName: form.lastName.trim(),
-      facilityId: fid ?? undefined,
-      idType,
-      idNumber: idValue.trim(),
-      licenseNumber: extra.licenseNumber,
-      specialty: extra.specialty,
-      ward: extra.ward,
-      contactNumber: extra.contactNumber,
-    });
-
-    setSaving(false);
-    if (!res.ok) { toast.error(res.error || "Could not create user"); return; }
-    toast.success(`${fullName} (${form.role}) created — they can log in with username "${form.username}"`);
-    setForm({ firstName: "", lastName: "", username: "", password: "", role: form.role });
-    setExtra(() => {
-      const seeded: Record<string, string> = {};
-      for (const f of ROLE_FIELDS[form.role] ?? []) if (f.lockedPrefix) seeded[f.key] = f.lockedPrefix;
-      return seeded;
-    });
-    setIdType("sa_id");
-    setIdValue("");
->>>>>>> Stashed changes
+    // addUser now throws when offline (it calls Firebase Auth and sends an
+    // email, neither of which Firestore's offline queue can carry). Catch it
+    // so the admin sees why, instead of a form stuck on "Saving".
+    try {
+      const res = await addUser({
+        username: form.username.trim(),
+        email: form.email.trim(),
+        role: form.role,
+        fullName,
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        facilityId: fid ?? undefined,
+        clinicId: admin?.clinicId,
+        idType,
+        idNumber: idValue.trim(),
+        licenseNumber: extra.licenseNumber,
+        specialty: extra.specialty,
+        ward: extra.ward,
+        contactNumber: extra.contactNumber,
+      });
+      if (!res.ok) {
+        toast.error(res.error || "Could not create user");
+        return;
+      }
+      toast.success(
+        `${fullName} created — a set-password email was sent to ${form.email}`,
+      );
+      setForm({ firstName: "", lastName: "", username: "", email: "", role: form.role });
+      setExtra(() => {
+        const seeded: Record<string, string> = {};
+        for (const f of ROLE_FIELDS[form.role] ?? []) if (f.lockedPrefix) seeded[f.key] = f.lockedPrefix;
+        return seeded;
+      });
+      setIdType("sa_id");
+      setIdValue("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create user");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -272,16 +225,6 @@ function CreateUser() {
           </div>
 
           <div>
-<<<<<<< Updated upstream
-            <label className="text-sm font-medium block mb-1.5">
-              Full name
-            </label>
-            <input
-              value={form.fullName}
-              onChange={(e) => set("fullName")(e.target.value)}
-              required
-              className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
-=======
             <label className="text-sm font-medium block mb-2">Identification</label>
             <div className="flex gap-4 mb-2">
               <label className="flex items-center gap-2 text-sm cursor-pointer">
@@ -310,7 +253,6 @@ function CreateUser() {
               required
               inputMode={idType === "sa_id" ? "numeric" : "text"}
               className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] font-mono text-sm"
->>>>>>> Stashed changes
             />
           </div>
 
@@ -327,7 +269,6 @@ function CreateUser() {
               />
             </div>
             <div>
-<<<<<<< Updated upstream
               <label className="text-sm font-medium block mb-1.5">
                 Email address
               </label>
@@ -339,24 +280,6 @@ function CreateUser() {
                 placeholder="their.name@example.com"
                 className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
               />
-=======
-              <label className="text-sm font-medium block mb-1.5">Password</label>
-              <div className="flex gap-2">
-                <input type="text" value={form.password} onChange={(e) => set("password")(e.target.value)} required
-                  className="flex-1 px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] font-mono text-sm" />
-                <button
-                  type="button"
-                  onClick={handleGeneratePassword}
-                  title="Generate random password"
-                  className="px-3 rounded-md border hover:bg-secondary flex items-center justify-center"
-                >
-                  <RefreshCw size={16} />
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Share this with the staff member directly — min. 6 characters (Firebase requirement).
-              </p>
->>>>>>> Stashed changes
             </div>
           </div>
 
@@ -375,14 +298,7 @@ function CreateUser() {
             <label className="text-sm font-medium block mb-2">Role</label>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {STAFF_ROLES.map((r) => (
-<<<<<<< Updated upstream
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => set("role")(r)}
-=======
                 <button key={r} type="button" onClick={() => handleRoleChange(r)}
->>>>>>> Stashed changes
                   className={`px-3 py-2.5 rounded-md text-sm capitalize border transition ${
                     form.role === r
                       ? "bg-[oklch(0.55_0.18_245)] text-white border-transparent"
@@ -428,32 +344,10 @@ function CreateUser() {
           )}
 
           <div className="flex justify-end gap-2 pt-2">
-<<<<<<< Updated upstream
-            <button
-              type="button"
-              onClick={() =>
-                setForm({
-                  fullName: "",
-                  username: "",
-                  email: "",
-                  role: "doctor",
-                })
-              }
-              className="border px-4 py-2 rounded-md text-sm hover:bg-secondary"
-            >
-              Reset
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60"
-            >
-=======
-            <button type="button" onClick={() => { setForm({ firstName: "", lastName: "", username: "", password: "", role: "doctor" }); setExtra({ licenseNumber: "MP" }); setIdType("sa_id"); setIdValue(""); }}
+            <button type="button" onClick={() => { setForm({ firstName: "", lastName: "", username: "", email: "", role: "doctor" }); setExtra({ licenseNumber: "MP" }); setIdType("sa_id"); setIdValue(""); }}
               className="border px-4 py-2 rounded-md text-sm hover:bg-secondary">Reset</button>
             <button type="submit" disabled={saving}
               className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60">
->>>>>>> Stashed changes
               {saving ? "Creating..." : "Create user"}
             </button>
           </div>
