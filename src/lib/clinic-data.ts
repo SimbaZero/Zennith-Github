@@ -37,6 +37,8 @@ import {
 import { auth, db, firebaseConfig } from "@/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { notifyUser, userIdForStaff } from "@/lib/notify";
+import { logAction } from "@/lib/audit";
+import { getAuth, getUsername } from "@/lib/auth";
 
 // Same fix already proven in doctor-service.ts's waitForAuthReady(): on a
 // hard page load, auth.currentUser can still be null for a brief moment
@@ -1051,6 +1053,8 @@ export async function createAppointment(input: {
   time: string;
   type: string;
   clinician?: string;
+  /** Staff ID of whoever is booking (e.g. "Doc-2"), recorded in the audit log. */
+  actorId?: string;
 }): Promise<void> {
   // Booking needs the server: it checks the clinician isn't already booked
   // at that exact time (below), and offline that check reads a stale cache
@@ -1120,6 +1124,21 @@ export async function createAppointment(input: {
     ...(patient.data()?.clinicId != null
       ? { clinicId: patient.data()?.clinicId }
       : {}),
+  });
+
+  // Audit trail. Shared by doctor, nurse and receptionist booking, so every
+  // role that books is covered from this one place. clinicId is the
+  // patient's (same as the appointment above), which is what the clinic
+  // admin's audit page filters on. Clinical detail (appointType) is left out
+  // on purpose — the log records who booked what, not the patient's care.
+  const clinicIdForLog = patient.data()?.clinicId ?? null;
+  logAction({
+    clinicId: clinicIdForLog != null ? Number(clinicIdForLog) : null,
+    // The booker's own staff ID when the page passes it (doctor page does);
+    // falls back to the login username for pages not yet updated.
+    actor_id: input.actorId || getUsername() || "system",
+    action_type: "appointment.create",
+    description: `${getAuth() ?? "user"} booked appointment #${nextId} for ${input.patientId} with ${clinician} on ${input.date} at ${input.time}`,
   });
 
   // Tell the clinician they've been booked — previously they'd only find
