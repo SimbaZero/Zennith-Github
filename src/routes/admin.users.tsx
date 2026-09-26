@@ -9,6 +9,7 @@ import {
 } from "@/lib/auth";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { passesLuhn } from "@/lib/luhn";
 
 export const Route = createFileRoute("/admin/users")({ component: CreateUser });
 
@@ -78,6 +79,9 @@ function CreateUser() {
   const [idType, setIdType] = useState<IdType>("sa_id");
   const [idValue, setIdValue] = useState("");
   const [saving, setSaving] = useState(false);
+  // Luhn checksum on SA ID numbers. On by default every time the page loads;
+  // switch it off only when testing with made-up ID numbers.
+  const [luhnEnabled, setLuhnEnabled] = useState(true);
 
   const set = (k: keyof typeof form) => (v: any) => setForm({ ...form, [k]: v });
 
@@ -129,6 +133,15 @@ function CreateUser() {
     }
     if (idType === "sa_id" && !/^\d{13}$/.test(idValue.trim())) {
       toast.error("SA ID number must be 13 digits");
+      return;
+    }
+    // Runs after the 13-digit check and before addUser(), which does the
+    // uniqueness check — so an invalid ID never reaches the database at all.
+    // Passports don't use Luhn, so this only applies to SA IDs.
+    if (idType === "sa_id" && luhnEnabled && !passesLuhn(idValue.trim())) {
+      toast.error(
+        "This SA ID number is not valid — its check digit doesn't match. Please check it for typos.",
+      );
       return;
     }
 
@@ -254,6 +267,34 @@ function CreateUser() {
               inputMode={idType === "sa_id" ? "numeric" : "text"}
               className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] font-mono text-sm"
             />
+            {idType === "sa_id" && (
+              <div className="flex items-center justify-between gap-3 mt-2 px-3 py-2 border rounded-md bg-secondary/30">
+                <div>
+                  <p className="text-sm font-medium">Luhn ID check</p>
+                  <p className="text-xs text-muted-foreground">
+                    {luhnEnabled
+                      ? "On — SA ID numbers must pass the checksum."
+                      : "Off — testing mode, the checksum is skipped."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={luhnEnabled}
+                  aria-label="Luhn ID check"
+                  onClick={() => setLuhnEnabled((v) => !v)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                    luhnEnabled ? "bg-[oklch(0.55_0.18_245)]" : "bg-gray-300"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      luhnEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
