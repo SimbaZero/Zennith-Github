@@ -126,7 +126,11 @@ function DoctorAppointments() {
 
     setSaving(true);
     try {
-      await createAppointment({ ...draft, clinician: doctor?.doctorId });
+      await createAppointment({
+        ...draft,
+        clinician: doctor?.doctorId,
+        actorId: doctor?.doctorId,
+      });
       toast.success(
         `Appointment booked for ${draft.patientId} on ${draft.date} at ${draft.time}`,
       );

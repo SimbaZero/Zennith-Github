@@ -4,39 +4,158 @@ import {
   addUser,
   STAFF_ROLES,
   useCurrentAdmin,
+  getUserFacility,
   type StaffRole,
 } from "@/lib/auth";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { passesLuhn } from "@/lib/luhn";
 
 export const Route = createFileRoute("/admin/users")({ component: CreateUser });
+
+// ---- Role-specific field definitions ----------------------------------
+// Adjust these to match whatever fields actually exist (or should exist)
+// in your Firestore staff/profile documents. Each field is rendered
+// automatically based on the selected role.
+type FieldDef = {
+  key: string;
+  label: string;
+  placeholder?: string;
+  required?: boolean;
+  type?: "text" | "tel" | "email";
+  /** If set, this field's value is force-prefixed and the prefix can't be edited/deleted. */
+  lockedPrefix?: string;
+};
+
+// Registration numbers that must start with a fixed council prefix.
+// Doctors -> HPCSA "MP" numbers, Nurses -> SANC "NUR" numbers.
+const ROLE_FIELDS: Record<StaffRole, FieldDef[]> = {
+  doctor: [
+    { key: "licenseNumber", label: "HPCSA registration number", placeholder: "0123456", required: true, lockedPrefix: "MP" },
+    { key: "specialty", label: "Specialty", placeholder: "e.g. General Practice", required: true },
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+  ],
+  nurse: [
+    { key: "licenseNumber", label: "SANC registration number", placeholder: "0123456", required: true, lockedPrefix: "NUR" },
+    { key: "ward", label: "Ward / department", placeholder: "e.g. Outpatients" },
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+  ],
+  pharmacist: [
+    { key: "licenseNumber", label: "SAPC registration number", placeholder: "e.g. PHM0123456", required: true },
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+  ],
+  receptionist: [
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+  ],
+};
+
+// Ensures a value always starts with the given locked prefix and strips
+// any attempt to type over/remove it. Whatever the user types after the
+// prefix is preserved as-is (so "MP" + "0123456" -> "MP0123456").
+function withLockedPrefix(prefix: string, raw: string) {
+  const upper = raw.toUpperCase();
+  if (!upper.startsWith(prefix)) {
+    // User deleted into or past the prefix, or pasted something odd —
+    // strip any partial/duplicate prefix attempt then re-apply it.
+    const stripped = upper.replace(new RegExp(`^${prefix}`), "");
+    return prefix + stripped.replace(new RegExp(`^${prefix}`), "");
+  }
+  return upper;
+}
+
+type IdType = "sa_id" | "passport";
 
 function CreateUser() {
   const { admin } = useCurrentAdmin();
 
   const [form, setForm] = useState({
-    fullName: "",
+    firstName: "",
+    lastName: "",
     username: "",
     email: "",
     role: "doctor" as StaffRole,
   });
+  const [extra, setExtra] = useState<Record<string, string>>({ licenseNumber: "MP" });
+  const [idType, setIdType] = useState<IdType>("sa_id");
+  const [idValue, setIdValue] = useState("");
   const [saving, setSaving] = useState(false);
-  const set = (k: keyof typeof form) => (v: any) =>
-    setForm({ ...form, [k]: v });
+  // Luhn checksum on SA ID numbers. On by default every time the page loads;
+  // switch it off only when testing with made-up ID numbers.
+  const [luhnEnabled, setLuhnEnabled] = useState(true);
+
+  const set = (k: keyof typeof form) => (v: any) => setForm({ ...form, [k]: v });
+
+  const setExtraField = (field: FieldDef) => (v: string) => {
+    const value = field.lockedPrefix ? withLockedPrefix(field.lockedPrefix, v) : v;
+    setExtra((prev) => ({ ...prev, [field.key]: value }));
+  };
+
+  const fields = useMemo(() => ROLE_FIELDS[form.role] ?? [], [form.role]);
+
+  const handleRoleChange = (r: StaffRole) => {
+    // Reset role-specific fields when switching roles so stale values
+    // from a previous role don't get submitted (e.g. leftover license #).
+    // Pre-fill any locked-prefix fields (MP / NUR) so the admin can't
+    // accidentally submit a registration number without the prefix.
+    const nextFields = ROLE_FIELDS[r] ?? [];
+    const seeded: Record<string, string> = {};
+    for (const f of nextFields) {
+      if (f.lockedPrefix) seeded[f.key] = f.lockedPrefix;
+    }
+    setForm({ ...form, role: r });
+    setExtra(seeded);
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.username || !form.email || !form.fullName) {
+    if (!form.username || !form.email || !form.firstName || !form.lastName) {
       toast.error("All fields are required");
       return;
     }
-    if (admin?.clinicId == null) {
+
+    // A locked-prefix field ("MP" / "NUR") is only actually filled in
+    // once something follows the prefix — otherwise it's still just
+    // the placeholder prefix on its own.
+    const missingField = fields.find((f) => {
+      if (!f.required) return false;
+      const v = extra[f.key]?.trim() ?? "";
+      if (f.lockedPrefix) return v.length <= f.lockedPrefix.length;
+      return !v;
+    });
+    if (missingField) {
+      toast.error(`${missingField.label} is required`);
+      return;
+    }
+
+    if (!idValue.trim()) {
+      toast.error(idType === "sa_id" ? "South African ID number is required" : "Passport number is required");
+      return;
+    }
+    if (idType === "sa_id" && !/^\d{13}$/.test(idValue.trim())) {
+      toast.error("SA ID number must be 13 digits");
+      return;
+    }
+    // Runs after the 13-digit check and before addUser(), which does the
+    // uniqueness check — so an invalid ID never reaches the database at all.
+    // Passports don't use Luhn, so this only applies to SA IDs.
+    if (idType === "sa_id" && luhnEnabled && !passesLuhn(idValue.trim())) {
+      toast.error(
+        "This SA ID number is not valid — its check digit doesn't match. Please check it for typos.",
+      );
+      return;
+    }
+
+    const fid = getUserFacility();
+    if (admin?.clinicId == null && !fid) {
       toast.error(
         "Your admin account isn't linked to a clinic — contact the platform owner.",
       );
       return;
     }
+
     setSaving(true);
+    const fullName = `${form.firstName.trim()} ${form.lastName.trim()}`;
+
     // addUser now throws when offline (it calls Firebase Auth and sends an
     // email, neither of which Firestore's offline queue can carry). Catch it
     // so the admin sees why, instead of a form stuck on "Saving".
@@ -45,17 +164,33 @@ function CreateUser() {
         username: form.username.trim(),
         email: form.email.trim(),
         role: form.role,
-        fullName: form.fullName.trim(),
-        clinicId: admin.clinicId,
+        fullName,
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        facilityId: fid ?? undefined,
+        clinicId: admin?.clinicId,
+        idType,
+        idNumber: idValue.trim(),
+        licenseNumber: extra.licenseNumber,
+        specialty: extra.specialty,
+        ward: extra.ward,
+        contactNumber: extra.contactNumber,
       });
       if (!res.ok) {
         toast.error(res.error || "Could not create user");
         return;
       }
       toast.success(
-        `${form.fullName} created — a set-password email was sent to ${form.email}`,
+        `${fullName} created — a set-password email was sent to ${form.email}`,
       );
-      setForm({ ...form, fullName: "", username: "", email: "" });
+      setForm({ firstName: "", lastName: "", username: "", email: "", role: form.role });
+      setExtra(() => {
+        const seeded: Record<string, string> = {};
+        for (const f of ROLE_FIELDS[form.role] ?? []) if (f.lockedPrefix) seeded[f.key] = f.lockedPrefix;
+        return seeded;
+      });
+      setIdType("sa_id");
+      setIdValue("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not create user");
     } finally {
@@ -89,16 +224,77 @@ function CreateUser() {
         </div>
 
         <form onSubmit={submit} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium block mb-1.5">First name(s)</label>
+              <input value={form.firstName} onChange={(e) => set("firstName")(e.target.value)} required
+                className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]" />
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1.5">Surname</label>
+              <input value={form.lastName} onChange={(e) => set("lastName")(e.target.value)} required
+                className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]" />
+            </div>
+          </div>
+
           <div>
-            <label className="text-sm font-medium block mb-1.5">
-              Full name
-            </label>
+            <label className="text-sm font-medium block mb-2">Identification</label>
+            <div className="flex gap-4 mb-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={idType === "sa_id"}
+                  onChange={() => { setIdType("sa_id"); setIdValue(""); }}
+                  className="w-4 h-4"
+                />
+                South African ID number
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={idType === "passport"}
+                  onChange={() => { setIdType("passport"); setIdValue(""); }}
+                  className="w-4 h-4"
+                />
+                Passport number
+              </label>
+            </div>
             <input
-              value={form.fullName}
-              onChange={(e) => set("fullName")(e.target.value)}
+              value={idValue}
+              onChange={(e) => setIdValue(idType === "sa_id" ? e.target.value.replace(/\D/g, "").slice(0, 13) : e.target.value)}
+              placeholder={idType === "sa_id" ? "13-digit SA ID number" : "Passport number"}
               required
-              className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
+              inputMode={idType === "sa_id" ? "numeric" : "text"}
+              className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] font-mono text-sm"
             />
+            {idType === "sa_id" && (
+              <div className="flex items-center justify-between gap-3 mt-2 px-3 py-2 border rounded-md bg-secondary/30">
+                <div>
+                  <p className="text-sm font-medium">Luhn ID check</p>
+                  <p className="text-xs text-muted-foreground">
+                    {luhnEnabled
+                      ? "On — SA ID numbers must pass the checksum."
+                      : "Off — testing mode, the checksum is skipped."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={luhnEnabled}
+                  aria-label="Luhn ID check"
+                  onClick={() => setLuhnEnabled((v) => !v)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                    luhnEnabled ? "bg-[oklch(0.55_0.18_245)]" : "bg-gray-300"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      luhnEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -143,10 +339,7 @@ function CreateUser() {
             <label className="text-sm font-medium block mb-2">Role</label>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {STAFF_ROLES.map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => set("role")(r)}
+                <button key={r} type="button" onClick={() => handleRoleChange(r)}
                   className={`px-3 py-2.5 rounded-md text-sm capitalize border transition ${
                     form.role === r
                       ? "bg-[oklch(0.55_0.18_245)] text-white border-transparent"
@@ -159,26 +352,43 @@ function CreateUser() {
             </div>
           </div>
 
+          {fields.length > 0 && (
+            <div className="border-t pt-4">
+              <label className="text-sm font-medium block mb-2 capitalize">{form.role} details</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {fields.map((f) => (
+                  <div key={f.key}>
+                    <label className="text-sm font-medium block mb-1.5">
+                      {f.label}{f.required && <span className="text-destructive"> *</span>}
+                    </label>
+                    <input
+                      type={f.type ?? "text"}
+                      value={extra[f.key] ?? (f.lockedPrefix ?? "")}
+                      onChange={(e) => setExtraField(f)(e.target.value)}
+                      onKeyDown={(e) => {
+                        // Block backspace/delete from eating into the locked prefix.
+                        if (!f.lockedPrefix) return;
+                        const el = e.currentTarget;
+                        const atOrBeforePrefixEnd = el.selectionStart !== null && el.selectionStart <= f.lockedPrefix.length;
+                        if ((e.key === "Backspace" || e.key === "Delete") && atOrBeforePrefixEnd && el.selectionStart === el.selectionEnd) {
+                          e.preventDefault();
+                        }
+                      }}
+                      placeholder={f.lockedPrefix ? `${f.lockedPrefix}${f.placeholder}` : f.placeholder}
+                      required={f.required}
+                      className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] font-mono text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() =>
-                setForm({
-                  fullName: "",
-                  username: "",
-                  email: "",
-                  role: "doctor",
-                })
-              }
-              className="border px-4 py-2 rounded-md text-sm hover:bg-secondary"
-            >
-              Reset
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60"
-            >
+            <button type="button" onClick={() => { setForm({ firstName: "", lastName: "", username: "", email: "", role: "doctor" }); setExtra({ licenseNumber: "MP" }); setIdType("sa_id"); setIdValue(""); }}
+              className="border px-4 py-2 rounded-md text-sm hover:bg-secondary">Reset</button>
+            <button type="submit" disabled={saving}
+              className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60">
               {saving ? "Creating..." : "Create user"}
             </button>
           </div>
