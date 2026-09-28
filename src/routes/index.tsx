@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ZennithStar } from "@/components/ZennithStar";
+import { LandingPatientAssistant } from "@/components/LandingPatientAssistant";
 import { listClinics, usePublicQueueSummary } from "@/lib/clinic-data";
 import { useNow } from "@/lib/store";
 import { Mail, MapPin, Plus, Minus } from "lucide-react";
@@ -74,6 +75,7 @@ function Home() {
       <Team />
       <Questions />
       <Contact />
+      <LandingPatientAssistant />
 
       <footer className="bg-[oklch(0.16_0.07_265)]">
         <div className="mx-auto max-w-6xl px-6 py-8 flex flex-wrap items-center gap-4 text-sm text-white/60">
