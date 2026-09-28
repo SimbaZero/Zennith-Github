@@ -1,7 +1,9 @@
 import "./lib/error-capture";
 
+import { processDueAppointmentReminders } from "./lib/appointment-reminders";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { handleInboundSmsReply } from "./lib/smsportal";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -68,6 +70,48 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/sms/inbound") {
+      try {
+        const contentType = request.headers.get("content-type") ?? "";
+        let payload: Record<string, unknown> = {};
+
+        if (contentType.includes("application/json")) {
+          payload = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+        } else {
+          const form = await request.formData().catch(() => new FormData());
+          payload = Object.fromEntries(form.entries());
+        }
+
+        const result = await handleInboundSmsReply({
+          from: String(payload.from ?? ""),
+          message: String(payload.message ?? payload.text ?? payload.body ?? ""),
+          text: String(payload.text ?? ""),
+          body: String(payload.body ?? ""),
+        });
+
+        if (!result.ok) {
+          return Response.json({ ok: false, reason: result.reason }, { status: 400 });
+        }
+
+        return Response.json({ ok: true, action: result.action, patientId: result.patientId });
+      } catch (error) {
+        console.error("[sms-webhook] failed:", error);
+        return Response.json({ ok: false, reason: "invalid-request" }, { status: 400 });
+      }
+    }
+
+    if (url.pathname === "/api/sms/reminders" || url.pathname === "/__scheduled__") {
+      try {
+        const results = await processDueAppointmentReminders(new Date());
+        return Response.json({ ok: true, results });
+      } catch (error) {
+        console.error("[sms-reminders] failed:", error);
+        return Response.json({ ok: false, reason: "reminder-run-failed" }, { status: 500 });
+      }
+    }
+
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
@@ -76,5 +120,9 @@ export default {
       console.error(error);
       return brandedErrorResponse();
     }
+  },
+  async scheduled(_controller: unknown, _env: unknown, _ctx: unknown) {
+    await processDueAppointmentReminders(new Date());
+    return;
   },
 };
