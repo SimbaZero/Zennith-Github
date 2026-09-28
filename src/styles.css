@@ -198,6 +198,27 @@
 .animate-blob-2 { animation: blob2 22s ease-in-out infinite; }
 .animate-blob-3 { animation: blob3 26s ease-in-out infinite; }
 
+/* Slow light sweep across placeholder blocks ("coming soon" content).
+   Layered over the block's own background colour. */
+@keyframes placeholder-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+.animate-placeholder-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(255 255 255 / 0.1) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: placeholder-shimmer 3.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-placeholder-shimmer { animation: none; }
+}
+
 
 @media print {
   body { background: white !important; }

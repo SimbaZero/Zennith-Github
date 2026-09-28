@@ -1,64 +1,54 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { AppShell } from "@/components/AppShell";
 import {
-  AppShell,
-  StatusBadge,
-  computeStockStatus,
-} from "@/components/AppShell";
-import { useInventory, useCurrentPharmacist } from "@/lib/pharmacist-service";
+  useClinicForecasts,
+  useCurrentPharmacist,
+  FORECAST_STATUS_STYLE,
+  FORECAST_STATUS_TEXT,
+  type MedForecast,
+} from "@/lib/pharmacist-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
 
 export const Route = createFileRoute("/pharmacist/stock")({ component: Stock });
 
+// A full bar means at least this many days of cover left.
+const FULL_BAR_DAYS = 30;
+
 function Stock() {
   const { pharmacist } = useCurrentPharmacist();
   const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
-  const { stock: items } = useInventory();
   const navigate = useNavigate();
 
-  // Filters to the selected clinic now — the old selector here never
-  // actually did this (see the TODO this replaces). Stock with no
-  // clinicId at all (older data) is shown regardless of selection,
-  // rather than silently vanishing.
-  const clinicFiltered = useMemo(
-    () =>
-      realClinic.activeClinicId == null
-        ? items
-        : items.filter(
-            (i) =>
-              i.clinicId == null || i.clinicId === realClinic.activeClinicId,
-          ),
-    [items, realClinic.activeClinicId],
-  );
+  // Every figure on this page — average per day, reorder point, status —
+  // comes from useClinicForecasts, the same hook Medication Overview uses,
+  // scoped to the selected clinic. Don't compute usage or thresholds locally
+  // here; that's how the two pages ended up disagreeing (this page used to
+  // show a fake "Avg/day" of threshold/5).
+  const { forecasts } = useClinicForecasts(realClinic.activeClinicId);
 
-  const enriched = useMemo(
-    () =>
-      clinicFiltered.map((i) => ({
-        ...i,
-        status: computeStockStatus(i.units, i.threshold),
-      })),
-    [clinicFiltered],
-  );
-
-  const valueColor = (status: "OK" | "Low" | "Out") =>
-    status === "OK"
-      ? "text-[oklch(0.5_0.18_160)]"
-      : status === "Low"
+  const valueColor = (f: MedForecast) =>
+    f.status === "critical" || f.onHand <= 0
+      ? "text-[oklch(0.55_0.2_25)]"
+      : f.status === "reorder"
         ? "text-[oklch(0.55_0.18_70)]"
-        : "text-[oklch(0.55_0.2_25)]";
-  const barColor = (status: "OK" | "Low" | "Out") =>
-    status === "OK"
-      ? "bg-[oklch(0.65_0.18_160)]"
-      : status === "Low"
+        : f.status === "healthy"
+          ? "text-[oklch(0.5_0.18_160)]"
+          : "text-foreground";
+  const barColor = (f: MedForecast) =>
+    f.status === "critical"
+      ? "bg-[oklch(0.6_0.2_25)]"
+      : f.status === "reorder"
         ? "bg-[oklch(0.7_0.18_75)]"
-        : "bg-[oklch(0.6_0.2_25)]";
+        : f.status === "healthy"
+          ? "bg-[oklch(0.65_0.18_160)]"
+          : "bg-slate-300";
 
   return (
     <AppShell role="pharmacist" title="Stock Management">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
           <p className="text-sm text-muted-foreground">
-            {enriched.length} medications at{" "}
+            {forecasts.length} medications at{" "}
             {realClinic.activeClinicName ?? "your clinic"} · live · updates from
             Deliveries
           </p>
@@ -72,42 +62,51 @@ function Stock() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {enriched.map((s) => {
-          const pct = Math.min(
-            100,
-            (s.units / Math.max(s.threshold * 2, 1)) * 100,
-          );
+        {forecasts.map((f) => {
+          const pct =
+            f.daysRemaining == null
+              ? 0
+              : Math.min(100, (f.daysRemaining / FULL_BAR_DAYS) * 100);
           return (
             <button
-              key={s.name}
+              key={f.name}
               onClick={() => navigate({ to: "/pharmacist/deliveries" })}
               className="text-left bg-white rounded-xl border p-5 hover:border-[oklch(0.55_0.18_245)] hover:shadow-md transition"
             >
               <div className="flex items-start justify-between gap-2">
                 <p className="text-[10px] tracking-wider text-muted-foreground">
-                  {s.category}
+                  {f.category}
                 </p>
-                <StatusBadge status={s.status} />
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap border ${FORECAST_STATUS_STYLE[f.status]}`}
+                >
+                  {FORECAST_STATUS_TEXT[f.status]}
+                </span>
               </div>
               <h4 className="font-semibold text-sm mt-1 leading-tight">
-                {s.name}
+                {f.name}
               </h4>
-              <p className={`text-3xl font-bold mt-3 ${valueColor(s.status)}`}>
-                {s.units}{" "}
+              <p className={`text-3xl font-bold mt-3 ${valueColor(f)}`}>
+                {f.onHand}{" "}
                 <span className="text-sm font-normal text-muted-foreground">
                   units
                 </span>
               </p>
               <div className="h-1.5 bg-secondary rounded-full mt-3 overflow-hidden">
                 <div
-                  className={`h-full ${barColor(s.status)} transition-all`}
+                  className={`h-full ${barColor(f)} transition-all`}
                   style={{ width: `${pct}%` }}
                 />
               </div>
               <div className="flex justify-between text-xs text-muted-foreground mt-2">
-                <span>Threshold: {s.threshold}</span>
-                <span>Avg/day: {s.avgDay}</span>
+                <span>Reorder point: {f.reorderPoint || "—"}</span>
+                <span>Avg/day: {f.avgDailyUse || "—"}</span>
               </div>
+              {f.daysRemaining != null && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  About {f.daysRemaining} days left
+                </p>
+              )}
               <p className="text-[11px] text-[oklch(0.55_0.18_245)] mt-3">
                 Manage in Deliveries →
               </p>

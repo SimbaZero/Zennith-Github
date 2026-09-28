@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ZennithStar } from "@/components/ZennithStar";
 import { listClinics, usePublicQueueSummary } from "@/lib/clinic-data";
 import { useNow } from "@/lib/store";
-import { Github, Linkedin, Mail, MapPin, Plus, Minus } from "lucide-react";
+import { Mail, MapPin, Plus, Minus } from "lucide-react";
 import clinicPhoto from "@/assets/hero-clinic-2.jpg";
 import clinicPhotoWide from "@/assets/hero-clinic-1.jpg";
 import clinicPhotoThird from "@/assets/hero-clinic-3.jpg";
@@ -31,43 +31,6 @@ export const Route = createFileRoute("/")({
     ],
   }),
 });
-
-/* ---------------------------------------------------------------------------
- * Team.
- *
- * Roles are deliberately blank for now — each member fills in their own at the
- * next meeting, rather than having one written for them. The GitHub and
- * LinkedIn icons only render once a real URL is set, so the page never shows
- * a link that goes nowhere.
- * ------------------------------------------------------------------------- */
-type Member = {
-  name: string;
-  role: string;
-  blurb: string;
-  github?: string;
-  linkedin?: string;
-  photo?: string;
-};
-
-const TEAM: Member[] = [
-  { name: "Chiedza Tinotenda Mutizwa", role: "", blurb: "" },
-  { name: "Ndaedzo Nkhumeleni", role: "", blurb: "" },
-  { name: "Simbarashe Gandi", role: "", blurb: "" },
-  { name: "Nombulelo Radebe", role: "", blurb: "" },
-  { name: "Katlego Esther Michelle Setsome", role: "", blurb: "" },
-  { name: "Nobuhle Lebani Ndlovu", role: "", blurb: "" },
-  { name: "Olorato", role: "", blurb: "" },
-  { name: "David Ogo Oluwa Adebayo", role: "", blurb: "" },
-];
-
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase();
 
 const FAQ: { q: string; a: string }[] = [
   {
@@ -100,19 +63,20 @@ function Home() {
   const now = useNow(60_000);
 
   return (
-    <div className="min-h-screen bg-[oklch(0.985_0.005_240)] text-[oklch(0.18_0.05_260)]">
+    <div className="min-h-screen bg-[oklch(0.95_0.014_250)] text-[oklch(0.18_0.05_260)]">
       <SiteHeader />
       <Hero />
+      {/* Section backgrounds alternate for rhythm: light (page), white,
+          navy, light, navy, white, light — then a navy footer. */}
       <Roles />
-      <PhotoBand />
       <Joining />
       <About />
       <Team />
       <Questions />
       <Contact />
 
-      <footer className="border-t border-[oklch(0.9_0.01_250)]">
-        <div className="mx-auto max-w-6xl px-6 py-8 flex flex-wrap items-center gap-4 text-sm text-[oklch(0.5_0.03_260)]">
+      <footer className="bg-[oklch(0.16_0.07_265)]">
+        <div className="mx-auto max-w-6xl px-6 py-8 flex flex-wrap items-center gap-4 text-sm text-white/60">
           <ZennithStar size={24} />
           <span>Zennith Health Services</span>
           <span className="ml-auto">
@@ -134,7 +98,7 @@ function SiteHeader() {
   ];
 
   return (
-    <header className="sticky top-0 z-40 bg-[oklch(0.985_0.005_240)]/90 backdrop-blur border-b border-[oklch(0.9_0.01_250)]">
+    <header className="sticky top-0 z-40 bg-[oklch(0.95_0.014_250)]/90 backdrop-blur border-b border-[oklch(0.9_0.01_250)]">
       <div className="mx-auto max-w-6xl px-6 h-16 flex items-center gap-3">
         <a href="#top" className="flex items-center gap-2.5 shrink-0">
           <ZennithStar size={30} />
@@ -156,7 +120,7 @@ function SiteHeader() {
         <div className="ml-auto flex items-center gap-2">
           <Link
             to="/login"
-            className="text-sm px-4 py-2 rounded-md hover:bg-[oklch(0.94_0.01_250)]"
+            className="text-sm px-4 py-2 rounded-md hover:bg-white"
           >
             Sign in
           </Link>
@@ -208,7 +172,7 @@ function Hero() {
           alt=""
           className="h-full w-full object-cover object-[35%_center] opacity-[0.16]"
         />
-        <div className="absolute inset-0 bg-gradient-to-r from-[oklch(0.985_0.005_240)]/70 via-[oklch(0.985_0.005_240)]/85 to-[oklch(0.985_0.005_240)]" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[oklch(0.95_0.014_250)]/70 via-[oklch(0.95_0.014_250)]/85 to-[oklch(0.95_0.014_250)]" />
       </div>
 
       <div className="mx-auto max-w-6xl px-6 pt-16 pb-20 grid lg:grid-cols-[1.05fr_1fr] gap-12 lg:gap-16 items-center">
@@ -310,13 +274,23 @@ function Roles() {
       className="border-y border-[oklch(0.9_0.01_250)] bg-white"
     >
       <div className="mx-auto max-w-6xl px-6 py-20">
-        <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
-          One system, five kinds of work
-        </h2>
-        <p className="mt-3 text-[oklch(0.45_0.03_260)] max-w-[60ch]">
-          A clinic isn&apos;t one job. Zennith gives each role the part they
-          need, working off the same information.
-        </p>
+        <div className="grid lg:grid-cols-[1fr_24rem] gap-10 items-end">
+          <div>
+            <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
+              One system, five kinds of work
+            </h2>
+            <p className="mt-3 text-[oklch(0.45_0.03_260)] max-w-[60ch]">
+              A clinic isn&apos;t one job. Zennith gives each role the part they
+              need, working off the same information.
+            </p>
+          </div>
+          {/* Two roles working from the same thing — the point of this section. */}
+          <img
+            src={clinicPhoto}
+            alt="A doctor and a nurse checking something together at a medicine counter"
+            className="rounded-lg w-full object-cover aspect-[4/3]"
+          />
+        </div>
 
         <div className="mt-10 divide-y divide-[oklch(0.92_0.01_250)]">
           {rows.map((r) => (
@@ -346,35 +320,6 @@ function Roles() {
   );
 }
 
-/* A full-width band of the clinics themselves, between the abstract role list
- * and the joining steps — it breaks up two text-heavy sections and puts the
- * actual setting on the page. */
-function PhotoBand() {
-  const shots = [
-    { src: clinicPhotoWide, caption: "Reception and triage" },
-    { src: clinicPhoto, caption: "Consultation rooms" },
-    { src: clinicPhotoThird, caption: "Dispensary and stock" },
-  ];
-  return (
-    <section aria-hidden className="mx-auto max-w-6xl px-6 py-14">
-      <div className="grid sm:grid-cols-3 gap-4">
-        {shots.map((shot) => (
-          <figure key={shot.caption} className="relative">
-            <img
-              src={shot.src}
-              alt=""
-              className="w-full aspect-[4/3] object-cover rounded-lg"
-            />
-            <figcaption className="absolute bottom-0 inset-x-0 p-3 text-xs text-white rounded-b-lg bg-gradient-to-t from-black/65 to-transparent">
-              {shot.caption}
-            </figcaption>
-          </figure>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 /* Numbered because this genuinely is a sequence. */
 function Joining() {
   const steps = [
@@ -397,19 +342,20 @@ function Joining() {
   ];
 
   return (
-    <section id="joining" className="mx-auto max-w-6xl px-6 py-20">
-      <div className="grid lg:grid-cols-[1fr_1.1fr] gap-12 items-start">
+    <section id="joining" className="bg-[oklch(0.16_0.07_265)] text-white">
+      <div className="mx-auto max-w-6xl px-6 py-20 grid lg:grid-cols-[1fr_1.1fr] gap-12 items-start">
         <div>
           <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
             Getting a clinic onto Zennith
           </h2>
-          <p className="mt-3 text-[oklch(0.45_0.03_260)] max-w-[50ch]">
+          <p className="mt-3 text-white/70 max-w-[50ch]">
             Public or private, the process is the same. Most clinics are running
             within a day of approval.
           </p>
+          {/* Beside the steps that end with your own staff on the system. */}
           <img
-            src={clinicPhoto}
-            alt=""
+            src={clinicPhotoThird}
+            alt="Three clinic staff standing together outside their clinic"
             className="mt-8 rounded-lg w-full object-cover aspect-[4/3] hidden lg:block"
           />
         </div>
@@ -417,12 +363,12 @@ function Joining() {
         <ol className="space-y-6">
           {steps.map((s, i) => (
             <li key={s.t} className="flex gap-5">
-              <span className="font-serif text-2xl text-[oklch(0.65_0.15_235)] w-8 shrink-0 tabular-nums">
+              <span className="font-serif text-2xl text-[oklch(0.72_0.13_245)] w-8 shrink-0 tabular-nums">
                 {i + 1}
               </span>
               <div>
                 <h3 className="font-medium">{s.t}</h3>
-                <p className="text-[15px] text-[oklch(0.45_0.03_260)] mt-1 max-w-[55ch]">
+                <p className="text-[15px] text-white/70 mt-1 max-w-[55ch]">
                   {s.d}
                 </p>
               </div>
@@ -436,13 +382,13 @@ function Joining() {
 
 function About() {
   return (
-    <section className="bg-[oklch(0.16_0.07_265)] text-white">
+    <section>
       <div className="mx-auto max-w-6xl px-6 py-20 grid lg:grid-cols-2 gap-12 items-center">
         <div>
           <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
             Why we built it
           </h2>
-          <div className="mt-5 space-y-4 text-[15px] leading-relaxed text-white/75 max-w-[58ch]">
+          <div className="mt-5 space-y-4 text-[15px] leading-relaxed text-[oklch(0.42_0.03_260)] max-w-[58ch]">
             <p>
               South African clinics do extraordinary work with very little. What
               slows them down usually isn&apos;t clinical — it&apos;s a patient
@@ -464,9 +410,10 @@ function About() {
             </p>
           </div>
         </div>
+        {/* Beside "built with input from nurses" — a nurse with a patient. */}
         <img
           src={clinicPhotoWide}
-          alt=""
+          alt="A nurse talking with a patient in a clinic corridor"
           className="rounded-lg w-full object-cover aspect-[3/2]"
         />
       </div>
@@ -474,72 +421,50 @@ function About() {
   );
 }
 
+/* Team profiles are held back until each member has written their own role
+ * and blurb, rather than having one written for them. The placeholder is
+ * deliberate — it should read as "coming", not as something broken. */
 function Team() {
   return (
-    <section id="team" className="mx-auto max-w-6xl px-6 py-20">
-      <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
-        The people who built it
-      </h2>
-      <p className="mt-3 text-[oklch(0.45_0.03_260)] max-w-[60ch]">
-        Eight final-year Information Systems students at the University of
-        Johannesburg.
-      </p>
+    <section id="team" className="bg-[oklch(0.16_0.07_265)] text-white">
+      <div className="mx-auto max-w-6xl px-6 py-20">
+        <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
+          The people who built it
+        </h2>
+        <p className="mt-3 text-white/70 max-w-[60ch]">
+          Eight final-year Information Systems students at the University of
+          Johannesburg.
+        </p>
 
-      <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
-        {TEAM.map((m) => (
-          <article key={m.name}>
-            {m.photo ? (
-              <img
-                src={m.photo}
-                alt=""
-                className="w-full aspect-square object-cover rounded-full"
-              />
-            ) : (
-              <div className="w-full aspect-square rounded-full bg-[oklch(0.93_0.02_250)] grid place-items-center">
-                <span className="font-serif text-3xl text-[oklch(0.55_0.06_260)]">
-                  {initials(m.name)}
-                </span>
+        <div className="mt-10 rounded-xl border border-white/15 bg-white/[0.04] p-6 sm:p-8">
+          <h3 className="font-serif text-xl">Team profiles coming soon</h3>
+          <p className="mt-2 text-[15px] text-white/70 max-w-[60ch]">
+            The team is finalising their roles. Profiles will appear here once
+            each member has written their own.
+          </p>
+
+          {/* Grey outline of the cards to come, with a slow light sweep. */}
+          <div
+            aria-hidden
+            className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-8"
+          >
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i}>
+                {[
+                  "w-20 h-20 rounded-full",
+                  "mt-4 h-3.5 w-3/4 rounded",
+                  "mt-2 h-3 w-1/2 rounded",
+                ].map((shape) => (
+                  <div
+                    key={shape}
+                    className={`${shape} bg-white/[0.08] animate-placeholder-shimmer`}
+                    style={{ animationDelay: `${i * 180}ms` }}
+                  />
+                ))}
               </div>
-            )}
-
-            <h3 className="mt-4 font-medium leading-snug">{m.name}</h3>
-            <p className="text-sm text-[oklch(0.5_0.03_260)] mt-0.5">
-              {m.role || "Role to be confirmed"}
-            </p>
-            {m.blurb && (
-              <p className="text-sm text-[oklch(0.45_0.03_260)] mt-2 leading-relaxed">
-                {m.blurb}
-              </p>
-            )}
-
-            {(m.github || m.linkedin) && (
-              <div className="flex gap-3 mt-3">
-                {m.github && (
-                  <a
-                    href={m.github}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[oklch(0.5_0.03_260)] hover:text-[oklch(0.18_0.05_260)]"
-                    aria-label={`${m.name} on GitHub`}
-                  >
-                    <Github size={17} />
-                  </a>
-                )}
-                {m.linkedin && (
-                  <a
-                    href={m.linkedin}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[oklch(0.5_0.03_260)] hover:text-[oklch(0.18_0.05_260)]"
-                    aria-label={`${m.name} on LinkedIn`}
-                  >
-                    <Linkedin size={17} />
-                  </a>
-                )}
-              </div>
-            )}
-          </article>
-        ))}
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   );

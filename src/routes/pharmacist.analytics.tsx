@@ -2,12 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
-  useInventory,
-  useMedicationUsage,
-  buildForecasts,
+  useClinicForecasts,
   summariseForecasts,
   useCurrentPharmacist,
-  type MedForecast,
+  FORECAST_STATUS_STYLE as STATUS_STYLE,
+  FORECAST_STATUS_TEXT as STATUS_TEXT,
 } from "@/lib/pharmacist-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
 import {
@@ -27,43 +26,14 @@ export const Route = createFileRoute("/pharmacist/analytics")({
   component: MedicationOverview,
 });
 
-const STATUS_STYLE: Record<MedForecast["status"], string> = {
-  critical: "bg-red-50 text-red-800 border-red-200",
-  reorder: "bg-amber-50 text-amber-800 border-amber-200",
-  healthy: "bg-emerald-50 text-emerald-800 border-emerald-200",
-  unknown: "bg-slate-100 text-slate-600 border-slate-200",
-};
-
-const STATUS_TEXT: Record<MedForecast["status"], string> = {
-  critical: "Order now",
-  reorder: "Reorder soon",
-  healthy: "Healthy",
-  unknown: "No usage data",
-};
-
 function MedicationOverview() {
   const { pharmacist } = useCurrentPharmacist();
   const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
-  const { stock } = useInventory();
-  const usage = useMedicationUsage(30);
+  // Same hook as the Stock page, so the two can't disagree — and scoped to
+  // the selected clinic, usage included.
+  const { forecasts } = useClinicForecasts(realClinic.activeClinicId);
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState("");
-
-  const clinicStock = useMemo(
-    () =>
-      realClinic.activeClinicId == null
-        ? stock
-        : stock.filter(
-            (s) =>
-              s.clinicId == null || s.clinicId === realClinic.activeClinicId,
-          ),
-    [stock, realClinic.activeClinicId],
-  );
-
-  const forecasts = useMemo(
-    () => buildForecasts(clinicStock, usage),
-    [clinicStock, usage],
-  );
 
   const filtered = q.trim()
     ? forecasts.filter((f) => f.name.toLowerCase().includes(q.toLowerCase()))

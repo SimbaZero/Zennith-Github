@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   collection,
   onSnapshot,
@@ -36,7 +36,10 @@ export interface StockItem {
   category?: string;
   lastUpdated?: string;
   clinicId?: number; // NEW — which clinic this stock belongs to (mock/fallback items won't have one)
-  avgDay: number; // average units used per day — see TODO below, this is currently faked
+  // No usage figure here on purpose. There used to be an `avgDay` faked as
+  // threshold/5, which is why the Stock page and Medication Overview showed
+  // different daily usage for the same medication. Real usage comes only
+  // from useMedicationUsage / useClinicForecasts below.
 }
 
 interface RawInventoryDoc {
@@ -65,11 +68,6 @@ function mapInventoryDoc(id: string, data: RawInventoryDoc): StockItem {
     category: data.category,
     lastUpdated: data.lastUpdated,
     clinicId: data.clinicId,
-    // TODO(db): `avgDay` (average daily usage) does not exist in Firestore yet.
-    // Faking it here as threshold/5 just so the UI has a plausible-looking number.
-    // See db-issues.md #3 — needs a real decision: stored field vs. calculated
-    // from `distributions` history.
-    avgDay: Math.max(1, Math.round(toNumber(data.threshold) / 5)),
   };
 }
 
@@ -965,6 +963,7 @@ export async function recordExternalStock(input: {
 
 export interface MedForecast {
   name: string;
+  category?: string;
   onHand: number;
   avgDailyUse: number;
   daysRemaining: number | null; // null = no usage history yet
@@ -979,12 +978,20 @@ const SAFETY_DAYS = 4; // buffer against demand spikes
 const COVER_DAYS = 30; // how long an order should last
 
 /**
- * Real usage history per medication over `days`, from the distributions
+ * Real usage history per medication over `days`, from the patientDispensing
  * collection. Returns oldest-first so it charts naturally.
+ *
+ * Scoped to `clinicId`: a pharmacist can switch clinics, and without this
+ * Hillbrow's figures silently included Berea's dispensing. `undefined` means
+ * "all clinics" — the same rule the stock filter uses when no clinic is
+ * selected, so usage and stock always cover the same set of clinics.
  */
 type UsageMap = Record<string, { date: string; units: number }[]>;
 
-export function useMedicationUsage(days = 30): UsageMap {
+export function useMedicationUsage(
+  days: number,
+  clinicId: number | undefined,
+): UsageMap {
   const [usage, setUsage] = useState<UsageMap>({});
 
   useEffect(() => {
@@ -993,8 +1000,15 @@ export function useMedicationUsage(days = 30): UsageMap {
     // that page was removed, which is why every medication showed "no usage
     // data" while medication was plainly being handed out. What a clinic
     // actually consumes is what nurses dispense to patients.
+    const source =
+      clinicId == null
+        ? collection(db, "patientDispensing")
+        : query(
+            collection(db, "patientDispensing"),
+            where("clinicId", "==", clinicId),
+          );
     const unsub = onSnapshot(
-      collection(db, "patientDispensing"),
+      source,
       (snap) => {
         const dayKeys: string[] = [];
         for (let i = days - 1; i >= 0; i--) {
@@ -1040,10 +1054,58 @@ export function useMedicationUsage(days = 30): UsageMap {
       },
     );
     return () => unsub();
-  }, [days]);
+  }, [days, clinicId]);
 
   return usage;
 }
+
+/**
+ * THE source of truth for stock figures on pharmacist pages: the selected
+ * clinic's inventory, its real dispensing history, and the forecast built
+ * from both (average per day, days left, reorder point, status). The Stock
+ * page and Medication Overview both call this, so they can't disagree.
+ *
+ * Stock with no clinicId (older data) is included whichever clinic is
+ * selected, rather than silently vanishing.
+ */
+export function useClinicForecasts(clinicId: number | undefined): {
+  stock: StockItem[];
+  forecasts: MedForecast[];
+} {
+  const { stock } = useInventory();
+  const usage = useMedicationUsage(USAGE_WINDOW_DAYS, clinicId);
+
+  const clinicStock = useMemo(
+    () =>
+      clinicId == null
+        ? stock
+        : stock.filter((s) => s.clinicId == null || s.clinicId === clinicId),
+    [stock, clinicId],
+  );
+  const forecasts = useMemo(
+    () => buildForecasts(clinicStock, usage),
+    [clinicStock, usage],
+  );
+  return { stock: clinicStock, forecasts };
+}
+
+/** Days of dispensing history the forecasts average over. */
+export const USAGE_WINDOW_DAYS = 30;
+
+// Shared labels/styles so both pages describe a status the same way.
+export const FORECAST_STATUS_TEXT: Record<MedForecast["status"], string> = {
+  critical: "Order now",
+  reorder: "Reorder soon",
+  healthy: "Healthy",
+  unknown: "No usage data",
+};
+
+export const FORECAST_STATUS_STYLE: Record<MedForecast["status"], string> = {
+  critical: "bg-red-50 text-red-800 border-red-200",
+  reorder: "bg-amber-50 text-amber-800 border-amber-200",
+  healthy: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  unknown: "bg-slate-100 text-slate-600 border-slate-200",
+};
 
 export function buildForecasts(
   stock: StockItem[],
@@ -1061,6 +1123,7 @@ export function buildForecasts(
       if (avgDailyUse <= 0) {
         return {
           name: s.name,
+          category: s.category,
           onHand: s.units,
           avgDailyUse: 0,
           daysRemaining: null,
@@ -1089,6 +1152,7 @@ export function buildForecasts(
 
       return {
         name: s.name,
+        category: s.category,
         onHand: s.units,
         avgDailyUse: Math.round(avgDailyUse * 10) / 10,
         daysRemaining: Math.round(daysRemaining * 10) / 10,
