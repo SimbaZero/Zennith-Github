@@ -1,6 +1,7 @@
-import { addDoc, collection, doc, getDoc, getDocs, updateDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { buildAppointmentReminderText, formatPhoneForSms, sendSms } from "@/lib/smsportal";
+// Server-only: run by the Worker's cron triggers (src/server/plugins/sms-reminders.ts)
+// and by POST /api/sms/reminders.
+import { firestoreAdminFromEnv, type FirestoreAdmin } from "../server/firestore-admin";
+import { buildAppointmentReminderText, formatPhoneForSms, sendSms } from "./smsportal";
 
 export type AppointmentReminderKind = "day-before-18:00" | "day-before-20:00" | "morning-08:00";
 
@@ -8,6 +9,35 @@ export interface AppointmentReminderTarget {
   kind: AppointmentReminderKind;
   scheduledFor: Date;
   message: string;
+}
+
+/*
+ * Time zones: clinic-data.ts stores appointDateTime as the clinic's wall-clock
+ * time with a "Z" suffix (`${date}T${time}:00.000Z`), so a 10:00 SAST
+ * appointment is stored as 10:00Z. All reminder maths stays in that frame:
+ * slot times are built with Date.UTC from the stored value, and "now" is
+ * converted to the clinic's wall-clock time before comparing. Comparing with
+ * the real UTC clock instead puts every slot two hours late.
+ */
+export const CLINIC_TIME_ZONE = "Africa/Johannesburg";
+
+/** The clinic's current wall-clock time, in the same "local time labelled Z" frame as appointDateTime. */
+export function clinicWallClock(now: Date, timeZone = CLINIC_TIME_ZONE): Date {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return new Date(
+    Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second")),
+  );
 }
 
 function appointmentDateValue(appointmentDateTime: string): Date {
@@ -24,14 +54,14 @@ export function getReminderTargetsForAppointment(
   clinician = "your clinic team",
 ): AppointmentReminderTarget[] {
   const start = appointmentDateValue(appointmentDateTime);
-  const appointmentDate = new Date(start);
-  const dayBefore = new Date(appointmentDate);
-  dayBefore.setDate(dayBefore.getDate() - 1);
+  const year = start.getUTCFullYear();
+  const month = start.getUTCMonth();
+  const day = start.getUTCDate();
 
   const slots: Array<{ kind: AppointmentReminderKind; at: Date }> = [
-    { kind: "day-before-18:00", at: new Date(dayBefore.getFullYear(), dayBefore.getMonth(), dayBefore.getDate(), 18, 0, 0) },
-    { kind: "day-before-20:00", at: new Date(dayBefore.getFullYear(), dayBefore.getMonth(), dayBefore.getDate(), 20, 0, 0) },
-    { kind: "morning-08:00", at: new Date(appointmentDate.getFullYear(), appointmentDate.getMonth(), appointmentDate.getDate(), 8, 0, 0) },
+    { kind: "day-before-18:00", at: new Date(Date.UTC(year, month, day - 1, 18, 0, 0)) },
+    { kind: "day-before-20:00", at: new Date(Date.UTC(year, month, day - 1, 20, 0, 0)) },
+    { kind: "morning-08:00", at: new Date(Date.UTC(year, month, day, 8, 0, 0)) },
   ];
 
   const date = start.toISOString().slice(0, 10);
@@ -49,42 +79,39 @@ export function getReminderTargetsForAppointment(
   }));
 }
 
-async function getPatientContactNumber(patientId: string): Promise<string | null> {
-  const patientSnap = await getDoc(doc(db, "patients", patientId));
-  if (!patientSnap.exists()) return null;
-  const patient = patientSnap.data();
-  const userId = patient.userId;
-  if (userId == null) return null;
-  const userSnap = await getDoc(doc(db, "users", String(userId)));
-  if (!userSnap.exists()) return null;
-  return String(userSnap.data().contactNum ?? "");
+async function getPatientContact(
+  fs: FirestoreAdmin,
+  patientId: string,
+): Promise<{ phone: string | null; userId: number }> {
+  const patient = await fs.get("patients", patientId);
+  const userId = Number(patient?.data.userId ?? 0);
+  if (!patient || patient.data.userId == null) return { phone: null, userId };
+  const user = await fs.get("users", String(patient.data.userId));
+  return { phone: user ? String(user.data.contactNum ?? "") : null, userId };
 }
 
-async function queueAppNotification({
-  userId,
-  title,
-  message,
-}: {
-  userId: number;
-  title: string;
-  message: string;
-}) {
-  await addDoc(collection(db, "notifications"), {
-    userId,
-    title,
-    message,
-    isRead: false,
-    timeSent: new Date().toISOString(),
-    source: "sms-reminder",
-  });
-}
+export async function processDueAppointmentReminders(now = new Date(), env?: unknown) {
+  const fs = firestoreAdminFromEnv(env);
+  const wallNow = clinicWallClock(now);
 
-export async function processDueAppointmentReminders(now = new Date()) {
-  const appointmentsSnap = await getDocs(collection(db, "appointments"));
+  // A reminder can only be due for today's appointments (morning slot) or
+  // tomorrow's (day-before slots), so only those are read. appointDateTime is
+  // an ISO string, so a string range selects whole days.
+  const today = wallNow.toISOString().slice(0, 10);
+  const dayAfterTomorrow = new Date(
+    Date.UTC(wallNow.getUTCFullYear(), wallNow.getUTCMonth(), wallNow.getUTCDate() + 2),
+  )
+    .toISOString()
+    .slice(0, 10);
+  const appointments = await fs.query("appointments", [
+    { field: "appointDateTime", op: "GREATER_THAN_OR_EQUAL", value: today },
+    { field: "appointDateTime", op: "LESS_THAN", value: dayAfterTomorrow },
+  ]);
+
   const results: Array<{ appointmentId: string; kind: AppointmentReminderKind; sent: boolean; reason?: string }> = [];
 
-  for (const appointmentDoc of appointmentsSnap.docs) {
-    const appointment = appointmentDoc.data();
+  for (const appointmentDoc of appointments) {
+    const appointment = appointmentDoc.data;
     if (!appointment.appointDateTime || typeof appointment.appointDateTime !== "string") continue;
     if (["Cancelled", "Confirmed", "Completed"].includes(String(appointment.status ?? ""))) continue;
 
@@ -94,24 +121,25 @@ export async function processDueAppointmentReminders(now = new Date()) {
     const patientId = appointment.patientId;
     if (!patientId) continue;
 
-    const reminderLog: string[] = Array.isArray(appointment.reminderLog) ? appointment.reminderLog : [];
+    const reminderLog: string[] = Array.isArray(appointment.reminderLog) ? (appointment.reminderLog as string[]) : [];
     const clinician = String(appointment.clinician ?? "your clinic team");
     const targets = getReminderTargetsForAppointment(appointment.appointDateTime, clinician);
 
     for (const target of targets) {
-      const isDue = now >= target.scheduledFor && now <= addMinutes(target.scheduledFor, 30);
+      const isDue = wallNow >= target.scheduledFor && wallNow <= addMinutes(target.scheduledFor, 30);
       if (!isDue || reminderLog.includes(target.kind)) continue;
 
-      const phone = await getPatientContactNumber(patientId);
-      if (!phone) {
+      const contact = await getPatientContact(fs, String(patientId));
+      if (!contact.phone) {
         results.push({ appointmentId: appointmentDoc.id, kind: target.kind, sent: false, reason: "missing-phone" });
         continue;
       }
 
       const sent = await sendSms({
-        to: phone,
+        to: contact.phone,
         message: target.message,
         testMode: false,
+        env,
       });
 
       if (!sent.ok) {
@@ -119,21 +147,20 @@ export async function processDueAppointmentReminders(now = new Date()) {
         continue;
       }
 
-      const patientSnap = await getDoc(doc(db, "patients", patientId));
-      if (patientSnap.exists()) {
-        const patient = patientSnap.data();
-        const userId = Number(patient.userId ?? 0);
-        if (userId) {
-          await queueAppNotification({
-            userId,
-            title: "Appointment reminder",
-            message: target.message,
-          });
-        }
+      if (contact.userId) {
+        await fs.add("notifications", {
+          userId: contact.userId,
+          title: "Appointment reminder",
+          message: target.message,
+          isRead: false,
+          timeSent: new Date().toISOString(),
+          source: "sms-reminder",
+        });
       }
 
-      await updateDoc(doc(db, "appointments", appointmentDoc.id), {
-        reminderLog: Array.from(new Set([...reminderLog, target.kind])),
+      reminderLog.push(target.kind);
+      await fs.update("appointments", appointmentDoc.id, {
+        reminderLog: Array.from(new Set(reminderLog)),
       });
 
       results.push({ appointmentId: appointmentDoc.id, kind: target.kind, sent: true });
