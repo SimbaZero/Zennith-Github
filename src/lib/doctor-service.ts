@@ -666,6 +666,7 @@ export function useFindPatientById(
 // ---------------------------------------------------------------------------
 
 import type { PatientRecord } from "@/lib/clinic-data";
+import { resolvePrivacy, gate } from "@/lib/privacy";
 
 export function usePatientRecord(pid: string | undefined): {
   record: PatientRecord | null;
@@ -833,17 +834,29 @@ export function usePatientRecord(pid: string | undefined): {
     const p = patientBase;
     const u = userData;
     const mr = mrData;
+    // The patient's own choices from /patient/privacy. Applied here, once,
+    // so the on-screen record AND the PDF download can never disagree.
+    const privacy = resolvePrivacy(p.privacy);
 
     setRecord({
       patientId: pid,
       name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
-      idNumber: u.idNumber ?? "—",
-      cell: u.contactNum ?? "—",
-      address: [u.suburb, u.city].filter(Boolean).join(", ") || "—",
-      email: u.email ?? "—",
+      idNumber: gate(privacy.showIdNumber, u.idNumber ?? "—"),
+      cell: gate(privacy.showContact, u.contactNum ?? "—"),
+      address: gate(
+        privacy.showAddress,
+        [u.suburb, u.city].filter(Boolean).join(", ") || "—",
+      ),
+      email: gate(privacy.showContact, u.email ?? "—"),
       condition: p.chronicCondition ?? "—",
-      emergencyContactName: p.emergencyContactName ?? "—",
-      emergencyContactNo: p.emergencyContactNo ?? "—",
+      emergencyContactName: gate(
+        privacy.showEmergencyContact,
+        p.emergencyContactName ?? "—",
+      ),
+      emergencyContactNo: gate(
+        privacy.showEmergencyContact,
+        p.emergencyContactNo ?? "—",
+      ),
       bloodType: mr.bloodType ?? "—",
       allergies: mr.allergies ?? "None recorded",
       prescription: mr.prescription ?? "—",
