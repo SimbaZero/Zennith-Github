@@ -10,9 +10,9 @@ import { bearerToken, tokenMatches } from "./request-auth";
 /**
  * POST (or GET) /api/sms/inbound — SMSPortal's "SMS Replies" webhook.
  *
- * Configure the webhook in SMSPortal with a custom header
- * `Authorization: Bearer <SMSPORTAL_WEBHOOK_SECRET>`, or append
- * `?token=<SMSPORTAL_WEBHOOK_SECRET>` to its URL.
+ * Configure the webhook in SMSPortal with the custom header
+ * `Authorization: Bearer <SMSPORTAL_WEBHOOK_SECRET>`. The secret is not
+ * accepted in the URL, where it would end up in request logs.
  */
 export async function handleSmsInboundRequest(request: Request, url: URL, env: unknown): Promise<Response> {
   if (request.method !== "POST" && request.method !== "GET") {
@@ -24,7 +24,7 @@ export async function handleSmsInboundRequest(request: Request, url: URL, env: u
     console.error("[sms-webhook] SMSPORTAL_WEBHOOK_SECRET is not set; rejecting request");
     return Response.json({ ok: false, reason: "not-configured" }, { status: 503 });
   }
-  if (!tokenMatches(bearerToken(request) ?? url.searchParams.get("token"), secret)) {
+  if (!tokenMatches(bearerToken(request), secret)) {
     return Response.json({ ok: false, reason: "unauthorized" }, { status: 401 });
   }
 

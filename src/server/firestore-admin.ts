@@ -27,6 +27,10 @@ export interface FieldFilter {
   value: unknown;
 }
 
+export type FirestoreWrite =
+  | { update: [collection: string, id: string]; data: FirestoreData; appendToArrays?: Record<string, unknown[]> }
+  | { create: string; data: FirestoreData };
+
 type RestValue = Record<string, unknown>;
 
 interface RestDocument {
@@ -96,24 +100,61 @@ export class FirestoreAdmin {
     return rows.flatMap((row) => (row.document ? [fromRestDocument(row.document)] : []));
   }
 
-  /** Sets the given top-level fields on an existing document, leaving the rest alone. */
-  async update(collection: string, id: string, data: FirestoreData): Promise<void> {
-    const params = new URLSearchParams({ "currentDocument.exists": "true" });
-    for (const field of Object.keys(data)) params.append("updateMask.fieldPaths", field);
-    await this.request(`${this.docUrl(collection, id)}?${params}`, {
-      method: "PATCH",
-      body: JSON.stringify({ fields: encodeFields(data) }),
+  /** Reads several documents from one collection in a single request. Missing IDs are absent from the map. */
+  async getMany(collection: string, ids: string[]): Promise<Map<string, FirestoreDoc>> {
+    const found = new Map<string, FirestoreDoc>();
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return found;
+
+    const res = await this.request(`${this.documentsUrl}:batchGet`, {
+      method: "POST",
+      body: JSON.stringify({ documents: unique.map((id) => this.docName(collection, id)) }),
+    });
+    const rows = (await res.json()) as Array<{ found?: RestDocument }>;
+    for (const row of rows) {
+      if (row.found) {
+        const doc = fromRestDocument(row.found);
+        found.set(doc.id, doc);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Applies several writes atomically in one request. `update` sets only the
+   * given fields on an existing document; `appendToArrays` adds values to
+   * array fields the way arrayUnion does, so concurrent runs can't drop each
+   * other's entries. `create` makes a new document (auto ID when none given).
+   */
+  async commit(writes: FirestoreWrite[]): Promise<void> {
+    await this.request(`${this.documentsUrl}:commit`, {
+      method: "POST",
+      body: JSON.stringify({ writes: writes.map((write) => this.toRestWrite(write)) }),
     });
   }
 
-  /** Creates a document with an auto-generated ID, like the SDK's addDoc. */
-  async add(collection: string, data: FirestoreData): Promise<string> {
-    const res = await this.request(`${this.documentsUrl}/${collection}`, {
-      method: "POST",
-      body: JSON.stringify({ fields: encodeFields(data) }),
-    });
-    const created = (await res.json()) as RestDocument;
-    return created.name.split("/").pop() ?? "";
+  private toRestWrite(write: FirestoreWrite) {
+    const data = Object.fromEntries(Object.entries(write.data).filter(([, v]) => v !== undefined));
+    if ("create" in write) {
+      return {
+        update: { name: this.docName(write.create, autoId()), fields: encodeFields(data) },
+        currentDocument: { exists: false },
+      };
+    }
+    const [collection, id] = write.update;
+    return {
+      update: { name: this.docName(collection, id), fields: encodeFields(data) },
+      updateMask: { fieldPaths: Object.keys(data).map(quoteFieldPath) },
+      updateTransforms: Object.entries(write.appendToArrays ?? {}).map(([field, values]) => ({
+        fieldPath: quoteFieldPath(field),
+        appendMissingElements: { values: values.map(encodeValue) },
+      })),
+      currentDocument: { exists: true },
+    };
+  }
+
+  private docName(collection: string, id: string) {
+    return `projects/${this.account.project_id}/databases/(default)/documents/${collection}/${id}`;
   }
 
   private docUrl(collection: string, id: string) {
@@ -197,6 +238,25 @@ function pemToDer(pem: string): ArrayBuffer {
   const der = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) der[i] = binary.charCodeAt(i);
   return der.buffer;
+}
+
+const AUTO_ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/** A 20-character random document ID, like the SDK generates for addDoc. */
+function autoId(): string {
+  let id = "";
+  while (id.length < 20) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(40))) {
+      // 248 = 4 * 62: dropping higher bytes keeps every character equally likely.
+      if (byte < 248 && id.length < 20) id += AUTO_ID_CHARS[byte % 62];
+    }
+  }
+  return id;
+}
+
+/** Field paths that aren't plain identifiers must be backtick-quoted. */
+function quoteFieldPath(field: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(field) ? field : `\`${field.replace(/[`\\]/g, "\\$&")}\``;
 }
 
 function base64Url(bytes: Uint8Array): string {

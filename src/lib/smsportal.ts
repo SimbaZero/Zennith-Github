@@ -2,7 +2,8 @@
 // the browser. Firestore access goes through the service-account REST client
 // because there is no signed-in user here.
 import { readEnv } from "../server/env";
-import type { FirestoreAdmin } from "../server/firestore-admin";
+import type { FirestoreAdmin, FirestoreWrite } from "../server/firestore-admin";
+import { clinicWallClock } from "./clinic-time";
 
 export type SmsReplyAction = "confirm" | "decline";
 
@@ -133,9 +134,12 @@ export async function readInboundSmsPayload(
 
   url.searchParams.forEach((value, key) => put(key, value));
 
-  if (request.method === "POST") {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (request.method === "POST" && contentType.includes("multipart/form-data")) {
+    const form = await request.formData().catch(() => null);
+    form?.forEach((value, key) => put(key, value));
+  } else if (request.method === "POST") {
     const raw = await request.text().catch(() => "");
-    const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("application/x-www-form-urlencoded")) {
       new URLSearchParams(raw).forEach((value, key) => put(key, value));
     } else if (raw.trim()) {
@@ -159,51 +163,33 @@ export async function readInboundSmsPayload(
   };
 }
 
-async function findPatientByPhone(
-  fs: FirestoreAdmin,
-  phone: string,
-): Promise<{ patientId: string; userId?: number } | null> {
-  const formatted = formatPhoneForSms(phone);
-  const candidates = new Set<string>([
-    formatted,
-    formatted.replace(/^\+27/, "0"),
-    formatted.replace(/^\+/, ""),
-    formatted.replace(/^\+27/, "27"),
-  ]);
-
-  const users = await fs.query("users", [{ field: "contactNum", op: "IN", value: [...candidates] }]);
-  if (users.length === 0) return null;
-
-  const user = users[0].data;
-  const userId = Number(user.userId ?? users[0].id);
-  const patients = await fs.query("patients", [{ field: "userId", op: "EQUAL", value: userId }]);
-  if (patients.length === 0) return null;
-
-  const patient = patients[0].data;
-  return {
-    patientId: patients[0].id,
-    userId: Number(patient.userId ?? userId),
-  };
-}
-
-async function findNextAppointmentForPatient(fs: FirestoreAdmin, patientId: string) {
+/**
+ * The appointment a reply refers to: the soonest upcoming, still-open
+ * appointment whose reminder was texted to this exact number.
+ *
+ * This deliberately doesn't go through users.contactNum or patients.userId.
+ * The webhook runs with admin rights, and firestore.rules lets anyone create
+ * a users doc and lets a patient rewrite their own patients doc, so those
+ * links could be pointed at someone else's record. reminderSentTo is only
+ * ever written by the reminder job.
+ */
+async function findRemindedAppointment(fs: FirestoreAdmin, phone: string, now: Date) {
+  const today = clinicWallClock(now).toISOString().slice(0, 10);
   const appointments = await fs.query("appointments", [
-    { field: "patientId", op: "EQUAL", value: patientId },
+    { field: "reminderSentTo", op: "EQUAL", value: phone },
   ]);
-  const items = appointments
-    .filter((a) => typeof a.data.appointDateTime === "string")
-    .sort((a, b) => String(a.data.appointDateTime).localeCompare(String(b.data.appointDateTime)));
-
   return (
-    items.find((a) => !["Cancelled", "Completed", "Confirmed"].includes(String(a.data.status ?? ""))) ??
-    items[0] ??
-    null
+    appointments
+      .filter((a) => typeof a.data.appointDateTime === "string" && a.data.appointDateTime.slice(0, 10) >= today)
+      .filter((a) => !["Cancelled", "Completed", "No-Show", "In Progress"].includes(String(a.data.status ?? "")))
+      .sort((a, b) => String(a.data.appointDateTime).localeCompare(String(b.data.appointDateTime)))[0] ?? null
   );
 }
 
 export async function handleInboundSmsReply(
   payload: { from: string; message: string },
   fs: FirestoreAdmin,
+  now = new Date(),
 ): Promise<{ ok: boolean; patientId?: string; action?: SmsReplyAction; reason?: string }> {
   const message = payload.message.trim();
   const choice = message.startsWith("1") ? "confirm" : message.startsWith("2") ? "decline" : null;
@@ -212,29 +198,36 @@ export async function handleInboundSmsReply(
     return { ok: false, reason: "no-confirmation-choice" };
   }
 
-  const patient = await findPatientByPhone(fs, payload.from);
-  if (!patient) {
-    return { ok: false, reason: "patient-not-found" };
+  const from = formatPhoneForSms(payload.from);
+  if (!from) {
+    return { ok: false, reason: "missing-sender" };
   }
 
-  const appointment = await findNextAppointmentForPatient(fs, patient.patientId);
+  const appointment = await findRemindedAppointment(fs, from, now);
   if (!appointment) {
-    return { ok: false, reason: "no-upcoming-appointment" };
+    return { ok: false, reason: "no-reminded-appointment" };
   }
 
   const status = choice === "confirm" ? "Confirmed" : "Cancelled";
-  await fs.update("appointments", appointment.id, { status });
+  const writes: FirestoreWrite[] = [{ update: ["appointments", appointment.id], data: { status } }];
 
-  const payloadStatus = choice === "confirm" ? "Confirmed" : "Declined";
-  const fallbackUserId = Number(patient.patientId.replace(/\D/g, ""));
-  const resolvedUserId = patient.userId ?? fallbackUserId;
-  await fs.add("notifications", {
-    userId: resolvedUserId || 0,
-    title: "Appointment update",
-    message: `Your appointment was ${payloadStatus.toLowerCase()}.`,
-    isRead: false,
-    timeSent: new Date().toISOString(),
-  });
+  const patientId = String(appointment.data.patientId ?? "");
+  const patient = patientId ? await fs.get("patients", patientId) : null;
+  const userId = Number(patient?.data.userId ?? 0);
+  if (userId) {
+    const payloadStatus = choice === "confirm" ? "confirmed" : "declined";
+    writes.push({
+      create: "notifications",
+      data: {
+        userId,
+        title: "Appointment update",
+        message: `Your appointment was ${payloadStatus}.`,
+        isRead: false,
+        timeSent: new Date().toISOString(),
+      },
+    });
+  }
+  await fs.commit(writes);
 
-  return { ok: true, patientId: patient.patientId, action: choice };
+  return { ok: true, patientId, action: choice };
 }
