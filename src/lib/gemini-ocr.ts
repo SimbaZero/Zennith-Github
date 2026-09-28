@@ -13,7 +13,7 @@ import type { DigitizedPatientData } from "@/lib/nurse-service";
 
 // If this model name ever 404s, check https://ai.google.dev/gemini-api/docs/models
 // for the current free-tier model list and swap it in here.
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-flash-lite-latest";
 
 // Expanded to match the real Medical Record page's Personal Information +
 // Medical History sections, not just the original 7-field subset — so a

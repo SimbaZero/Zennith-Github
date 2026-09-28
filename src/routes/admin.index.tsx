@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
-import { getUsers, STAFF_ROLES, useCurrentAdmin } from "@/lib/auth";
-import { useDatabaseReachable } from "@/lib/clinic-data";
+import { STAFF_ROLES, useCurrentAdmin } from "@/lib/auth";
+import { fetchClinicStaff, useDatabaseReachable } from "@/lib/clinic-data";
 import { useQuery } from "@tanstack/react-query";
 import { UserPlus, ShieldCheck, Users } from "lucide-react";
 
@@ -10,21 +10,14 @@ export const Route = createFileRoute("/admin/")({ component: AdminDashboard });
 function AdminDashboard() {
   const { admin } = useCurrentAdmin();
   const dbState = useDatabaseReachable();
-  const { data: allUsers = [] } = useQuery({
-    queryKey: ["profiles"],
-    queryFn: getUsers,
+  // Reads the real doctors/nurses/... records (same source as the All Staff
+  // page). Counting login profiles only missed anyone without a login, which
+  // is why the dashboard showed zero.
+  const { data: clinicStaff = [] } = useQuery({
+    queryKey: ["clinic-staff", admin?.clinicId],
+    queryFn: () => fetchClinicStaff(admin!.clinicId!),
+    enabled: admin?.clinicId != null,
   });
-
-  // Scoped to this admin's own clinic — an admin runs one clinic, not the
-  // whole platform. Super Admin is the platform-wide view.
-  const clinicStaff = allUsers.filter(
-    (u) =>
-      admin?.clinicId != null &&
-      u.clinicId === admin.clinicId &&
-      u.role !== "admin" &&
-      u.role !== "super_admin" &&
-      u.role !== "patient",
-  );
 
   return (
     <AppShell
