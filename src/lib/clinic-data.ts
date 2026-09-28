@@ -38,6 +38,8 @@ import { auth, db, firebaseConfig } from "@/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { notifyUser, userIdForStaff } from "@/lib/notify";
 import { logAction } from "@/lib/audit";
+import { resolvePrivacy, gate } from "@/lib/privacy";
+import type { PrivacySettings } from "@/lib/patient-service";
 import { getAuth, getUsername } from "@/lib/auth";
 
 // Same fix already proven in doctor-service.ts's waitForAuthReady(): on a
@@ -891,6 +893,9 @@ export interface ReceptionPatientRecord {
   insurance: string;
   lastVisit: string;
   nextAppointment: string;
+  /** The patient's own choices. The values above are already masked to match;
+   *  the page uses these to lock the fields instead of offering to edit them. */
+  privacy: PrivacySettings;
 }
 
 export async function fetchPatientRecord(
@@ -916,17 +921,27 @@ export async function fetchPatientRecord(
       (a.appointDateTime ?? "").localeCompare(b.appointDateTime ?? ""),
     )[0];
 
+  // The patient's choices from /patient/privacy — see src/lib/privacy.ts.
+  const privacy = resolvePrivacy(p.privacy);
+
   return {
     patientId: pid,
     name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
-    idNumber: u.idNumber ?? "—",
-    idType: u.idType ?? "",
-    cell: u.contactNum ?? "—",
-    suburb: u.suburb ?? "",
-    city: u.city ?? "",
-    email: u.email ?? "—",
-    emergencyContactName: p.emergencyContactName ?? "—",
-    emergencyContactNo: p.emergencyContactNo ?? "—",
+    idNumber: gate(privacy.showIdNumber, u.idNumber ?? "—"),
+    idType: privacy.showIdNumber ? (u.idType ?? "") : "",
+    cell: gate(privacy.showContact, u.contactNum ?? "—"),
+    suburb: gate(privacy.showAddress, u.suburb ?? ""),
+    city: gate(privacy.showAddress, u.city ?? ""),
+    email: gate(privacy.showContact, u.email ?? "—"),
+    emergencyContactName: gate(
+      privacy.showEmergencyContact,
+      p.emergencyContactName ?? "—",
+    ),
+    emergencyContactNo: gate(
+      privacy.showEmergencyContact,
+      p.emergencyContactNo ?? "—",
+    ),
+    privacy,
     insurance: p.insurancePolicyNumber ?? "None",
     lastVisit: (p.lastVisit ?? "").slice(0, 10) || "—",
     nextAppointment: upcoming
@@ -1305,7 +1320,13 @@ export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist>
     ),
   );
   if (recSnap.empty)
-    return { name, clinicId: null, clinicName: null, userId, receptionistId: null };
+    return {
+      name,
+      clinicId: null,
+      clinicName: null,
+      userId,
+      receptionistId: null,
+    };
   const clinicId = Number(recSnap.docs[0].data().clinicId);
   const receptionistId: string =
     recSnap.docs[0].data().receptionistId ?? recSnap.docs[0].id;

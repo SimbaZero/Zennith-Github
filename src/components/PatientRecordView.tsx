@@ -2,6 +2,7 @@
 import { ZennithStar } from "@/components/ZennithStar";
 import { AppShell } from "@/components/AppShell";
 import { usePatientRecord } from "@/lib/doctor-service";
+import { HIDDEN_BY_PATIENT } from "@/lib/privacy";
 import { updatePatient, updateMedicalRecord } from "@/lib/clinic-data";
 import { useClinicInventory, dispenseMedication } from "@/lib/nurse-service";
 import { addDoc, collection } from "firebase/firestore";
@@ -589,14 +590,19 @@ function Grid({ children }: { children: React.ReactNode }) {
   );
 }
 function Row({ label, value }: { label: string; value: string | number }) {
+  // A value the patient chose to hide reads differently from one that was
+  // simply never recorded ("—").
+  const valueStyle =
+    value === HIDDEN_BY_PATIENT
+      ? "italic text-muted-foreground"
+      : "font-medium";
+  const valueClass = `flex-1 border-b border-dotted border-muted-foreground/40 pb-0.5 ${valueStyle}`;
   return (
     <div className="flex">
       <div className="w-40 text-muted-foreground text-xs uppercase tracking-wider self-end pb-0.5">
         {label}
       </div>
-      <div className="flex-1 font-medium border-b border-dotted border-muted-foreground/40 pb-0.5">
-        {value}
-      </div>
+      <div className={valueClass}>{value}</div>
     </div>
   );
 }

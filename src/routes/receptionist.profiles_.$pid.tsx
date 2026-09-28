@@ -16,6 +16,7 @@ import {
   type ReceptionPatientRecord,
 } from "@/lib/clinic-data";
 import { logAction } from "@/lib/audit";
+import { HIDDEN_BY_PATIENT } from "@/lib/privacy";
 import {
   DOCUMENT_CHECK_NOTE,
   ID_TYPE_LABELS,
@@ -127,9 +128,13 @@ function PatientDetail() {
       // with a malformed ID shouldn't block fixing a phone number.
       const idNumber =
         form.idType === "none" ? "" : form.idNumber.replace(/\s+/g, "");
+      const privacy = record.privacy;
+      // A hidden ID is never re-checked or written: the form holds the
+      // "Hidden by patient" marker for it, not the real number.
       const idChanged =
-        idNumber !== record.idNumber.replace(/\s+/g, "") ||
-        form.idType !== formFrom(record).idType;
+        privacy.showIdNumber &&
+        (idNumber !== record.idNumber.replace(/\s+/g, "") ||
+          form.idType !== formFrom(record).idType);
       if (idChanged && isIdType(form.idType)) {
         const check = validateIdByType(idNumber, form.idType);
         if (!check.valid) throw new Error(check.reason);
@@ -157,16 +162,24 @@ function PatientDetail() {
           names,
           surname,
           ...(idChanged ? { idNumber, idType: form.idType } : {}),
-          contactNum: form.cell,
-          email: form.email,
+          // Fields the patient has hidden are locked on screen and skipped
+          // here, so the marker text can never overwrite the real value.
+          ...(privacy.showContact
+            ? { contactNum: form.cell, email: form.email }
+            : {}),
           // Address used to be shown as editable but was never written.
-          suburb: form.suburb.trim(),
-          city: form.city.trim(),
+          ...(privacy.showAddress
+            ? { suburb: form.suburb.trim(), city: form.city.trim() }
+            : {}),
         }),
         // No chronicCondition — reception doesn't edit clinical data (POPIA).
         updatePatient(pid, {
-          emergencyContactName: form.emergencyContactName,
-          emergencyContactNo: form.emergencyContactNo,
+          ...(privacy.showEmergencyContact
+            ? {
+                emergencyContactName: form.emergencyContactName,
+                emergencyContactNo: form.emergencyContactNo,
+              }
+            : {}),
           ...(insuranceChanged ? { insurancePolicyNumber: insurance } : {}),
         }),
         // Insurance is also mirrored to medicalRecords, where nurses and
@@ -241,6 +254,14 @@ function PatientDetail() {
     );
   }
 
+  const privacy = record.privacy;
+  const anyHidden = !(
+    privacy.showIdNumber &&
+    privacy.showContact &&
+    privacy.showAddress &&
+    privacy.showEmergencyContact
+  );
+
   return (
     <AppShell role="receptionist" title={`Patient Profile — ${record.name}`}>
       {/* Header */}
@@ -287,6 +308,13 @@ function PatientDetail() {
         </div>
       </div>
 
+      {anyHidden && (
+        <p className="mb-4 text-xs text-muted-foreground">
+          Some details are hidden and locked because the patient has chosen not
+          to share them with staff.
+        </p>
+      )}
+
       {/* Patient Card */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left column — Demographics */}
@@ -303,22 +331,26 @@ function PatientDetail() {
                 editing={editing}
                 onChange={setField("name")}
               />
-              <SelectRow
-                label="ID Type"
-                value={form.idType}
-                options={ID_TYPE_OPTIONS}
-                editing={editing}
-                onChange={setField("idType")}
-              />
+              {privacy.showIdNumber ? (
+                <SelectRow
+                  label="ID Type"
+                  value={form.idType}
+                  options={ID_TYPE_OPTIONS}
+                  editing={editing}
+                  onChange={setField("idType")}
+                />
+              ) : (
+                <FieldRow label="ID Type" value={HIDDEN_BY_PATIENT} disabled />
+              )}
               {form.idType !== "none" && (
                 <FieldRow
                   label="ID Number"
                   value={form.idNumber}
-                  editing={editing}
+                  editing={editing && privacy.showIdNumber}
                   onChange={setField("idNumber")}
                 />
               )}
-              {editing && form.idType !== "none" && (
+              {editing && privacy.showIdNumber && form.idType !== "none" && (
                 <p className="text-[11px] text-muted-foreground">
                   {form.idType === "sa_id"
                     ? SA_ID_CHECK_NOTE
@@ -328,13 +360,13 @@ function PatientDetail() {
               <FieldRow
                 label="Cell"
                 value={form.cell}
-                editing={editing}
+                editing={editing && privacy.showContact}
                 onChange={setField("cell")}
               />
               <FieldRow
                 label="Email"
                 value={form.email}
-                editing={editing}
+                editing={editing && privacy.showContact}
                 onChange={setField("email")}
               />
             </div>
@@ -351,13 +383,13 @@ function PatientDetail() {
               <FieldRow
                 label="Suburb / Street"
                 value={form.suburb}
-                editing={editing}
+                editing={editing && privacy.showAddress}
                 onChange={setField("suburb")}
               />
               <FieldRow
                 label="City / District"
                 value={form.city}
-                editing={editing}
+                editing={editing && privacy.showAddress}
                 onChange={setField("city")}
               />
             </div>
@@ -371,13 +403,13 @@ function PatientDetail() {
               <FieldRow
                 label="Name"
                 value={form.emergencyContactName}
-                editing={editing}
+                editing={editing && privacy.showEmergencyContact}
                 onChange={setField("emergencyContactName")}
               />
               <FieldRow
                 label="Phone"
                 value={form.emergencyContactNo}
-                editing={editing}
+                editing={editing && privacy.showEmergencyContact}
                 onChange={setField("emergencyContactNo")}
               />
             </div>
@@ -432,13 +464,17 @@ function FieldRow({
   onChange?: (v: string) => void;
   disabled?: boolean;
 }) {
+  const valueClass =
+    value === HIDDEN_BY_PATIENT
+      ? "text-sm italic text-muted-foreground"
+      : "text-sm font-medium";
   if (disabled || !editing) {
     return (
       <div>
         <label className="text-[10px] tracking-wider text-muted-foreground block mb-0.5">
           {label}
         </label>
-        <p className="text-sm font-medium">{value || "—"}</p>
+        <p className={valueClass}>{value || "—"}</p>
       </div>
     );
   }
