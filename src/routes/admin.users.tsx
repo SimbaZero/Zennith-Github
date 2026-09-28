@@ -9,7 +9,12 @@ import {
 } from "@/lib/auth";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { passesLuhn } from "@/lib/luhn";
+import {
+  DOCUMENT_CHECK_NOTE,
+  SA_ID_CHECK_NOTE,
+  validateDocumentFormat,
+  validateSaId,
+} from "@/lib/sa-id";
 
 export const Route = createFileRoute("/admin/users")({ component: CreateUser });
 
@@ -47,6 +52,8 @@ const ROLE_FIELDS: Record<StaffRole, FieldDef[]> = {
   receptionist: [
     { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
   ],
+  // Clinic admins have no council registration or role-specific fields.
+  admin: [],
 };
 
 // Ensures a value always starts with the given locked prefix and strips
@@ -79,8 +86,10 @@ function CreateUser() {
   const [idType, setIdType] = useState<IdType>("sa_id");
   const [idValue, setIdValue] = useState("");
   const [saving, setSaving] = useState(false);
-  // Luhn checksum on SA ID numbers. On by default every time the page loads;
-  // switch it off only when testing with made-up ID numbers.
+  // Full SA ID validation (date of birth, citizenship digit, Luhn check
+  // digit — see sa-id.ts). On by default every time the page loads; switch it
+  // off only when testing with made-up ID numbers, which then only need to
+  // be 13 digits.
   const [luhnEnabled, setLuhnEnabled] = useState(true);
 
   const set = (k: keyof typeof form) => (v: any) => setForm({ ...form, [k]: v });
@@ -137,12 +146,20 @@ function CreateUser() {
     }
     // Runs after the 13-digit check and before addUser(), which does the
     // uniqueness check — so an invalid ID never reaches the database at all.
-    // Passports don't use Luhn, so this only applies to SA IDs.
-    if (idType === "sa_id" && luhnEnabled && !passesLuhn(idValue.trim())) {
-      toast.error(
-        "This SA ID number is not valid — its check digit doesn't match. Please check it for typos.",
-      );
-      return;
+    if (idType === "sa_id" && luhnEnabled) {
+      const check = validateSaId(idValue.trim());
+      if (!check.valid) {
+        toast.error(check.reason);
+        return;
+      }
+    }
+    // Passports can only be format-checked; there's no checksum to verify.
+    if (idType === "passport") {
+      const check = validateDocumentFormat(idValue, "passport");
+      if (!check.valid) {
+        toast.error(check.reason);
+        return;
+      }
     }
 
     const fid = getUserFacility();
@@ -270,18 +287,18 @@ function CreateUser() {
             {idType === "sa_id" && (
               <div className="flex items-center justify-between gap-3 mt-2 px-3 py-2 border rounded-md bg-secondary/30">
                 <div>
-                  <p className="text-sm font-medium">Luhn ID check</p>
+                  <p className="text-sm font-medium">Strict SA ID check</p>
                   <p className="text-xs text-muted-foreground">
                     {luhnEnabled
-                      ? "On — SA ID numbers must pass the checksum."
-                      : "Off — testing mode, the checksum is skipped."}
+                      ? "On — date of birth, citizenship digit and check digit must all be valid."
+                      : "Off — testing mode, only the 13-digit length is checked."}
                   </p>
                 </div>
                 <button
                   type="button"
                   role="switch"
                   aria-checked={luhnEnabled}
-                  aria-label="Luhn ID check"
+                  aria-label="Strict SA ID check"
                   onClick={() => setLuhnEnabled((v) => !v)}
                   className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
                     luhnEnabled ? "bg-[oklch(0.55_0.18_245)]" : "bg-gray-300"
@@ -295,6 +312,9 @@ function CreateUser() {
                 </button>
               </div>
             )}
+            <p className="text-xs text-muted-foreground mt-2">
+              {idType === "sa_id" ? SA_ID_CHECK_NOTE : DOCUMENT_CHECK_NOTE}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

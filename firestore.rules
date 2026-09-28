@@ -1,0 +1,202 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- helpers -------------------------------------------------------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+    }
+
+    function role() {
+      return signedIn() ? profile().role : "";
+    }
+
+    function isStaff() {
+      return role() in ["doctor", "nurse", "pharmacist", "receptionist", "admin"];
+    }
+
+    function isSuperAdmin() {
+      return role() == "super_admin";
+    }
+
+    function myPatientId() {
+      return profile().get("patientId", "");
+    }
+
+    // ---- public --------------------------------------------------------
+    // The landing page shows clinic names and queue counts to visitors who
+    // aren't signed in, so they can choose a clinic before travelling.
+    // Neither reveals anything about an individual patient.
+    match /clinics/{clinicId} {
+      allow read: if true;
+      allow create: if true; // self-service clinic applications
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /queue/{entryId} {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    // Patient signup reserves ID numbers from here BEFORE the account
+    // exists, so this can't require a session. Holds counters only.
+    match /counters/{id} {
+      allow read, write: if true;
+    }
+
+    // ---- patient data --------------------------------------------------
+    // NOTE: staff read patients as a LIST (everyone at their clinic), and
+    // Firestore evaluates list rules with no document to inspect — so a
+    // resource.data.clinicId check here would deny the whole query rather
+    // than filter it. Clinic scoping is enforced in the app's queries.
+    //
+    // KNOWN LIMITATION: a patient can write any field on their own record,
+    // not only privacy preferences. Restricting to specific fields is
+    // possible but makes the rule long and brittle; recorded rather than
+    // hidden.
+    match /patients/{patientId} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && patientId == myPatientId());
+      allow create: if true; // self-registration
+      allow update: if isStaff() || isSuperAdmin()
+                    || (role() == "patient" && patientId == myPatientId());
+      allow delete: if isStaff() || isSuperAdmin();
+    }
+
+    // Subcollections are NOT covered by their parent's rule, and the
+    // catch-all at the bottom denies anything unlisted — so logging a dose
+    // was being refused outright. Staff record doses; a patient can read
+    // their own.
+    match /patients/{patientId}/adherenceLogs/{logId} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && patientId == myPatientId());
+      allow write: if isStaff() || isSuperAdmin();
+    }
+
+    // Any other patient subcollection added later: staff-only by default,
+    // with the patient able to read their own. Better than silently
+    // failing the way adherence logs did.
+    match /patients/{patientId}/{sub=**} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && patientId == myPatientId());
+      allow write: if isStaff() || isSuperAdmin();
+    }
+
+    match /medicalRecords/{recordId} {
+      allow read, write: if signedIn();
+      allow create: if true; // blank record created during signup
+    }
+
+    match /medicalRecordsHistory/{id} {
+      allow read, write: if signedIn();
+    }
+
+    match /appointments/{id} {
+      allow read: if signedIn();
+      allow write: if isStaff() || isSuperAdmin();
+    }
+
+    match /notifications/{id} {
+      allow read, write: if signedIn();
+    }
+
+    // A patient reads their own dispensing history on their dashboard;
+    // only staff can record a dispense.
+    match /patientDispensing/{id} {
+      allow read: if signedIn();
+      allow write: if isStaff() || isSuperAdmin();
+    }
+
+    // ---- staff-only ----------------------------------------------------
+    match /inventory/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /stockDeliveries/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /distributions/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /handoverEntries/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /shifts/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /queueAudit/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    // Reorder suggestions raised from the pharmacy analytics page.
+    match /reorders/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    // Patients write here too — a data-deletion request is logged by the
+    // patient making it, and must be visible to an admin afterwards.
+    match /systemAudit/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if false; // an audit log must not be editable
+    }
+
+    // ---- identity ------------------------------------------------------
+    // Signup checks whether an ID number is already registered, and creates
+    // the user record — both before the person is signed in.
+    //
+    // KNOWN LIMITATION: this makes `users` publicly readable, including
+    // names and ID numbers. The real fix is a server function that answers
+    // "is this ID taken?" without exposing the data, which needs a backend
+    // this app doesn't have yet.
+    match /users/{id} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isStaff() || isSuperAdmin();
+    }
+
+    // Nobody edits someone else's profile, and nobody changes their own role
+    // or clinic — that would be self-promotion into another clinic's data.
+    match /profiles/{uid} {
+      allow read: if signedIn();
+      allow create: if true; // a signing-up patient has no profile yet
+      allow update: if isSuperAdmin() || role() == "admin"
+                    || (request.auth.uid == uid
+                        && request.resource.data.role == resource.data.role
+                        && request.resource.data.get("clinicId", -1)
+                           == resource.data.get("clinicId", -1));
+      allow delete: if isSuperAdmin() || role() == "admin";
+    }
+
+    match /doctors/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+    match /nurses/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+    match /pharmacists/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+    match /receptionists/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+
+    // Anything not listed above is denied. Adding a collection now means
+    // deliberately deciding who can read it.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -653,6 +653,9 @@ export async function saveDigitizedFile(
     patientId = await registerPatient({
       fullName: data.fullName,
       nationalId: data.idNumber,
+      // A paper file doesn't say which document the number came from; same
+      // inference as validateUntypedId (13 digits = SA ID).
+      idType: /^\d{13}$/.test(data.idNumber) ? "sa_id" : "other",
       contactNum: data.cellphone,
       email: data.email,
       city: "",
@@ -675,6 +678,16 @@ export async function saveDigitizedFile(
         chronicCondition: data.diagnosis || "Not yet assessed",
         dateOfBirth: data.dateOfBirth,
       },
+      { merge: true },
+    );
+  }
+
+  // Duplicated onto the patient doc so reception can show the last visit
+  // without opening the clinical record — see PatientUpdateInput.
+  if (medicalRecordNo != null) {
+    await setDoc(
+      doc(db, "patients", patientId!),
+      { lastVisit: todayIso() },
       { merge: true },
     );
   }
@@ -838,9 +851,17 @@ export async function dispenseMedication(input: DispenseInput): Promise<void> {
       createdAt: serverTimestamp(),
     });
     if (input.medicalRecordNo != null) {
+      const lastVisit = new Date().toISOString().slice(0, 10);
       tx.set(
         doc(db, "medicalRecords", String(input.medicalRecordNo)),
-        { lastVisit: new Date().toISOString().slice(0, 10) },
+        { lastVisit },
+        { merge: true },
+      );
+      // Duplicated so reception never opens the clinical record — see
+      // PatientUpdateInput in clinic-data.ts.
+      tx.set(
+        doc(db, "patients", input.patientId),
+        { lastVisit },
         { merge: true },
       );
     }

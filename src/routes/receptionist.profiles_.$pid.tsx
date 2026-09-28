@@ -12,11 +12,69 @@ import {
   updatePatient,
   updateUser,
   updateMedicalRecord,
+  type ReceptionPatientRecord,
 } from "@/lib/clinic-data";
+import {
+  DOCUMENT_CHECK_NOTE,
+  ID_TYPE_LABELS,
+  SA_ID_CHECK_NOTE,
+  isIdType,
+  validateIdByType,
+} from "@/lib/sa-id";
 
 export const Route = createFileRoute("/receptionist/profiles_/$pid")({
   component: PatientDetail,
 });
+
+// POPIA: this page is deliberately administrative only — identity, contact
+// details, address, emergency contact, insurance and visit dates. There is no
+// chronic condition, blood type, allergies, medication, vitals, CD4/viral
+// load (which effectively disclose HIV status) or clinical history here, and
+// fetchPatientRecord doesn't fetch them. Reception has no clinical role, so it
+// has no need to see or edit them. Don't add clinical fields back to this
+// page; nurses and doctors edit them in PatientRecordView.
+
+type Form = {
+  name: string;
+  idType: string;
+  idNumber: string;
+  cell: string;
+  email: string;
+  suburb: string;
+  city: string;
+  emergencyContactName: string;
+  emergencyContactNo: string;
+  insurance: string;
+  lastVisit: string;
+  nextAppointment: string;
+};
+
+// "none" = registered without any identity document (see registration).
+const ID_TYPE_OPTIONS = { ...ID_TYPE_LABELS, none: "No document" };
+
+function formFrom(record: ReceptionPatientRecord): Form {
+  return {
+    name: record.name,
+    // Older records have no idType — assume from the number's shape until
+    // reception picks one.
+    idType:
+      isIdType(record.idType) || record.idType === "none"
+        ? record.idType
+        : /^\d{13}$/.test(record.idNumber)
+          ? "sa_id"
+          : "other",
+    idNumber: record.idNumber,
+    cell: record.cell,
+    email: record.email,
+    suburb: record.suburb,
+    city: record.city,
+    emergencyContactName: record.emergencyContactName,
+    emergencyContactNo: record.emergencyContactNo,
+    insurance: record.insurance,
+    lastVisit: record.lastVisit,
+    nextAppointment: record.nextAppointment,
+  };
+}
 
 function PatientDetail() {
   const { pid } = Route.useParams();
@@ -33,45 +91,34 @@ function PatientDetail() {
     queryFn: () => fetchPatientRecord(pid),
   });
 
-  // Form state for editing
-  const [form, setForm] = useState<Record<string, string>>({});
+  const [form, setForm] = useState<Form | null>(null);
 
   useEffect(() => {
-    if (record) {
-      setForm({
-        name: record.name,
-        idNumber: record.idNumber,
-        cell: record.cell,
-        address: record.address,
-        email: record.email,
-        condition: record.condition,
-        emergencyContactName: record.emergencyContactName,
-        emergencyContactNo: record.emergencyContactNo,
-        bloodType: record.bloodType,
-        allergies: record.allergies,
-        prescription: record.prescription,
-        dosage: record.dosage,
-        bp: record.bp,
-        glucose: record.glucose,
-        cd4: record.cd4,
-        viralLoad: record.viralLoad,
-        insurance: record.insurance,
-        lastVisit: record.lastVisit,
-        nextAppointment: record.nextAppointment,
-      });
-    }
+    if (record) setForm(formFrom(record));
   }, [record]);
 
   const updateMutation = useMutation({
     mutationFn: async () => {
-      if (!record) throw new Error("No record loaded");
+      if (!record || !form) throw new Error("No record loaded");
+
+      // Only re-check the ID when reception changed it — an older record
+      // with a malformed ID shouldn't block fixing a phone number.
+      const idNumber =
+        form.idType === "none" ? "" : form.idNumber.replace(/\s+/g, "");
+      const idChanged =
+        idNumber !== record.idNumber.replace(/\s+/g, "") ||
+        form.idType !== formFrom(record).idType;
+      if (idChanged && isIdType(form.idType)) {
+        const check = validateIdByType(idNumber, form.idType);
+        if (!check.valid) throw new Error(check.reason);
+      }
 
       // Parse name into first/surname
       const parts = form.name.trim().split(/\s+/);
       const names = parts[0] || "";
       const surname = parts.slice(1).join(" ");
 
-      // Fetch patient doc directly using imported db
+      // Reads the patient doc only (not medicalRecords) to find the linked ids.
       const patientSnap = await getDoc(doc(db, "patients", pid));
       if (!patientSnap.exists()) throw new Error("Patient not found");
 
@@ -79,34 +126,33 @@ function PatientDetail() {
       const userId = patientData.userId;
       const recordNo = patientData.medicalRecordNo;
 
-      // Update all three collections
+      const insurance =
+        form.insurance !== "None" ? form.insurance.trim() : undefined;
+      const insuranceChanged = form.insurance !== record.insurance;
+
       await Promise.all([
         updateUser(userId, {
           names,
           surname,
-          idNumber: form.idNumber,
+          ...(idChanged ? { idNumber, idType: form.idType } : {}),
           contactNum: form.cell,
           email: form.email,
+          // Address used to be shown as editable but was never written.
+          suburb: form.suburb.trim(),
+          city: form.city.trim(),
         }),
+        // No chronicCondition — reception doesn't edit clinical data (POPIA).
         updatePatient(pid, {
-          chronicCondition: form.condition,
           emergencyContactName: form.emergencyContactName,
           emergencyContactNo: form.emergencyContactNo,
+          ...(insuranceChanged ? { insurancePolicyNumber: insurance } : {}),
         }),
-        updateMedicalRecord(recordNo, {
-          bloodType: form.bloodType,
-          allergies: form.allergies,
-          prescription: form.prescription,
-          dosage: form.dosage !== "—" ? Number(form.dosage) : undefined,
-          bp: form.bp,
-          glucose: form.glucose !== "—" ? Number(form.glucose) : undefined,
-          cd4: form.cd4 !== "—" ? Number(form.cd4) : undefined,
-          viralLoad:
-            form.viralLoad !== "—" ? Number(form.viralLoad) : undefined,
-          // Fixed Error 2: fallback to undefined instead of null
-          insurancePolicyNumber:
-            form.insurance !== "None" ? form.insurance : undefined,
-        }),
+        // Insurance is also mirrored to medicalRecords, where nurses and
+        // doctors read it. This is a blind field write — reception never
+        // reads the clinical record — and only happens if insurance changed.
+        insuranceChanged && recordNo != null
+          ? updateMedicalRecord(recordNo, { insurancePolicyNumber: insurance })
+          : Promise.resolve(),
       ]);
     },
     onSuccess: () => {
@@ -120,8 +166,8 @@ function PatientDetail() {
     },
   });
 
-  const setField = (key: string) => (value: string) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+  const setField = (key: keyof Form) => (value: string) => {
+    setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
   };
 
   if (isLoading) {
@@ -134,7 +180,7 @@ function PatientDetail() {
     );
   }
 
-  if (isError || !record) {
+  if (isError || !record || !form) {
     return (
       <AppShell role="receptionist" title="Patient Profile">
         <div className="p-8 text-center">
@@ -168,30 +214,7 @@ function PatientDetail() {
               <button
                 onClick={() => {
                   setEditing(false);
-                  // Reset form
-                  if (record) {
-                    setForm({
-                      name: record.name,
-                      idNumber: record.idNumber,
-                      cell: record.cell,
-                      address: record.address,
-                      email: record.email,
-                      condition: record.condition,
-                      emergencyContactName: record.emergencyContactName,
-                      emergencyContactNo: record.emergencyContactNo,
-                      bloodType: record.bloodType,
-                      allergies: record.allergies,
-                      prescription: record.prescription,
-                      dosage: record.dosage,
-                      bp: record.bp,
-                      glucose: record.glucose,
-                      cd4: record.cd4,
-                      viralLoad: record.viralLoad,
-                      insurance: record.insurance,
-                      lastVisit: record.lastVisit,
-                      nextAppointment: record.nextAppointment,
-                    });
-                  }
+                  setForm(formFrom(record));
                 }}
                 className="flex items-center gap-1.5 border px-3 py-1.5 rounded-md text-sm hover:bg-secondary"
               >
@@ -237,12 +260,28 @@ function PatientDetail() {
                 editing={editing}
                 onChange={setField("name")}
               />
-              <FieldRow
-                label="ID Number"
-                value={form.idNumber}
+              <SelectRow
+                label="ID Type"
+                value={form.idType}
+                options={ID_TYPE_OPTIONS}
                 editing={editing}
-                onChange={setField("idNumber")}
+                onChange={setField("idType")}
               />
+              {form.idType !== "none" && (
+                <FieldRow
+                  label="ID Number"
+                  value={form.idNumber}
+                  editing={editing}
+                  onChange={setField("idNumber")}
+                />
+              )}
+              {editing && form.idType !== "none" && (
+                <p className="text-[11px] text-muted-foreground">
+                  {form.idType === "sa_id"
+                    ? SA_ID_CHECK_NOTE
+                    : DOCUMENT_CHECK_NOTE}
+                </p>
+              )}
               <FieldRow
                 label="Cell"
                 value={form.cell}
@@ -255,11 +294,28 @@ function PatientDetail() {
                 editing={editing}
                 onChange={setField("email")}
               />
+            </div>
+          </div>
+        </div>
+
+        {/* Middle column — Address + Emergency contact */}
+        <div className="space-y-6">
+          <div className="bg-white rounded-xl border p-5">
+            <h3 className="font-semibold text-sm tracking-wider mb-4">
+              ADDRESS
+            </h3>
+            <div className="space-y-3">
               <FieldRow
-                label="Address"
-                value={form.address}
+                label="Suburb / Street"
+                value={form.suburb}
                 editing={editing}
-                onChange={setField("address")}
+                onChange={setField("suburb")}
+              />
+              <FieldRow
+                label="City / District"
+                value={form.city}
+                editing={editing}
+                onChange={setField("city")}
               />
             </div>
           </div>
@@ -285,80 +341,7 @@ function PatientDetail() {
           </div>
         </div>
 
-        {/* Middle column — Medical */}
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">
-              MEDICAL INFORMATION
-            </h3>
-            <div className="space-y-3">
-              <FieldRow
-                label="Chronic Condition"
-                value={form.condition}
-                editing={editing}
-                onChange={setField("condition")}
-              />
-              <FieldRow
-                label="Blood Type"
-                value={form.bloodType}
-                editing={editing}
-                onChange={setField("bloodType")}
-              />
-              <FieldRow
-                label="Allergies"
-                value={form.allergies}
-                editing={editing}
-                onChange={setField("allergies")}
-              />
-              <FieldRow
-                label="Prescription"
-                value={form.prescription}
-                editing={editing}
-                onChange={setField("prescription")}
-              />
-              <FieldRow
-                label="Dosage"
-                value={form.dosage}
-                editing={editing}
-                onChange={setField("dosage")}
-              />
-              <FieldRow
-                label="Blood Pressure"
-                value={form.bp}
-                editing={editing}
-                onChange={setField("bp")}
-              />
-              <FieldRow
-                label="Glucose"
-                value={form.glucose}
-                editing={editing}
-                onChange={setField("glucose")}
-              />
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">
-              LAB VALUES
-            </h3>
-            <div className="space-y-3">
-              <FieldRow
-                label="CD4 Count"
-                value={form.cd4}
-                editing={editing}
-                onChange={setField("cd4")}
-              />
-              <FieldRow
-                label="Viral Load"
-                value={form.viralLoad}
-                editing={editing}
-                onChange={setField("viralLoad")}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Right column — Insurance + History */}
+        {/* Right column — Insurance + Visits */}
         <div className="space-y-6">
           <div className="bg-white rounded-xl border p-5">
             <h3 className="font-semibold text-sm tracking-wider mb-4">
@@ -386,28 +369,6 @@ function PatientDetail() {
                 disabled
               />
             </div>
-          </div>
-
-          <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">
-              HISTORY
-            </h3>
-            {record.history.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No history recorded.
-              </p>
-            ) : (
-              <ul className="space-y-2 max-h-64 overflow-y-auto">
-                {record.history.map((h) => (
-                  <li
-                    key={h.id}
-                    className="text-xs text-muted-foreground border-l-2 border-[oklch(0.55_0.18_245)] pl-2"
-                  >
-                    {h.description}
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
         </div>
       </div>
@@ -450,6 +411,43 @@ function FieldRow({
         onChange={(e) => onChange?.(e.target.value)}
         className="w-full px-2 py-1.5 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
       />
+    </div>
+  );
+}
+
+function SelectRow({
+  label,
+  value,
+  options,
+  editing,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Record<string, string>;
+  editing: boolean;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label className="text-[10px] tracking-wider text-muted-foreground block mb-0.5">
+        {label}
+      </label>
+      {editing ? (
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full px-2 py-1.5 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] bg-white"
+        >
+          {Object.entries(options).map(([key, text]) => (
+            <option key={key} value={key}>
+              {text}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <p className="text-sm font-medium">{options[value] ?? "—"}</p>
+      )}
     </div>
   );
 }

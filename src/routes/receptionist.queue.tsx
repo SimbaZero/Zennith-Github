@@ -12,8 +12,10 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNow } from "@/lib/store";
 import type { QueueEntry, TriageLevel } from "@/lib/clinic-data";
-import { resolveCurrentReceptionist } from "@/lib/clinic-data";
-import { usePatientDirectory } from "@/lib/doctor-service";
+import {
+  resolveCurrentReceptionist,
+  useReceptionPatientDirectory,
+} from "@/lib/clinic-data";
 
 export const Route = createFileRoute("/receptionist/queue")({
   component: QueuePage,
@@ -179,7 +181,10 @@ function QueuePage() {
 
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [walkInQuery, setWalkInQuery] = useState("");
-  const { patients: clinicPatients } = usePatientDirectory(
+  // Reception's own directory hook, not doctor-service's usePatientDirectory:
+  // that one opens every patient's medicalRecords doc, and reception has no
+  // clinical role (POPIA — see the note above PatientSummary in clinic-data).
+  const clinicPatients = useReceptionPatientDirectory(
     500,
     receptionist?.clinicId ?? undefined,
   );

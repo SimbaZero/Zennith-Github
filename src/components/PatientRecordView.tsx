@@ -125,9 +125,14 @@ export function PatientRecordView({
     if (!form || !record) return;
     setSaving(true);
     try {
+      // Editing the chart is a real checkup interaction — counts as a visit.
+      const lastVisit = new Date().toISOString().slice(0, 10);
       await Promise.all([
         updatePatient(record.patientId, {
           chronicCondition: form.condition || undefined,
+          // Duplicated from medicalRecords so reception can show it without
+          // opening the clinical record — see PatientUpdateInput.
+          lastVisit,
         }),
         medicalRecordNo != null
           ? updateMedicalRecord(medicalRecordNo, {
@@ -139,8 +144,7 @@ export function PatientRecordView({
               glucose: form.glucose ? Number(form.glucose) : undefined,
               cd4: form.cd4 ? Number(form.cd4) : undefined,
               viralLoad: form.viralLoad ? Number(form.viralLoad) : undefined,
-              // Editing the chart is a real checkup interaction — counts as a visit.
-              lastVisit: new Date().toISOString().slice(0, 10),
+              lastVisit,
             } as any)
           : Promise.resolve(),
       ]);

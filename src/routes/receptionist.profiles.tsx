@@ -5,6 +5,7 @@ import {
   fetchPatientPage,
   findPatient,
   resolveCurrentReceptionist,
+  type PatientSummary,
 } from "@/lib/clinic-data";
 import { useEffect, useMemo, useState } from "react";
 
@@ -39,12 +40,7 @@ function Profiles() {
   // it didn't exist even when a receptionist typed their exact Patient ID.
   // This does a direct Firestore lookup by ID as a fallback whenever the
   // typed text looks like one and isn't already in the loaded list.
-  const [idLookup, setIdLookup] = useState<{
-    patientId: string;
-    name: string;
-    condition: string;
-    lastVisit: string;
-  } | null>(null);
+  const [idLookup, setIdLookup] = useState<PatientSummary | null>(null);
   const [idLookupTried, setIdLookupTried] = useState("");
 
   useEffect(() => {
@@ -106,7 +102,10 @@ function Profiles() {
               <tr className="text-left text-xs text-muted-foreground border-b">
                 <th className="px-5 py-3 font-medium">Patient ID</th>
                 <th className="px-5 py-3 font-medium">Name</th>
-                <th className="px-5 py-3 font-medium">Condition</th>
+                {/* No "Condition" column, deliberately. Reception has no
+                    clinical role, so under POPIA they don't see diagnoses —
+                    and PatientSummary no longer carries one. Don't add it
+                    back; see the note above PatientSummary in clinic-data.ts. */}
                 <th className="px-5 py-3 font-medium">Last Visit</th>
                 <th className="px-5 py-3 font-medium"></th>
               </tr>
@@ -115,7 +114,7 @@ function Profiles() {
               {isLoading && (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={4}
                     className="px-5 py-6 text-center text-muted-foreground"
                   >
                     Loading...
@@ -125,7 +124,7 @@ function Profiles() {
               {isError && (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={4}
                     className="px-5 py-6 text-center text-destructive"
                   >
                     Failed to load patients.
@@ -135,7 +134,7 @@ function Profiles() {
               {!isLoading && filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={4}
                     className="px-5 py-6 text-center text-muted-foreground"
                   >
                     No matching patients.
@@ -151,7 +150,6 @@ function Profiles() {
                     {p.patientId}
                   </td>
                   <td className="px-5 py-3 font-medium">{p.name}</td>
-                  <td className="px-5 py-3 text-xs">{p.condition}</td>
                   <td className="px-5 py-3 font-mono text-xs">{p.lastVisit}</td>
                   <td className="px-5 py-3 text-right">
                     <button

@@ -10,13 +10,21 @@ import {
   idNumberInUse,
 } from "@/lib/clinic-data";
 import { sendWelcomeEmail } from "@/lib/welcome-email";
+import {
+  DOCUMENT_CHECK_NOTE,
+  ID_TYPE_LABELS,
+  SA_ID_CHECK_NOTE,
+  validateIdByType,
+  validateSaId,
+  type IdType,
+} from "@/lib/sa-id";
 
 export const Route = createFileRoute("/signup")({ component: Signup });
 
-// SA ID numbers are 13 digits. Passports vary by country, so anything
-// alphanumeric of a sensible length is accepted instead of guessing a format.
-const SA_ID = /^\d{13}$/;
-const PASSPORT = /^[A-Za-z0-9]{6,12}$/;
+// An SA ID is validated strictly (date of birth, citizenship digit, Luhn);
+// passports and asylum/refugee permits get a format-only check — see sa-id.ts.
+// Asylum seekers and refugees must be able to sign up too; a patient with no
+// document at all can still be registered in person at reception.
 
 function Signup() {
   const navigate = useNavigate();
@@ -24,13 +32,17 @@ function Signup() {
     name: "",
     email: "",
     phone: "",
-    idType: "id" as "id" | "passport",
+    idType: "sa_id" as IdType,
     idNumber: "",
     password: "",
     confirm: "",
     clinicId: "",
   });
   const [error, setError] = useState("");
+
+  // Decoded live so the person can see we read their date of birth correctly.
+  const saIdCheck =
+    form.idType === "sa_id" ? validateSaId(form.idNumber) : null;
   const [checkingId, setCheckingId] = useState(false);
 
   const { data: clinics = [], isLoading: clinicsLoading } = useQuery({
@@ -46,7 +58,9 @@ function Signup() {
         phone: form.phone,
         password: form.password,
         clinicId: Number(form.clinicId),
-        idNumber: form.idNumber.trim(),
+        idNumber: normalizedId(),
+        idType: form.idType,
+        dob: saIdCheck?.valid ? saIdCheck.dateOfBirth : undefined,
       });
       if (!res.ok) return { ...res, mailOk: false };
       // Confirmation email via Resend (server-side). Never blocks signup —
@@ -72,6 +86,11 @@ function Signup() {
     onError: () => setError("Could not create account — please try again"),
   });
 
+  const normalizedId = () => {
+    const id = form.idNumber.replace(/\s+/g, "");
+    return form.idType === "sa_id" ? id : id.toUpperCase();
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -81,13 +100,10 @@ function Signup() {
       return;
     }
 
-    const id = form.idNumber.trim();
-    if (form.idType === "id" && !SA_ID.test(id)) {
-      setError("A South African ID number is 13 digits.");
-      return;
-    }
-    if (form.idType === "passport" && !PASSPORT.test(id)) {
-      setError("Enter a valid passport number.");
+    const id = normalizedId();
+    const idCheck = validateIdByType(id, form.idType);
+    if (!idCheck.valid) {
+      setError(idCheck.reason ?? "Check your ID number.");
       return;
     }
 
@@ -159,8 +175,10 @@ function Signup() {
             <div className="grid grid-cols-2 gap-2 mb-2">
               {(
                 [
-                  ["id", "SA ID number"],
+                  ["sa_id", "SA ID number"],
                   ["passport", "Passport"],
+                  ["asylum", ID_TYPE_LABELS.asylum],
+                  ["refugee", ID_TYPE_LABELS.refugee],
                 ] as const
               ).map(([key, label]) => (
                 <button
@@ -181,14 +199,34 @@ function Signup() {
               value={form.idNumber}
               onChange={(e) => setForm({ ...form, idNumber: e.target.value })}
               placeholder={
-                form.idType === "id" ? "13 digits" : "Passport number"
+                form.idType === "sa_id"
+                  ? "13 digits"
+                  : `${ID_TYPE_LABELS[form.idType]} number`
               }
               required
               className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
             />
+            {saIdCheck?.valid && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Date of birth:{" "}
+                <strong>
+                  {new Date(saIdCheck.dateOfBirth!).toLocaleDateString(
+                    "en-ZA",
+                    {
+                      day: "numeric",
+                      month: "long",
+                      year: "numeric",
+                      timeZone: "UTC",
+                    },
+                  )}
+                </strong>{" "}
+                (from your ID number)
+              </p>
+            )}
             <p className="text-xs text-muted-foreground mt-1">
               Links you to your medical file and stops a second record being
-              created for you by mistake.
+              created for you by mistake.{" "}
+              {form.idType === "sa_id" ? SA_ID_CHECK_NOTE : DOCUMENT_CHECK_NOTE}
             </p>
           </div>
 

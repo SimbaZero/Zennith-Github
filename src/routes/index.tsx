@@ -143,7 +143,8 @@ function SiteHeader() {
 
         <nav className="hidden md:flex items-center gap-6 ml-8 text-sm">
           {links.map(([href, label]) => (
-            <a key={href}
+            <a
+              key={href}
               href={href}
               className="text-[oklch(0.45_0.03_260)] hover:text-[oklch(0.18_0.05_260)]"
             >
@@ -153,17 +154,20 @@ function SiteHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
-          <Link to="/login"
+          <Link
+            to="/login"
             className="text-sm px-4 py-2 rounded-md hover:bg-[oklch(0.94_0.01_250)]"
           >
             Sign in
           </Link>
-          <Link to="/signup"
+          <Link
+            to="/signup"
             className="text-sm px-4 py-2 rounded-md bg-[oklch(0.22_0.07_260)] text-white hover:bg-[oklch(0.3_0.08_260)]"
           >
             Create account
           </Link>
-          <button onClick={() => setOpen((v) => !v)}
+          <button
+            onClick={() => setOpen((v) => !v)}
             className="md:hidden p-2 -mr-2"
             aria-label="Menu"
             aria-expanded={open}
@@ -199,7 +203,8 @@ function Hero() {
           instead of implied. Faded hard on the right so the live queue card
           keeps a clean, high-contrast background. */}
       <div aria-hidden className="absolute inset-0 -z-10">
-        <img src={clinicPhotoThird}
+        <img
+          src={clinicPhotoThird}
           alt=""
           className="h-full w-full object-cover object-[35%_center] opacity-[0.16]"
         />
@@ -222,12 +227,14 @@ function Hero() {
           </p>
 
           <div className="mt-8 flex flex-wrap gap-3">
-            <Link to="/signup"
+            <Link
+              to="/signup"
               className="px-5 py-3 rounded-md bg-[oklch(0.22_0.07_260)] text-white font-medium hover:bg-[oklch(0.3_0.08_260)]"
             >
               Create a patient account
             </Link>
-            <Link to="/clinic-signup"
+            <Link
+              to="/clinic-signup"
               className="px-5 py-3 rounded-md border border-[oklch(0.85_0.02_255)] font-medium hover:bg-white"
             >
               Register a clinic
@@ -298,7 +305,8 @@ function Roles() {
   ];
 
   return (
-    <section id="what"
+    <section
+      id="what"
       className="border-y border-[oklch(0.9_0.01_250)] bg-white"
     >
       <div className="mx-auto max-w-6xl px-6 py-20">
@@ -312,7 +320,8 @@ function Roles() {
 
         <div className="mt-10 divide-y divide-[oklch(0.92_0.01_250)]">
           {rows.map((r) => (
-            <div key={r.who}
+            <div
+              key={r.who}
               className="grid sm:grid-cols-[13rem_1fr] gap-x-8 gap-y-3 py-7"
             >
               <div>
@@ -351,7 +360,8 @@ function PhotoBand() {
       <div className="grid sm:grid-cols-3 gap-4">
         {shots.map((shot) => (
           <figure key={shot.caption} className="relative">
-            <img src={shot.src}
+            <img
+              src={shot.src}
               alt=""
               className="w-full aspect-[4/3] object-cover rounded-lg"
             />
@@ -397,7 +407,8 @@ function Joining() {
             Public or private, the process is the same. Most clinics are running
             within a day of approval.
           </p>
-          <img src={clinicPhoto}
+          <img
+            src={clinicPhoto}
             alt=""
             className="mt-8 rounded-lg w-full object-cover aspect-[4/3] hidden lg:block"
           />
@@ -453,7 +464,8 @@ function About() {
             </p>
           </div>
         </div>
-        <img src={clinicPhotoWide}
+        <img
+          src={clinicPhotoWide}
           alt=""
           className="rounded-lg w-full object-cover aspect-[3/2]"
         />
@@ -477,7 +489,8 @@ function Team() {
         {TEAM.map((m) => (
           <article key={m.name}>
             {m.photo ? (
-              <img src={m.photo}
+              <img
+                src={m.photo}
                 alt=""
                 className="w-full aspect-square object-cover rounded-full"
               />
@@ -502,7 +515,8 @@ function Team() {
             {(m.github || m.linkedin) && (
               <div className="flex gap-3 mt-3">
                 {m.github && (
-                  <a href={m.github}
+                  <a
+                    href={m.github}
                     target="_blank"
                     rel="noreferrer"
                     className="text-[oklch(0.5_0.03_260)] hover:text-[oklch(0.18_0.05_260)]"
@@ -512,7 +526,8 @@ function Team() {
                   </a>
                 )}
                 {m.linkedin && (
-                  <a href={m.linkedin}
+                  <a
+                    href={m.linkedin}
                     target="_blank"
                     rel="noreferrer"
                     className="text-[oklch(0.5_0.03_260)] hover:text-[oklch(0.18_0.05_260)]"
@@ -534,7 +549,8 @@ function Questions() {
   const [open, setOpen] = useState<number | null>(0);
 
   return (
-    <section id="questions"
+    <section
+      id="questions"
       className="border-y border-[oklch(0.9_0.01_250)] bg-white"
     >
       <div className="mx-auto max-w-3xl px-6 py-20">
@@ -547,17 +563,20 @@ function Questions() {
             const isOpen = open === i;
             return (
               <div key={item.q}>
-                <button onClick={() => setOpen(isOpen ? null : i)}
+                <button
+                  onClick={() => setOpen(isOpen ? null : i)}
                   aria-expanded={isOpen}
                   className="w-full flex items-start gap-4 py-5 text-left"
                 >
                   <span className="font-medium flex-1">{item.q}</span>
                   {isOpen ? (
-                    <Minus size={18}
+                    <Minus
+                      size={18}
                       className="mt-0.5 shrink-0 text-[oklch(0.55_0.04_260)]"
                     />
                   ) : (
-                    <Plus size={18}
+                    <Plus
+                      size={18}
                       className="mt-0.5 shrink-0 text-[oklch(0.55_0.04_260)]"
                     />
                   )}
@@ -590,7 +609,8 @@ function Contact() {
           </p>
 
           <div className="mt-8 space-y-4 text-[15px]">
-            <a href="mailto:hello@zennith.co.za"
+            <a
+              href="mailto:hello@zennith.co.za"
               className="flex items-center gap-3 hover:text-[oklch(0.45_0.15_245)]"
             >
               <Mail size={17} className="text-[oklch(0.55_0.04_260)]" />
@@ -610,17 +630,20 @@ function Contact() {
             we&apos;ve checked the registration details.
           </p>
           <div className="mt-5 flex flex-col gap-2.5">
-            <Link to="/signup"
+            <Link
+              to="/signup"
               className="px-5 py-3 rounded-md bg-[oklch(0.22_0.07_260)] text-white font-medium text-center hover:bg-[oklch(0.3_0.08_260)]"
             >
               Create a patient account
             </Link>
-            <Link to="/clinic-signup"
+            <Link
+              to="/clinic-signup"
               className="px-5 py-3 rounded-md border border-[oklch(0.85_0.02_255)] font-medium text-center hover:bg-[oklch(0.97_0.005_250)]"
             >
               Register a clinic
             </Link>
-            <Link to="/login"
+            <Link
+              to="/login"
               className="px-5 py-3 rounded-md font-medium text-center hover:bg-[oklch(0.96_0.01_250)]"
             >
               Sign in to your dashboard
@@ -702,7 +725,8 @@ function PublicQueue() {
           <span className="relative inline-flex h-2 w-2 rounded-full bg-[oklch(0.78_0.15_160)]" />
         </span>
         <span className="text-sm text-white/70">Live right now</span>
-        <button onClick={findNearest}
+        <button
+          onClick={findNearest}
           disabled={locating}
           className="ml-auto text-xs border border-white/25 hover:bg-white/10 rounded-full px-3 py-1.5 disabled:opacity-50"
         >
@@ -710,7 +734,8 @@ function PublicQueue() {
         </button>
       </div>
 
-      <select value={clinicId ?? ""}
+      <select
+        value={clinicId ?? ""}
         onChange={(e) => setSelected(Number(e.target.value))}
         aria-label="Choose a clinic"
         className="mt-5 w-full bg-white/10 border border-white/20 rounded-md px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-white/40"

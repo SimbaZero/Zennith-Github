@@ -8,11 +8,26 @@ import {
   type DigitizedPatientData,
 } from "@/lib/nurse-service";
 import { extractPatientDataWithGemini } from "@/lib/gemini-ocr";
+import {
+  DOCUMENT_CHECK_NOTE,
+  SA_ID_CHECK_NOTE,
+  validateUntypedId,
+} from "@/lib/sa-id";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/nurse/digitize")({
   component: Digitize,
 });
+
+// A paper file doesn't record which document the number came from, so the
+// check is inferred from its shape: 13 digits = SA ID (strict), anything else
+// = format-only. A valid SA ID also fills an empty Date of Birth.
+function withDobFromId(data: DigitizedPatientData): DigitizedPatientData {
+  const check = validateUntypedId(data.idNumber);
+  return check.dateOfBirth && !data.dateOfBirth.trim()
+    ? { ...data, dateOfBirth: check.dateOfBirth }
+    : data;
+}
 
 function Digitize() {
   const { nurse } = useCurrentNurse();
@@ -102,7 +117,7 @@ function Digitize() {
         await extractPatientDataWithGemini(file);
       if (cancelledRef.current) return;
       setConfidence(conf);
-      setResult(data);
+      setResult(withDobFromId(data));
     } catch (err) {
       if (cancelledRef.current) return;
       console.error("Gemini extraction failed:", err);
@@ -125,11 +140,20 @@ function Digitize() {
     setConfidence(null);
   };
 
+  const idCheck = result?.idNumber ? validateUntypedId(result.idNumber) : null;
+
   const save = async () => {
     if (!result) return;
+    if (idCheck && !idCheck.valid) {
+      toast.error(idCheck.reason);
+      return;
+    }
     setSaving(true);
     try {
-      const saved = await saveDigitizedFile(result, nurse?.clinicId);
+      const saved = await saveDigitizedFile(
+        { ...result, idNumber: result.idNumber.replace(/\s+/g, "") },
+        nurse?.clinicId,
+      );
       toast.success(
         saved.matchedExisting
           ? `Updated existing patient ${saved.patientId}`
@@ -151,7 +175,8 @@ function Digitize() {
 
   const updateField = (field: keyof DigitizedPatientData, value: string) => {
     if (!result) return;
-    setResult({ ...result, [field]: value });
+    const next = { ...result, [field]: value };
+    setResult(field === "idNumber" ? withDobFromId(next) : next);
   };
 
   return (
@@ -296,6 +321,24 @@ function Digitize() {
                       onChange={(v) => updateField("dateOfBirth", v)}
                     />
                   </div>
+                  {idCheck && !idCheck.valid && (
+                    <p className="text-xs text-destructive">{idCheck.reason}</p>
+                  )}
+                  {idCheck?.dateOfBirth &&
+                    result.dateOfBirth.trim() &&
+                    result.dateOfBirth.trim() !== idCheck.dateOfBirth && (
+                      <p className="text-xs text-amber-600">
+                        The ID number gives a date of birth of{" "}
+                        {idCheck.dateOfBirth} — check it against the file.
+                      </p>
+                    )}
+                  {result.idNumber && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {/^\d{13}$/.test(result.idNumber.replace(/\s+/g, ""))
+                        ? SA_ID_CHECK_NOTE
+                        : DOCUMENT_CHECK_NOTE}
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <EditableField
                       label="Cellphone"

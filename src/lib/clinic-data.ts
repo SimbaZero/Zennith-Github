@@ -743,10 +743,18 @@ export async function distributeStock(
 // Patients + medical records
 // ---------------------------------------------------------------------------
 
+// PatientSummary, findPatient, fetchPatientPage and fetchPatientRecord below
+// are used ONLY by the receptionist module. Reception has no clinical role, so
+// under POPIA's minimality principle they get no clinical data at all — not
+// hidden in the UI, but never fetched. That includes chronicCondition on the
+// patient doc, and the whole medicalRecords / medicalRecordsHistory
+// collections (CD4 and viral load there effectively disclose HIV status).
+// lastVisit and insurancePolicyNumber are duplicated onto the patient doc for
+// exactly this reason — see PatientUpdateInput. Do not add clinical fields
+// back here; nurses and doctors have their own fetchers (doctor-service.ts).
 export interface PatientSummary {
   patientId: string;
   name: string;
-  condition: string;
   lastVisit: string;
 }
 
@@ -755,20 +763,12 @@ async function toPatientSummary(
   p: Record<string, unknown>,
 ): Promise<PatientSummary> {
   const userId = p.userId as string | number | undefined;
-  const medicalRecordNo = p.medicalRecordNo as string | number | undefined;
-  const [uSnap, mrSnap] = await Promise.all([
-    getDoc(doc(db, "users", String(userId))),
-    medicalRecordNo != null
-      ? getDoc(doc(db, "medicalRecords", String(medicalRecordNo)))
-      : Promise.resolve(null),
-  ]);
+  const uSnap = await getDoc(doc(db, "users", String(userId)));
   const u = uSnap.exists() ? uSnap.data() : {};
-  const mr = mrSnap?.exists() ? mrSnap.data() : {};
   return {
     patientId: pid,
     name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
-    condition: (p.chronicCondition as string) ?? "—",
-    lastVisit: ((mr.lastVisit as string) ?? "").slice(0, 10) || "—",
+    lastVisit: ((p.lastVisit as string) ?? "").slice(0, 10) || "—",
   };
 }
 
@@ -797,6 +797,41 @@ export async function fetchPatientPage(
   return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
 }
 
+/** Live clinic patient list for reception's walk-in search (queue page).
+ *  Same query as doctor-service's usePatientDirectory — reusing the same
+ *  composite index — but builds rows with toPatientSummary, so it never opens
+ *  medicalRecords and carries no condition. Reception used to call the
+ *  doctor hook directly, which fetched every patient's clinical record. */
+export function useReceptionPatientDirectory(
+  pageSize: number,
+  clinicId?: number,
+): PatientSummary[] {
+  const [patients, setPatients] = useState<PatientSummary[]>([]);
+  useEffect(() => {
+    const q =
+      clinicId != null
+        ? query(
+            collection(db, "patients"),
+            where("clinicId", "==", clinicId),
+            orderBy("userId"),
+            limit(pageSize),
+          )
+        : query(collection(db, "patients"), orderBy("userId"), limit(pageSize));
+    return onSnapshot(
+      q,
+      async (snapshot) => {
+        setPatients(
+          await Promise.all(
+            snapshot.docs.map((d) => toPatientSummary(d.id, d.data())),
+          ),
+        );
+      },
+      (err) => console.error("Failed to load patient directory:", err),
+    );
+  }, [pageSize, clinicId]);
+  return patients;
+}
+
 export async function findPatient(
   pid: string,
   clinicId?: number | null,
@@ -811,6 +846,9 @@ export async function findPatient(
   return toPatientSummary(snap.id, snap.data());
 }
 
+/** The full clinical record, as shown to nurses and doctors (built in
+ *  doctor-service.ts, rendered by PatientRecordView). Not used by reception —
+ *  see ReceptionPatientRecord. */
 export interface PatientRecord {
   patientId: string;
   name: string;
@@ -835,28 +873,40 @@ export interface PatientRecord {
   history: { id: string; description: string }[];
 }
 
-export async function fetchPatientRecord(pid: string): Promise<PatientRecord> {
+/** Reception's view of a patient — administrative fields only (see the
+ *  POPIA note above PatientSummary). */
+export interface ReceptionPatientRecord {
+  patientId: string;
+  name: string;
+  idNumber: string;
+  /** users.idType when recorded ("sa_id" | a DocumentKind); older records
+   *  have none, and the edit page then infers it from the number's shape. */
+  idType: string;
+  cell: string;
+  suburb: string;
+  city: string;
+  email: string;
+  emergencyContactName: string;
+  emergencyContactNo: string;
+  insurance: string;
+  lastVisit: string;
+  nextAppointment: string;
+}
+
+export async function fetchPatientRecord(
+  pid: string,
+): Promise<ReceptionPatientRecord> {
   const pSnap = await getDoc(doc(db, "patients", pid));
   if (!pSnap.exists()) throw new Error(`Patient "${pid}" not found`);
   const p = pSnap.data();
 
-  const [uSnap, mrSnap, histSnap, apptSnap] = await Promise.all([
+  const [uSnap, apptSnap] = await Promise.all([
     getDoc(doc(db, "users", String(p.userId))),
-    p.medicalRecordNo != null
-      ? getDoc(doc(db, "medicalRecords", String(p.medicalRecordNo)))
-      : Promise.resolve(null),
-    getDocs(
-      query(
-        collection(db, "medicalRecordsHistory"),
-        where("patientId", "==", pid),
-      ),
-    ),
     getDocs(
       query(collection(db, "appointments"), where("patientId", "==", pid)),
     ),
   ]);
   const u = uSnap.exists() ? uSnap.data() : {};
-  const mr = mrSnap?.exists() ? mrSnap.data() : {};
 
   const now = new Date().toISOString();
   const upcoming = apptSnap.docs
@@ -870,33 +920,18 @@ export async function fetchPatientRecord(pid: string): Promise<PatientRecord> {
     patientId: pid,
     name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
     idNumber: u.idNumber ?? "—",
+    idType: u.idType ?? "",
     cell: u.contactNum ?? "—",
-    address: [u.suburb, u.city].filter(Boolean).join(", ") || "—",
+    suburb: u.suburb ?? "",
+    city: u.city ?? "",
     email: u.email ?? "—",
-    condition: p.chronicCondition ?? "—",
     emergencyContactName: p.emergencyContactName ?? "—",
     emergencyContactNo: p.emergencyContactNo ?? "—",
-    bloodType: mr.bloodType ?? "—",
-    allergies: mr.allergies ?? "None recorded",
-    prescription: mr.prescription ?? "—",
-    dosage: mr.dosage != null ? String(mr.dosage) : "—",
-    bp: mr.bp ?? "—",
-    glucose: mr.glucose != null ? String(mr.glucose) : "—",
-    cd4: mr.cd4 ?? "—",
-    viralLoad: mr.viralLoad ?? "—",
-    insurance: mr.insurancePolicyNumber ?? "None",
-    lastVisit: (mr.lastVisit ?? "").slice(0, 10) || "—",
+    insurance: p.insurancePolicyNumber ?? "None",
+    lastVisit: (p.lastVisit ?? "").slice(0, 10) || "—",
     nextAppointment: upcoming
       ? `${(upcoming.appointDateTime ?? "").slice(0, 10)} · ${upcoming.appointType ?? ""}`
       : "None scheduled",
-    history: histSnap.docs
-      .map((d) => ({
-        id: d.id,
-        description: d.data().description ?? "",
-        historyId: Number(d.data().historyId ?? 0),
-      }))
-      .sort((a, b) => b.historyId - a.historyId)
-      .map(({ id, description }) => ({ id, description })),
   };
 }
 
@@ -952,6 +987,13 @@ export async function saveDigitisedRecord(
     mr.lastVisit = new Date().toISOString();
     writes.push(
       setDoc(doc(db, "medicalRecords", String(recordNo)), mr, { merge: true }),
+      // Duplicated onto the patient doc so reception never opens a clinical
+      // record just to show a date — see PatientUpdateInput.
+      setDoc(
+        doc(db, "patients", pid),
+        { lastVisit: mr.lastVisit },
+        { merge: true },
+      ),
     );
   }
 
@@ -1271,7 +1313,11 @@ export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist>
 
 export interface RegistrationInput {
   fullName: string;
+  /** SA ID or other document number. Empty when idType is "none" — an
+   *  undocumented patient must still be registrable. */
   nationalId: string;
+  /** "sa_id", a DocumentKind from sa-id.ts, or "none". */
+  idType: string;
   contactNum: string;
   email?: string;
   city: string;
@@ -1288,6 +1334,20 @@ export interface RegistrationInput {
   /** users.Gender — was collected on the form but never sent, see #16. */
   gender?: string;
   remarks: string;
+}
+
+/** Whole years since a YYYY-MM-DD date of birth, or null if there isn't one.
+ *  Age is stored alongside DOB (schema stores both — see #16 in db-issues.md). */
+function ageFromDob(dob?: string): number | null {
+  if (!dob) return null;
+  const dobDate = new Date(dob);
+  if (Number.isNaN(dobDate.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - dobDate.getFullYear();
+  const monthDiff = today.getMonth() - dobDate.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dobDate.getDate()))
+    age -= 1;
+  return age;
 }
 
 export async function registerPatient(
@@ -1317,22 +1377,7 @@ export async function registerPatient(
   const [names, ...rest] = input.fullName.trim().split(/\s+/);
   const surname = rest.join(" ");
 
-  // Age is derived from DOB (schema stores both — see #16 in db-issues.md).
-  let age: number | null = null;
-  if (input.dob) {
-    const dobDate = new Date(input.dob);
-    if (!Number.isNaN(dobDate.getTime())) {
-      const today = new Date();
-      age = today.getFullYear() - dobDate.getFullYear();
-      const monthDiff = today.getMonth() - dobDate.getMonth();
-      if (
-        monthDiff < 0 ||
-        (monthDiff === 0 && today.getDate() < dobDate.getDate())
-      ) {
-        age -= 1;
-      }
-    }
-  }
+  const age = ageFromDob(input.dob);
 
   await Promise.all([
     setDoc(doc(db, "users", String(ids.userNo)), {
@@ -1341,6 +1386,7 @@ export async function registerPatient(
       surname,
       role: "Patient",
       idNumber: input.nationalId,
+      idType: input.idType,
       contactNum: input.contactNum,
       city: input.city,
       suburb: input.suburb,
@@ -1364,6 +1410,9 @@ export async function registerPatient(
       chronicCondition: "Not yet assessed",
       emergencyContactName: input.emergencyContactName,
       emergencyContactNo: input.emergencyContactNo,
+      // Duplicates of the medicalRecords fields — see PatientUpdateInput.
+      insurancePolicyNumber: input.insurance || null,
+      lastVisit: null,
       // Was previously omitted entirely — see #16 in db-issues.md.
       ...(input.clinicId != null ? { clinicId: input.clinicId } : {}),
     }),
@@ -1386,9 +1435,13 @@ export interface PatientSignupInput {
   phone: string;
   password: string;
   clinicId: number;
-  /** SA ID or passport number — used to stop one person ending up with two
-   *  patient records, which would split their medical history. */
+  /** SA ID, passport or permit number — used to stop one person ending up
+   *  with two patient records, which would split their medical history. */
   idNumber?: string;
+  /** "sa_id" or a DocumentKind from sa-id.ts. */
+  idType?: string;
+  /** YYYY-MM-DD, decoded from a valid SA ID number. */
+  dob?: string;
 }
 
 // Real clinic list — reads the actual `clinics` collection, unlike the old
@@ -1496,10 +1549,13 @@ export async function signUpPatient(
         surname,
         role: "Patient",
         idNumber,
+        ...(input.idType ? { idType: input.idType } : {}),
         contactNum: input.phone.trim(),
         city: "",
         suburb: "",
         email,
+        DOB: input.dob || null,
+        Age: ageFromDob(input.dob),
       }),
       setDoc(doc(fdb, "medicalRecords", String(ids.recordNo)), {
         medicalRecordNo: ids.recordNo,
@@ -1516,6 +1572,9 @@ export async function signUpPatient(
         chronicCondition: "Not yet assessed",
         emergencyContactName: "",
         emergencyContactNo: "",
+        // Duplicates of the medicalRecords fields — see PatientUpdateInput.
+        insurancePolicyNumber: null,
+        lastVisit: null,
         clinicId: input.clinicId,
       }),
       setDoc(doc(fdb, "profiles", cred.user.uid), {
@@ -1604,12 +1663,21 @@ export interface PatientUpdateInput {
   chronicCondition?: string;
   emergencyContactName?: string;
   emergencyContactNo?: string;
+  // DELIBERATE DUPLICATES of the same fields on medicalRecords. Reception
+  // needs these two values and nothing else from the clinical record, so
+  // they live here as well — a non-clinical role must never have to open
+  // medicalRecords (POPIA minimality; see the note above PatientSummary).
+  // Anything that writes one of these to medicalRecords must write it here
+  // too. Don't "deduplicate" them back.
+  lastVisit?: string;
+  insurancePolicyNumber?: string;
 }
 
 export interface UserUpdateInput {
   names?: string;
   surname?: string;
   idNumber?: string;
+  idType?: string;
   contactNum?: string;
   city?: string;
   suburb?: string;

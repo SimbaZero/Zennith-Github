@@ -52,7 +52,9 @@ const retry = async (fn, n = 4) => {
   }
 };
 await retry(() =>
-  signInWithEmailAndPassword(auth, "admin@zennith.test", "password"),
+  // Super Admin, because this script seeds the clinics collection — which
+  // the security rules deliberately restrict to that role.
+  signInWithEmailAndPassword(auth, "superadmin@zennith.test", "password"),
 );
 
 let seed = 20260810;

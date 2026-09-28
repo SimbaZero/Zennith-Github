@@ -2,12 +2,31 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { registerPatient, resolveCurrentReceptionist } from "@/lib/clinic-data";
+import {
+  DOCUMENT_CHECK_NOTE,
+  ID_TYPE_LABELS,
+  SA_ID_CHECK_NOTE,
+  validateIdByType,
+  validateSaId,
+  type IdType,
+} from "@/lib/sa-id";
 import { useState } from "react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/receptionist/registration")({
   component: Registration,
 });
+
+// Reception must be able to register anyone who walks in: SA ID holders,
+// foreign nationals, asylum seekers, refugees — and people with no document
+// at all. A clinic that can't register an undocumented or asylum-seeking
+// patient turns away the people most likely to need it. So the ID is chosen
+// by type: strict validation for an SA ID, format-only for other documents,
+// and nothing required for "No document".
+const ID_TYPE_OPTIONS: Record<IdType | "none", string> = {
+  ...ID_TYPE_LABELS,
+  none: "No document available",
+};
 
 const initial = {
   patientNo: "",
@@ -19,10 +38,10 @@ const initial = {
   residential: "",
   mailing: "",
   headman: "",
-  nationalId: "",
-  altIdType: "Passport",
-  altIdNumber: "",
+  idType: "sa_id" as IdType | "none",
+  idNumber: "",
   dob: "",
+  dobFromId: false,
   gender: "F",
   marital: "Single",
   emName: "",
@@ -55,6 +74,28 @@ function Registration() {
     (v: (typeof initial)[K]) =>
       setF({ ...f, [k]: v });
 
+  // A valid SA ID already contains the date of birth — fill it in rather
+  // than making reception type it twice (and risk the two disagreeing).
+  const setIdNumber = (idNumber: string) => {
+    const check = f.idType === "sa_id" ? validateSaId(idNumber) : null;
+    setF({
+      ...f,
+      idNumber,
+      ...(check?.valid
+        ? { dob: check.dateOfBirth!, dobFromId: true }
+        : f.dobFromId
+          ? { dob: "", dobFromId: false }
+          : {}),
+    });
+  };
+  const setIdType = (idType: string) =>
+    setF({
+      ...f,
+      idType: idType as typeof initial.idType,
+      idNumber: "",
+      ...(f.dobFromId ? { dob: "", dobFromId: false } : {}),
+    });
+
   // Who's logged in + which real clinic (numeric clinicId) they belong to.
   // Was previously hardcoded to "Hillbrow CHC" / "Logged-in user" regardless
   // of who was actually signed in — see #16 in db-issues.md.
@@ -72,8 +113,6 @@ function Registration() {
   // real field/collection can be added later.
   const buildRemarks = () => {
     const extra: string[] = [];
-    if (f.altIdType !== "Passport" || f.altIdNumber)
-      extra.push(`Alt ID: ${f.altIdType} ${f.altIdNumber}`.trim());
     if (f.marital !== "Single") extra.push(`Marital status: ${f.marital}`);
     if (f.occupation !== "Unemployed" || f.employer)
       extra.push(
@@ -97,7 +136,13 @@ function Registration() {
     mutationFn: () =>
       registerPatient({
         fullName: f.patientName,
-        nationalId: f.nationalId,
+        nationalId:
+          f.idType === "none"
+            ? ""
+            : f.idType === "sa_id"
+              ? f.idNumber.replace(/\s+/g, "")
+              : f.idNumber.replace(/\s+/g, "").toUpperCase(),
+        idType: f.idType,
         contactNum: f.telHome || f.telAlt,
         city: f.district,
         suburb: f.town,
@@ -130,9 +175,16 @@ function Registration() {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!f.patientName || !f.nationalId) {
-      toast.error("Patient name and National ID are required");
+    if (!f.patientName) {
+      toast.error("Patient name is required");
       return;
+    }
+    if (f.idType !== "none") {
+      const check = validateIdByType(f.idNumber, f.idType);
+      if (!check.valid) {
+        toast.error(check.reason);
+        return;
+      }
     }
     if (!f.consent) {
       toast.error("Patient/Guardian consent is required");
@@ -251,34 +303,46 @@ function Registration() {
         </Section>
 
         <Section title="IDENTIFICATION & DEMOGRAPHICS">
-          <Grid cols={3}>
-            <Field
-              label="NATIONAL ID *"
-              required
-              value={f.nationalId}
-              onChange={set("nationalId")}
-              placeholder="13-digit RSA ID"
-            />
+          <Grid cols={2}>
             <Select
-              label="ALTERNATE ID TYPE"
-              value={f.altIdType}
-              onChange={set("altIdType")}
-              options={["Passport", "Asylum", "Refugee", "Other"]}
+              label="IDENTITY DOCUMENT *"
+              value={f.idType}
+              onChange={setIdType}
+              options={ID_TYPE_OPTIONS}
             />
-            <Field
-              label="ALTERNATE ID NUMBER"
-              value={f.altIdNumber}
-              onChange={set("altIdNumber")}
-              placeholder="Document number"
-            />
+            {f.idType !== "none" && (
+              <Field
+                label={`${ID_TYPE_OPTIONS[f.idType].toUpperCase()} NUMBER *`}
+                required
+                value={f.idNumber}
+                onChange={setIdNumber}
+                placeholder={
+                  f.idType === "sa_id" ? "13-digit RSA ID" : "Document number"
+                }
+              />
+            )}
           </Grid>
+          <p className="text-xs text-muted-foreground">
+            {f.idType === "sa_id"
+              ? SA_ID_CHECK_NOTE
+              : f.idType === "none"
+                ? "The patient can be registered without a document. Search Patient Profiles by name first so they don't end up with two records."
+                : DOCUMENT_CHECK_NOTE}
+          </p>
           <Grid cols={3}>
-            <Field
-              label="DATE OF BIRTH"
-              type="date"
-              value={f.dob}
-              onChange={set("dob")}
-            />
+            <div>
+              <Field
+                label="DATE OF BIRTH"
+                type="date"
+                value={f.dob}
+                onChange={(v) => setF({ ...f, dob: v, dobFromId: false })}
+              />
+              {f.dobFromId && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Filled in from the ID number.
+                </p>
+              )}
+            </div>
             <Select
               label="GENDER"
               value={f.gender}
@@ -583,8 +647,12 @@ function Select({
   label: string;
   value: string;
   onChange: (v: string) => void;
-  options: string[];
+  /** Plain list (value = label), or a value -> label map. */
+  options: string[] | Record<string, string>;
 }) {
+  const entries = Array.isArray(options)
+    ? options.map((o) => [o, o] as const)
+    : Object.entries(options);
   return (
     <div>
       <label className="text-[11px] tracking-wider text-muted-foreground block mb-1.5">
@@ -595,9 +663,9 @@ function Select({
         onChange={(e) => onChange(e.target.value)}
         className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] bg-white"
       >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
+        {entries.map(([value, text]) => (
+          <option key={value} value={value}>
+            {text}
           </option>
         ))}
       </select>

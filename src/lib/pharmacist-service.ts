@@ -988,8 +988,13 @@ export function useMedicationUsage(days = 30): UsageMap {
   const [usage, setUsage] = useState<UsageMap>({});
 
   useEffect(() => {
+    // Reads patientDispensing, not distributions. `distributions` was the
+    // retired pharmacist-to-nurse workflow — nothing has written to it since
+    // that page was removed, which is why every medication showed "no usage
+    // data" while medication was plainly being handed out. What a clinic
+    // actually consumes is what nurses dispense to patients.
     const unsub = onSnapshot(
-      collection(db, "distributions"),
+      collection(db, "patientDispensing"),
       (snap) => {
         const dayKeys: string[] = [];
         for (let i = days - 1; i >= 0; i--) {
@@ -1002,8 +1007,23 @@ export function useMedicationUsage(days = 30): UsageMap {
         snap.docs.forEach((docSnap) => {
           const data = docSnap.data();
           const medName = data.medName as string;
-          const idx = dayKeys.indexOf(data.date as string);
-          if (idx === -1 || !medName) return;
+          if (!medName) return;
+
+          // distributions stored a plain "date" string; patientDispensing
+          // stores a Firestore timestamp in createdAt. A write made offline
+          // has no server timestamp yet, so fall back to the local estimate
+          // rather than dropping the row.
+          const raw = data.createdAt;
+          const when = raw?.toDate
+            ? raw.toDate()
+            : typeof raw === "string"
+              ? new Date(raw)
+              : null;
+          if (!when || Number.isNaN(when.getTime())) return;
+
+          const idx = dayKeys.indexOf(when.toISOString().slice(0, 10));
+          if (idx === -1) return;
+
           if (!byMed[medName]) byMed[medName] = new Array(days).fill(0);
           byMed[medName][idx] += toNumber(data.unitsGiven);
         });
