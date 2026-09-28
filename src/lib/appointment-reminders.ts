@@ -1,5 +1,6 @@
 // Server-only: run by the Worker's cron triggers (src/server/plugins/sms-reminders.ts)
 // and by POST /api/sms/reminders.
+import { readEnv } from "../server/env";
 import { firestoreAdminFromEnv, type FirestoreWrite } from "../server/firestore-admin";
 import { clinicWallClock } from "./clinic-time";
 import { buildAppointmentReminderText, formatPhoneForSms, sendSms } from "./smsportal";
@@ -42,7 +43,9 @@ export function getReminderTargetsForAppointment(
   const date = start.toISOString().slice(0, 10);
   const time = start.toISOString().slice(11, 16);
 
-  return slots.map((slot) => ({
+  // An appointment at or before 08:00 has already started by the morning
+  // slot, so asking the patient to confirm it then makes no sense.
+  return slots.filter((slot) => slot.at.getTime() < start.getTime()).map((slot) => ({
     kind: slot.kind,
     scheduledFor: slot.at,
     message: buildAppointmentReminderText({
@@ -56,16 +59,32 @@ export function getReminderTargetsForAppointment(
 
 type ReminderResult = { appointmentId: string; kind: AppointmentReminderKind; sent: boolean; reason?: string };
 
+// patients.userId is editable by the patient (see firestore.rules), so it is
+// only used as a users doc ID when it looks like one: users are keyed by the
+// numeric legacy user ID. Anything else would make the batched read fail for
+// every reminder in the run.
+const USER_ID = /^\d{1,20}$/;
+
+/** Whether a string can be used as a Firestore document ID. */
+function isDocumentId(id: string): boolean {
+  return id.length > 0 && id.length <= 1500 && !id.includes("/") && id !== "." && id !== ".." && !/^__.*__$/.test(id);
+}
+
 /*
  * Subrequests: Workers Free allows 50 outbound requests per invocation (Paid
  * allows 10,000). A run makes 4 fixed requests (token, appointment query, one
  * batched read each for patients and users) plus 2 per reminder (the SMS, then
  * one commit that logs it and adds the in-app notification), so about 23
- * reminders fit in one cron run on Free. Each reminder is handled on its own,
- * so a failure is reported for that appointment and the rest still go out.
+ * reminders fit in one cron run on Free. The job counts its requests and stops
+ * before a reminder that couldn't be both sent and logged, reporting the rest
+ * as deferred; set WORKER_SUBREQUEST_LIMIT on the Paid plan. Each reminder is
+ * handled on its own, so a failure is reported for that appointment and the
+ * rest still go out.
  */
 export async function processDueAppointmentReminders(now = new Date(), env?: unknown) {
   const fs = firestoreAdminFromEnv(env);
+  const subrequestLimit = Number(readEnv(env, "WORKER_SUBREQUEST_LIMIT")) || 50;
+  let smsRequests = 0;
   const wallNow = clinicWallClock(now);
 
   // A reminder can only be due for today's appointments (morning slot) or
@@ -110,18 +129,31 @@ export async function processDueAppointmentReminders(now = new Date(), env?: unk
   }
   if (due.length === 0) return results;
 
-  const patients = await fs.getMany("patients", due.map((d) => d.patientId));
-  const userIds = [...patients.values()].flatMap((p) => (p.data.userId == null ? [] : [String(p.data.userId)]));
-  const users = await fs.getMany("users", userIds);
+  const patients = await fs.getMany("patients", due.map((d) => d.patientId).filter(isDocumentId));
+  const userIdOf = (patientId: string) => {
+    const userId = patients.get(patientId)?.data.userId;
+    return userId != null && USER_ID.test(String(userId)) ? String(userId) : null;
+  };
+  const users = await fs.getMany(
+    "users",
+    due.flatMap((d) => userIdOf(d.patientId) ?? []),
+  );
 
   for (const { appointmentId, patientId, target } of due) {
     let smsSent = false;
     try {
-      const patient = patients.get(patientId);
-      const user = patient?.data.userId == null ? undefined : users.get(String(patient.data.userId));
+      const userId = userIdOf(patientId);
+      const user = userId ? users.get(userId) : undefined;
       const phone = user ? String(user.data.contactNum ?? "") : "";
       if (!phone) {
         results.push({ appointmentId, kind: target.kind, sent: false, reason: "missing-phone" });
+        continue;
+      }
+
+      // Stop before a reminder that couldn't be both sent and logged within
+      // the subrequest limit, rather than send one that goes unrecorded.
+      if (fs.requestCount + smsRequests + 2 > subrequestLimit) {
+        results.push({ appointmentId, kind: target.kind, sent: false, reason: "deferred-subrequest-limit" });
         continue;
       }
 
@@ -131,9 +163,16 @@ export async function processDueAppointmentReminders(now = new Date(), env?: unk
         testMode: false,
         env,
       });
+      if (!sent.dryRun && sent.reason !== "missing-phone") smsRequests++;
 
       if (!sent.ok) {
         results.push({ appointmentId, kind: target.kind, sent: false, reason: sent.reason });
+        continue;
+      }
+      // Without SMSPortal credentials nothing was sent, so don't use up the
+      // slot or record a number a reply could later match.
+      if (sent.dryRun) {
+        results.push({ appointmentId, kind: target.kind, sent: false, reason: "dry-run" });
         continue;
       }
       smsSent = true;
@@ -147,12 +186,11 @@ export async function processDueAppointmentReminders(now = new Date(), env?: unk
           appendToArrays: { reminderLog: [target.kind] },
         },
       ];
-      const userId = Number(patient?.data.userId ?? 0);
       if (userId) {
         writes.push({
           create: "notifications",
           data: {
-            userId,
+            userId: Number(userId),
             title: "Appointment reminder",
             message: target.message,
             isRead: false,
@@ -174,6 +212,14 @@ export async function processDueAppointmentReminders(now = new Date(), env?: unk
           : { appointmentId, kind: target.kind, sent: false, reason: "error" },
       );
     }
+  }
+
+  const deferred = results.filter((r) => r.reason === "deferred-subrequest-limit").length;
+  if (deferred) {
+    console.warn(
+      `[sms-reminders] ${deferred} reminder(s) deferred to stay within ${subrequestLimit} subrequests; ` +
+        "on the Workers Paid plan set WORKER_SUBREQUEST_LIMIT (e.g. 10000)",
+    );
   }
 
   return results;

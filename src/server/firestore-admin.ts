@@ -67,6 +67,9 @@ export function firestoreAdminFromEnv(env: unknown): FirestoreAdmin {
 export class FirestoreAdmin {
   private readonly documentsUrl: string;
 
+  /** Outbound requests made so far (token exchanges included), for subrequest budgeting. */
+  requestCount = 0;
+
   constructor(private readonly account: ServiceAccount) {
     this.documentsUrl = `https://firestore.googleapis.com/v1/projects/${account.project_id}/databases/(default)/documents`;
   }
@@ -163,6 +166,7 @@ export class FirestoreAdmin {
 
   private async request(url: string, init: RequestInit, allowedStatuses: number[] = []) {
     const token = await this.accessToken();
+    this.requestCount++;
     const res = await fetch(url, {
       ...init,
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -178,6 +182,7 @@ export class FirestoreAdmin {
     const cached = tokenCache.get(this.account.client_email);
     if (cached && cached.expiresAt - 60_000 > Date.now()) return cached.token;
 
+    this.requestCount++;
     const res = await fetch(TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },

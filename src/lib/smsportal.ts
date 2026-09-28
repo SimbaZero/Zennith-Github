@@ -174,13 +174,15 @@ export async function readInboundSmsPayload(
  * ever written by the reminder job.
  */
 async function findRemindedAppointment(fs: FirestoreAdmin, phone: string, now: Date) {
-  const today = clinicWallClock(now).toISOString().slice(0, 10);
+  // Only appointments that haven't started: an evening reply about
+  // tomorrow's appointment must not land on one from earlier today.
+  const wallNow = clinicWallClock(now).getTime();
   const appointments = await fs.query("appointments", [
     { field: "reminderSentTo", op: "EQUAL", value: phone },
   ]);
   return (
     appointments
-      .filter((a) => typeof a.data.appointDateTime === "string" && a.data.appointDateTime.slice(0, 10) >= today)
+      .filter((a) => typeof a.data.appointDateTime === "string" && new Date(a.data.appointDateTime).getTime() >= wallNow)
       .filter((a) => !["Cancelled", "Completed", "No-Show", "In Progress"].includes(String(a.data.status ?? "")))
       .sort((a, b) => String(a.data.appointDateTime).localeCompare(String(b.data.appointDateTime)))[0] ?? null
   );
