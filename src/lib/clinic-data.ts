@@ -1229,6 +1229,8 @@ export interface CurrentReceptionist {
   clinicName: string | null;
   /** Numeric users.userId — needed to send this receptionist notifications. */
   userId: number | null;
+  /** Staff ID from the receptionists collection — recorded as actor_id in audit logs. */
+  receptionistId: string | null;
 }
 export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist> {
   const user = await waitForAuthReady();
@@ -1239,12 +1241,19 @@ export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist>
       clinicId: null,
       clinicName: null,
       userId: null,
+      receptionistId: null,
     };
   const profileSnap = await getDoc(doc(db, "profiles", uid));
   const profile = profileSnap.exists() ? profileSnap.data() : {};
   const name = profile.fullName || "Receptionist";
   if (profile.legacyUserId == null)
-    return { name, clinicId: null, clinicName: null, userId: null };
+    return {
+      name,
+      clinicId: null,
+      clinicName: null,
+      userId: null,
+      receptionistId: null,
+    };
   const userId = Number(profile.legacyUserId);
 
   const recSnap = await getDocs(
@@ -1253,8 +1262,11 @@ export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist>
       where("userId", "==", Number(profile.legacyUserId)),
     ),
   );
-  if (recSnap.empty) return { name, clinicId: null, clinicName: null, userId };
+  if (recSnap.empty)
+    return { name, clinicId: null, clinicName: null, userId, receptionistId: null };
   const clinicId = Number(recSnap.docs[0].data().clinicId);
+  const receptionistId: string =
+    recSnap.docs[0].data().receptionistId ?? recSnap.docs[0].id;
 
   const clinicSnap = await getDoc(doc(db, "clinics", String(clinicId)));
   const clinicName = clinicSnap.exists()
@@ -1266,6 +1278,7 @@ export async function resolveCurrentReceptionist(): Promise<CurrentReceptionist>
     clinicId: Number.isFinite(clinicId) ? clinicId : null,
     clinicName,
     userId,
+    receptionistId,
   };
 }
 
@@ -1288,6 +1301,8 @@ export interface RegistrationInput {
   /** users.Gender — was collected on the form but never sent, see #16. */
   gender?: string;
   remarks: string;
+  /** Staff ID of whoever is registering (e.g. a receptionistId), for the audit log. */
+  actorId?: string | null;
 }
 
 export async function registerPatient(
@@ -1377,6 +1392,16 @@ export async function registerPatient(
       description: `Registration note: ${input.remarks.trim()}`,
     });
   }
+
+  // Audit trail. Also reached from the nurse digitize flow, which doesn't
+  // pass actorId yet, so fall back to the login username there.
+  logAction({
+    clinicId: input.clinicId ?? null,
+    actor_id: input.actorId || getUsername() || "system",
+    action_type: "patient.register",
+    description: `${getAuth() ?? "user"} registered new patient ${patientId}`,
+  });
+
   return patientId;
 }
 

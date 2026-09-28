@@ -12,7 +12,23 @@ import {
   updatePatient,
   updateUser,
   updateMedicalRecord,
+  resolveCurrentReceptionist,
 } from "@/lib/clinic-data";
+import { logAction } from "@/lib/audit";
+
+// Which part of the file each editable field belongs to. The audit log
+// records the SECTION that changed, never the values, so the log doesn't
+// become a second copy of the patient's personal details.
+const FIELD_SECTIONS: Record<string, string> = {
+  name: "personal details",
+  idNumber: "personal details",
+  cell: "personal details",
+  address: "personal details",
+  email: "personal details",
+  emergencyContactName: "emergency contact",
+  emergencyContactNo: "emergency contact",
+  insurance: "insurance",
+};
 
 export const Route = createFileRoute("/receptionist/profiles_/$pid")({
   component: PatientDetail,
@@ -23,6 +39,10 @@ function PatientDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const { data: receptionist } = useQuery({
+    queryKey: ["current-receptionist"],
+    queryFn: resolveCurrentReceptionist,
+  });
 
   const {
     data: record,
@@ -44,17 +64,8 @@ function PatientDetail() {
         cell: record.cell,
         address: record.address,
         email: record.email,
-        condition: record.condition,
         emergencyContactName: record.emergencyContactName,
         emergencyContactNo: record.emergencyContactNo,
-        bloodType: record.bloodType,
-        allergies: record.allergies,
-        prescription: record.prescription,
-        dosage: record.dosage,
-        bp: record.bp,
-        glucose: record.glucose,
-        cd4: record.cd4,
-        viralLoad: record.viralLoad,
         insurance: record.insurance,
         lastVisit: record.lastVisit,
         nextAppointment: record.nextAppointment,
@@ -89,25 +100,40 @@ function PatientDetail() {
           email: form.email,
         }),
         updatePatient(pid, {
-          chronicCondition: form.condition,
           emergencyContactName: form.emergencyContactName,
           emergencyContactNo: form.emergencyContactNo,
         }),
+        // Receptionists only manage the insurance policy on the medical
+        // record — clinical fields are for nurses and doctors, so they're
+        // neither shown on this page nor written from it.
         updateMedicalRecord(recordNo, {
-          bloodType: form.bloodType,
-          allergies: form.allergies,
-          prescription: form.prescription,
-          dosage: form.dosage !== "—" ? Number(form.dosage) : undefined,
-          bp: form.bp,
-          glucose: form.glucose !== "—" ? Number(form.glucose) : undefined,
-          cd4: form.cd4 !== "—" ? Number(form.cd4) : undefined,
-          viralLoad:
-            form.viralLoad !== "—" ? Number(form.viralLoad) : undefined,
           // Fixed Error 2: fallback to undefined instead of null
           insurancePolicyNumber:
             form.insurance !== "None" ? form.insurance : undefined,
         }),
       ]);
+
+      // Audit trail — only if something actually changed.
+      const changedSections = [
+        ...new Set(
+          Object.keys(FIELD_SECTIONS)
+            .filter(
+              (k) =>
+                (form[k] ?? "") !==
+                String((record as unknown as Record<string, unknown>)[k] ?? ""),
+            )
+            .map((k) => FIELD_SECTIONS[k]),
+        ),
+      ];
+      if (changedSections.length > 0) {
+        logAction({
+          clinicId:
+            patientData.clinicId != null ? Number(patientData.clinicId) : null,
+          actor_id: receptionist?.receptionistId || "receptionist",
+          action_type: "patient.update",
+          description: `receptionist updated patient file for ${pid} (${changedSections.join(", ")})`,
+        });
+      }
     },
     onSuccess: () => {
       toast.success("Patient profile updated");
@@ -176,17 +202,8 @@ function PatientDetail() {
                       cell: record.cell,
                       address: record.address,
                       email: record.email,
-                      condition: record.condition,
                       emergencyContactName: record.emergencyContactName,
                       emergencyContactNo: record.emergencyContactNo,
-                      bloodType: record.bloodType,
-                      allergies: record.allergies,
-                      prescription: record.prescription,
-                      dosage: record.dosage,
-                      bp: record.bp,
-                      glucose: record.glucose,
-                      cd4: record.cd4,
-                      viralLoad: record.viralLoad,
                       insurance: record.insurance,
                       lastVisit: record.lastVisit,
                       nextAppointment: record.nextAppointment,
@@ -222,7 +239,7 @@ function PatientDetail() {
       </div>
 
       {/* Patient Card */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left column — Demographics */}
         <div className="space-y-6">
           <div className="bg-white rounded-xl border p-5">
@@ -280,79 +297,6 @@ function PatientDetail() {
                 value={form.emergencyContactNo}
                 editing={editing}
                 onChange={setField("emergencyContactNo")}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Middle column — Medical */}
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">
-              MEDICAL INFORMATION
-            </h3>
-            <div className="space-y-3">
-              <FieldRow
-                label="Chronic Condition"
-                value={form.condition}
-                editing={editing}
-                onChange={setField("condition")}
-              />
-              <FieldRow
-                label="Blood Type"
-                value={form.bloodType}
-                editing={editing}
-                onChange={setField("bloodType")}
-              />
-              <FieldRow
-                label="Allergies"
-                value={form.allergies}
-                editing={editing}
-                onChange={setField("allergies")}
-              />
-              <FieldRow
-                label="Prescription"
-                value={form.prescription}
-                editing={editing}
-                onChange={setField("prescription")}
-              />
-              <FieldRow
-                label="Dosage"
-                value={form.dosage}
-                editing={editing}
-                onChange={setField("dosage")}
-              />
-              <FieldRow
-                label="Blood Pressure"
-                value={form.bp}
-                editing={editing}
-                onChange={setField("bp")}
-              />
-              <FieldRow
-                label="Glucose"
-                value={form.glucose}
-                editing={editing}
-                onChange={setField("glucose")}
-              />
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border p-5">
-            <h3 className="font-semibold text-sm tracking-wider mb-4">
-              LAB VALUES
-            </h3>
-            <div className="space-y-3">
-              <FieldRow
-                label="CD4 Count"
-                value={form.cd4}
-                editing={editing}
-                onChange={setField("cd4")}
-              />
-              <FieldRow
-                label="Viral Load"
-                value={form.viralLoad}
-                editing={editing}
-                onChange={setField("viralLoad")}
               />
             </div>
           </div>

@@ -110,6 +110,7 @@ function Registration() {
         clinicId: receptionist?.clinicId ?? null,
         dob: f.dob,
         gender: f.gender,
+        actorId: receptionist?.receptionistId,
       }),
     onSuccess: (patientId) => {
       toast.success(
