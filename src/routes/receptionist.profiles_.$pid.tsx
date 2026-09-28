@@ -12,8 +12,10 @@ import {
   updatePatient,
   updateUser,
   updateMedicalRecord,
+  resolveCurrentReceptionist,
   type ReceptionPatientRecord,
 } from "@/lib/clinic-data";
+import { logAction } from "@/lib/audit";
 import {
   DOCUMENT_CHECK_NOTE,
   ID_TYPE_LABELS,
@@ -21,6 +23,22 @@ import {
   isIdType,
   validateIdByType,
 } from "@/lib/sa-id";
+
+// Which part of the file each editable field belongs to. The audit log
+// records the SECTION that changed, never the values, so the log doesn't
+// become a second copy of the patient's personal details.
+const FIELD_SECTIONS: Partial<Record<keyof Form, string>> = {
+  name: "personal details",
+  idType: "personal details",
+  idNumber: "personal details",
+  cell: "personal details",
+  suburb: "personal details",
+  city: "personal details",
+  email: "personal details",
+  emergencyContactName: "emergency contact",
+  emergencyContactNo: "emergency contact",
+  insurance: "insurance",
+};
 
 export const Route = createFileRoute("/receptionist/profiles_/$pid")({
   component: PatientDetail,
@@ -81,6 +99,10 @@ function PatientDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const { data: receptionist } = useQuery({
+    queryKey: ["current-receptionist"],
+    queryFn: resolveCurrentReceptionist,
+  });
 
   const {
     data: record,
@@ -154,6 +176,27 @@ function PatientDetail() {
           ? updateMedicalRecord(recordNo, { insurancePolicyNumber: insurance })
           : Promise.resolve(),
       ]);
+
+      // Audit trail — only if something actually changed. Compared against
+      // formFrom(record), not the raw record, so an idType inferred for an
+      // older record doesn't count as an edit.
+      const original = formFrom(record);
+      const changedSections = [
+        ...new Set(
+          (Object.keys(FIELD_SECTIONS) as (keyof Form)[])
+            .filter((k) => form[k] !== original[k])
+            .map((k) => FIELD_SECTIONS[k]!),
+        ),
+      ];
+      if (changedSections.length > 0) {
+        logAction({
+          clinicId:
+            patientData.clinicId != null ? Number(patientData.clinicId) : null,
+          actor_id: receptionist?.receptionistId || "receptionist",
+          action_type: "patient.update",
+          description: `receptionist updated patient file for ${pid} (${changedSections.join(", ")})`,
+        });
+      }
     },
     onSuccess: () => {
       toast.success("Patient profile updated");

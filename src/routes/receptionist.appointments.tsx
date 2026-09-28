@@ -60,7 +60,11 @@ function ReceptionAppointments() {
   });
 
   const create = useMutation({
-    mutationFn: () => createAppointment(draft),
+    mutationFn: () =>
+      createAppointment({
+        ...draft,
+        actorId: receptionist?.receptionistId ?? undefined,
+      }),
     onSuccess: () => {
       toast.success(
         `Appointment booked for ${draft.patientId} on ${draft.date} at ${draft.time}`,
