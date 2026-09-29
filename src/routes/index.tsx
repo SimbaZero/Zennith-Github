@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Github } from "lucide-react";
 import { ZennithStar } from "@/components/ZennithStar";
 import { LandingPatientAssistant } from "@/components/LandingPatientAssistant";
 import { listClinics, usePublicQueueSummary } from "@/lib/clinic-data";
@@ -128,7 +129,7 @@ function SiteHeader() {
           </Link>
           <Link
             to="/signup"
-            className="text-sm px-4 py-2 rounded-md bg-[oklch(0.22_0.07_260)] text-white hover:bg-[oklch(0.3_0.08_260)]"
+            className="text-sm px-4 py-2 rounded-md bg-[oklch(0.22_0.07_260)] text-white hover:bg-[oklch(0.3_0.08_260)] active:scale-[0.97] transition"
           >
             Create account
           </Link>
@@ -195,13 +196,13 @@ function Hero() {
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
               to="/signup"
-              className="px-5 py-3 rounded-md bg-[oklch(0.22_0.07_260)] text-white font-medium hover:bg-[oklch(0.3_0.08_260)]"
+              className="px-5 py-3 rounded-md bg-[oklch(0.22_0.07_260)] text-white font-medium hover:bg-[oklch(0.3_0.08_260)] active:scale-[0.97] transition"
             >
               Create a patient account
             </Link>
             <Link
               to="/clinic-signup"
-              className="px-5 py-3 rounded-md border border-[oklch(0.85_0.02_255)] font-medium hover:bg-white"
+              className="px-5 py-3 rounded-md border border-[oklch(0.85_0.02_255)] font-medium hover:bg-white active:scale-[0.97] transition"
             >
               Register a clinic
             </Link>
@@ -423,13 +424,267 @@ function About() {
   );
 }
 
-/* Team profiles are held back until each member has written their own role
- * and blurb, rather than having one written for them. The placeholder is
- * deliberate — it should read as "coming", not as something broken. */
+/* The team. To change anything on a card, edit its entry below.
+ *
+ * Photos: save each person's photo in public/team/ named after `photo` below
+ * (e.g. david.jpeg) — .jpeg, .jpg, .png and .webp all work, any size; it is
+ * cropped into a circle automatically. No photo yet? Their initials show.
+ * See public/team/README.md.
+ *
+ * `accent` picks the colour of the ring around the photo and the skill chips:
+ * backend (blue), frontend (teal), database (gold) or lead (violet). */
+
+// Gold is the complement of the site's blue, so names and roles lift off the
+// navy instead of sitting on it as flat white. Every colour here was checked
+// against the card background (including where a background glow lights it):
+// all are well above the 4.5:1 contrast minimum.
+const GOLD = "oklch(0.84 0.13 85)";
+const NAME_COLOR = "oklch(0.97 0.01 90)";
+const BIO_COLOR = "oklch(0.85 0.03 250)";
+const LINK_COLOR = "oklch(0.82 0.11 200)";
+
+const ACCENTS = {
+  backend: {
+    fg: "oklch(0.8 0.11 245)",
+    tint: "oklch(0.8 0.11 245 / 0.14)",
+    line: "oklch(0.8 0.11 245 / 0.35)",
+  },
+  frontend: {
+    fg: "oklch(0.82 0.11 200)",
+    tint: "oklch(0.82 0.11 200 / 0.14)",
+    line: "oklch(0.82 0.11 200 / 0.35)",
+  },
+  database: {
+    fg: GOLD,
+    tint: "oklch(0.84 0.13 85 / 0.14)",
+    line: "oklch(0.84 0.13 85 / 0.35)",
+  },
+  lead: {
+    fg: "oklch(0.8 0.12 300)",
+    tint: "oklch(0.8 0.12 300 / 0.14)",
+    line: "oklch(0.8 0.12 300 / 0.35)",
+  },
+} as const;
+
+interface TeamMember {
+  name: string;
+  role: string;
+  bio: string;
+  tags: string[];
+  accent: keyof typeof ACCENTS;
+  /** File name in public/team/, without the extension. */
+  photo: string;
+  /** Leave out until they have a profile to link to. */
+  github?: string;
+}
+
+const TEAM_MEMBERS: TeamMember[] = [
+  {
+    name: "David",
+    role: "Back-end developer",
+    bio: "Built the doctor module, and handled troubleshooting, testing, Git control and debugging for the team. Also a lead presenter.",
+    tags: ["Testing", "Git", "Presenter"],
+    accent: "backend",
+    photo: "/team/david",
+    github: "https://github.com/Dexter-David",
+  },
+  {
+    name: "Nombulelo",
+    role: "Back-end developer",
+    bio: "Built the admin and nurse modules, and helped run the project through testing and project management.",
+    tags: ["Testing", "Project management"],
+    accent: "backend",
+    photo: "/team/nombulela",
+    github: "https://github.com/nombulelo-radebe",
+  },
+  {
+    name: "Nobuhle",
+    role: "Database and back end",
+    bio: "Worked on the database and the back end, and supported the front end too.",
+    tags: ["Database", "Front-end support"],
+    accent: "database",
+    photo: "/team/nobuhle",
+    github: "https://github.com/Nobuhle2405",
+  },
+  {
+    name: "Michelle",
+    role: "Database",
+    bio: "Worked on the database with Firebase, and managed the Firestore security rules. Also a lead presenter.",
+    tags: ["Firestore rules", "Presenter"],
+    accent: "database",
+    photo: "/team/michelle",
+  },
+  {
+    name: "Simbarashe",
+    role: "Front-end lead developer",
+    bio: "Led the front end, and debugged and troubleshot problems for the whole group.",
+    tags: ["Debugging", "Troubleshooting"],
+    accent: "frontend",
+    photo: "/team/simba",
+    github: "https://github.com/SimbaZero",
+  },
+  {
+    name: "Chiedza",
+    role: "Project manager and group leader",
+    bio: "Led the group as project manager. Built the logins, helped with the database, and facilitated debugging and thorough testing.",
+    tags: ["Testing", "Debugging", "Database"],
+    accent: "lead",
+    photo: "/team/chieta",
+    github: "https://github.com/cmutizwa",
+  },
+  {
+    name: "Olerato",
+    role: "Back-end developer",
+    bio: "Built the chatbot and the receptionist module on the back end, with debugging and testing.",
+    tags: ["Testing", "Debugging"],
+    accent: "backend",
+    photo: "/team/olerato",
+    github: "https://github.com/diamondmalefo",
+  },
+  {
+    name: "Ndaedzo",
+    role: "Back-end developer",
+    bio: "Built the pharmacist module on the back end, and handled debugging, testing and Git control across the project.",
+    tags: ["Testing", "Debugging", "Git"],
+    accent: "backend",
+    photo: "/team/ndaedzo",
+    github: "https://github.com/Ndae777",
+  },
+];
+
+/** Whichever of these the file was actually saved as, it works — no need to
+ *  convert or rename to match a specific extension. Ordered by what phones and
+ *  Ubuntu most often produce, so the first guess usually lands. */
+const PHOTO_EXTENSIONS = ["jpeg", "jpg", "png", "webp"];
+
+/**
+ * Finds which file actually exists for `base` (e.g. "/team/david") and returns
+ * its URL, or null while looking / if none exists.
+ *
+ * Why this doesn't simply render an <img> and react to its onError: this page
+ * is server-rendered, so an <img> in the HTML starts loading — and, for a
+ * missing file, fails — before React has attached any handler to it. The
+ * error is already over by the time onError could listen, so a fallback
+ * driven by onError never runs. Probing from an effect only ever happens in
+ * the browser, after React is ready, so nothing can be missed. Until a probe
+ * succeeds the caller shows its placeholder, which is also what the server
+ * sends — so there is no server/browser mismatch either.
+ */
+function usePhotoSrc(base: string): string | null {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let index = 0;
+    setSrc(null);
+
+    const tryNext = () => {
+      if (cancelled || index >= PHOTO_EXTENSIONS.length) return;
+      const candidate = `${base}.${PHOTO_EXTENSIONS[index]}`;
+      const probe = new Image();
+      probe.onload = () => {
+        if (!cancelled) setSrc(candidate);
+      };
+      probe.onerror = () => {
+        index += 1;
+        tryNext();
+      };
+      probe.src = candidate;
+    };
+    tryNext();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [base]);
+
+  return src;
+}
+
+/** A team photo, or the person's initials on a solid colour until one is
+ *  found — so a photo that hasn't been added yet looks intentional, not
+ *  broken. */
+function TeamAvatar({ name, base }: { name: string; base: string }) {
+  const src = usePhotoSrc(base);
+  const initials =
+    name
+      .trim()
+      .split(/\s+/)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "?";
+
+  if (!src) {
+    return (
+      <div
+        className="w-24 h-24 rounded-full bg-[oklch(0.22_0.07_262)] flex items-center justify-center font-serif text-xl"
+        style={{ color: GOLD }}
+      >
+        {initials}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={name}
+      className="w-24 h-24 rounded-full object-cover bg-[oklch(0.22_0.07_262)]"
+    />
+  );
+}
+
+/** The team's own group photo (public/team/group-photo, any extension above)
+ *  — wide works best. Shows a plain gradient panel with the same message
+ *  until it's found, rather than a broken image. */
+function TeamPortrait() {
+  const src = usePhotoSrc("/team/group-photo");
+  const caption = (
+    <div className="absolute inset-x-0 bottom-0 p-6 sm:p-8">
+      <p className="font-serif text-2xl sm:text-3xl text-white">
+        Thank you for visiting Zennith
+      </p>
+      <p className="mt-1 text-white/70 text-sm">
+        From all eight of us — we hope it makes a clinic's day a little easier.
+      </p>
+    </div>
+  );
+
+  if (!src) {
+    return (
+      <div className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7] bg-gradient-to-br from-[oklch(0.22_0.1_255)] to-[oklch(0.16_0.07_265)]">
+        {caption}
+      </div>
+    );
+  }
+  return (
+    <div className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7]">
+      <img
+        src={src}
+        alt="The Zennith team"
+        className="absolute inset-0 w-full h-full object-cover"
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
+      {caption}
+    </div>
+  );
+}
+
 function Team() {
   return (
-    <section id="team" className="bg-[oklch(0.16_0.07_265)] text-white">
-      <div className="mx-auto max-w-6xl px-6 py-20">
+    <section
+      id="team"
+      className="relative overflow-hidden bg-gradient-to-br from-[oklch(0.16_0.07_265)] via-[oklch(0.19_0.09_260)] to-[oklch(0.16_0.07_265)] text-white"
+    >
+      {/* The same glow used behind every auth page (AuthBackground) —
+          one recognisable Zennith moment, not a different effect per page. */}
+      <div aria-hidden className="absolute inset-0">
+        <div className="absolute -top-24 -left-24 w-[26rem] h-[26rem] rounded-full bg-[oklch(0.55_0.18_245)] opacity-20 blur-3xl animate-blob-1" />
+        <div className="absolute -bottom-24 -right-24 w-[28rem] h-[28rem] rounded-full bg-[oklch(0.5_0.2_290)] opacity-15 blur-3xl animate-blob-2" />
+        <div className="absolute top-1/2 left-1/2 w-64 h-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[oklch(0.7_0.18_200)] opacity-10 blur-3xl animate-blob-3" />
+      </div>
+
+      <div className="relative mx-auto max-w-6xl px-6 py-20">
         <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
           The people who built it
         </h2>
@@ -438,35 +693,75 @@ function Team() {
           Johannesburg.
         </p>
 
-        <div className="mt-10 rounded-xl border border-white/15 bg-white/[0.04] p-6 sm:p-8">
-          <h3 className="font-serif text-xl">Team profiles coming soon</h3>
-          <p className="mt-2 text-[15px] text-white/70 max-w-[60ch]">
-            The team is finalising their roles. Profiles will appear here once
-            each member has written their own.
-          </p>
-
-          {/* Grey outline of the cards to come, with a slow light sweep. */}
-          <div
-            aria-hidden
-            className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-8"
-          >
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i}>
-                {[
-                  "w-20 h-20 rounded-full",
-                  "mt-4 h-3.5 w-3/4 rounded",
-                  "mt-2 h-3 w-1/2 rounded",
-                ].map((shape) => (
-                  <div
-                    key={shape}
-                    className={`${shape} bg-white/[0.08] animate-placeholder-shimmer`}
-                    style={{ animationDelay: `${i * 180}ms` }}
-                  />
-                ))}
+        <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {TEAM_MEMBERS.map((m) => {
+            const accent = ACCENTS[m.accent];
+            return (
+              <div
+                key={m.name}
+                className="flex flex-col rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 text-center transition-transform duration-200 hover:-translate-y-1 hover:bg-white/[0.07]"
+              >
+                <div
+                  className="mx-auto w-fit rounded-full p-[2px]"
+                  style={{
+                    background: `linear-gradient(135deg, ${GOLD}, ${accent.fg})`,
+                  }}
+                >
+                  <TeamAvatar name={m.name} base={m.photo} />
+                </div>
+                <p
+                  className="mt-4 text-lg font-medium"
+                  style={{ color: NAME_COLOR }}
+                >
+                  {m.name}
+                </p>
+                <p
+                  className="mt-0.5 text-[13px] font-medium"
+                  style={{ color: GOLD }}
+                >
+                  {m.role}
+                </p>
+                <p
+                  className="mt-3 text-[13px] leading-relaxed"
+                  style={{ color: BIO_COLOR }}
+                >
+                  {m.bio}
+                </p>
+                <ul className="mt-4 flex flex-wrap justify-center gap-1.5">
+                  {m.tags.map((tag) => (
+                    <li
+                      key={tag}
+                      className="rounded-full border px-2 py-0.5 text-[11px]"
+                      style={{
+                        color: accent.fg,
+                        backgroundColor: accent.tint,
+                        borderColor: accent.line,
+                      }}
+                    >
+                      {tag}
+                    </li>
+                  ))}
+                </ul>
+                {m.github && (
+                  <div className="mt-auto pt-4">
+                    <a
+                      href={m.github}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`${m.name} on GitHub`}
+                      className="inline-flex items-center gap-1.5 text-[13px] hover:underline"
+                      style={{ color: LINK_COLOR }}
+                    >
+                      <Github size={14} /> GitHub
+                    </a>
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
+
+        <TeamPortrait />
       </div>
     </section>
   );
@@ -559,13 +854,13 @@ function Contact() {
           <div className="mt-5 flex flex-col gap-2.5">
             <Link
               to="/signup"
-              className="px-5 py-3 rounded-md bg-[oklch(0.22_0.07_260)] text-white font-medium text-center hover:bg-[oklch(0.3_0.08_260)]"
+              className="px-5 py-3 rounded-md bg-[oklch(0.22_0.07_260)] text-white font-medium text-center hover:bg-[oklch(0.3_0.08_260)] active:scale-[0.97] transition"
             >
               Create a patient account
             </Link>
             <Link
               to="/clinic-signup"
-              className="px-5 py-3 rounded-md border border-[oklch(0.85_0.02_255)] font-medium text-center hover:bg-[oklch(0.97_0.005_250)]"
+              className="px-5 py-3 rounded-md border border-[oklch(0.85_0.02_255)] font-medium text-center hover:bg-[oklch(0.97_0.005_250)] active:scale-[0.97] transition"
             >
               Register a clinic
             </Link>

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { useSuperAdminDashboard } from "@/lib/super-admin-service";
-import { Building2, Activity, Users } from "lucide-react";
+import { Building2, Activity, ClipboardList, Users } from "lucide-react";
 
 export const Route = createFileRoute("/super-admin/")({
   component: SuperAdminDashboard,
@@ -12,9 +12,7 @@ function SuperAdminDashboard() {
 
   return (
     <AppShell role="super_admin" title="Platform Overview" showBack={false}>
-      {error && (
-        <p className="text-sm text-red-600 mb-4">{error}</p>
-      )}
+      {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat
           icon={Building2}
@@ -46,20 +44,20 @@ function SuperAdminDashboard() {
           </div>
           <h3 className="font-semibold mb-1">Facilities</h3>
           <p className="text-sm text-muted-foreground">
-            Review clinic applications, approve onboarding, and assign a
-            Facility Admin.
+            See the clinics that are live and assign a Facility Admin.
           </p>
         </Link>
         <Link
-          to="/super-admin/audit"
+          to="/super-admin/applications"
           className="bg-white rounded-xl border p-6 hover:shadow-md transition group"
         >
           <div className="w-12 h-12 rounded-lg bg-[oklch(0.18_0.06_260)] text-white flex items-center justify-center mb-4 group-hover:scale-110 transition">
-            <Activity size={22} />
+            <ClipboardList size={22} />
           </div>
-          <h3 className="font-semibold mb-1">Platform Audit Logs</h3>
+          <h3 className="font-semibold mb-1">Clinic Applications</h3>
           <p className="text-sm text-muted-foreground">
-            Every recorded action across every clinic on the platform.
+            Review clinics that have registered, check their details, and
+            approve or reject them.
           </p>
         </Link>
       </div>

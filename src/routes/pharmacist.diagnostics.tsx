@@ -6,7 +6,21 @@ import {
   getPrescriptionForPatient,
   type PatientDirectoryEntry,
 } from "@/lib/pharmacist-service";
-import { Search, ShieldCheck, Info } from "lucide-react";
+import { useCurrentPharmacist } from "@/lib/pharmacist-service";
+import { logAction } from "@/lib/audit";
+import {
+  HANDOVER_AUDIT_ACTION,
+  handoverBlockedReason,
+  handoverLogText,
+} from "@/lib/fast-lane";
+import { toast } from "sonner";
+import {
+  Search,
+  ShieldCheck,
+  ShieldOff,
+  Info,
+  PackageCheck,
+} from "lucide-react";
 
 export const Route = createFileRoute("/pharmacist/diagnostics")({
   component: PrescriptionLookup,
@@ -14,10 +28,13 @@ export const Route = createFileRoute("/pharmacist/diagnostics")({
 
 function PrescriptionLookup() {
   const { patients, loading } = usePatientDirectory();
+  const { pharmacist } = useCurrentPharmacist();
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<PatientDirectoryEntry | null>(null);
   const [prescription, setPrescription] = useState<string | null>(null);
   const [prescriptionLoading, setPrescriptionLoading] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [handedOver, setHandedOver] = useState(false);
 
   const query = q.trim().toLowerCase();
   const results = useMemo(() => {
@@ -34,6 +51,7 @@ function PrescriptionLookup() {
   const selectPatient = async (p: PatientDirectoryEntry) => {
     setSelected(p);
     setPrescription(null);
+    setHandedOver(false);
     if (p.medicalRecordNo == null) return;
 
     setPrescriptionLoading(true);
@@ -130,6 +148,7 @@ function PrescriptionLookup() {
                     setSelected(null);
                     setPrescription(null);
                     setQ("");
+                    setHandedOver(false);
                   }}
                   className="text-xs border px-2 py-1 rounded-md hover:bg-white"
                 >
@@ -137,6 +156,19 @@ function PrescriptionLookup() {
                 </button>
               </div>
               <div className="mt-4 pt-4 border-t">
+                <div
+                  className={`flex items-center gap-2 text-sm font-medium mb-3 ${
+                    selected.fastLane ? "text-green-700" : "text-amber-800"
+                  }`}
+                >
+                  {selected.fastLane ? (
+                    <ShieldCheck size={15} />
+                  ) : (
+                    <ShieldOff size={15} />
+                  )}
+                  {selected.fastLane ? "Fast Lane patient" : "Not Fast Lane"}
+                </div>
+
                 <p className="text-[11px] tracking-wider text-muted-foreground">
                   PRESCRIPTION TO DISPENSE
                 </p>
@@ -149,6 +181,47 @@ function PrescriptionLookup() {
                   <Info size={12} /> Clinical diagnosis is hidden from
                   pharmacist view.
                 </p>
+
+                {handoverBlockedReason(selected.fastLane) ? (
+                  <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-3">
+                    {handoverBlockedReason(selected.fastLane)}
+                  </p>
+                ) : handedOver ? (
+                  <p className="text-sm text-green-800 mt-3">
+                    Hand-over confirmed for {selected.patientId}.
+                  </p>
+                ) : (
+                  <button
+                    onClick={async () => {
+                      if (!prescription) return;
+                      setConfirming(true);
+                      try {
+                        const actor = pharmacist?.fullName || "pharmacist";
+                        logAction({
+                          clinicId: pharmacist?.clinicId ?? null,
+                          actor_id: actor,
+                          action_type: HANDOVER_AUDIT_ACTION,
+                          description: handoverLogText(
+                            selected.patientId,
+                            prescription,
+                            actor,
+                          ),
+                        });
+                        setHandedOver(true);
+                        toast.success(
+                          `Hand-over recorded for ${selected.patientId}`,
+                        );
+                      } finally {
+                        setConfirming(false);
+                      }
+                    }}
+                    disabled={confirming || !prescription}
+                    className="mt-3 w-full inline-flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white text-sm py-2 rounded-md hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
+                  >
+                    <PackageCheck size={15} />
+                    {confirming ? "Confirming…" : "Confirm hand-over"}
+                  </button>
+                )}
               </div>
             </div>
           )}

@@ -1,10 +1,8 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import {
   listClinics,
-  approveClinic,
-  rejectClinicApplication,
   deleteClinicIfEmpty,
   type ClinicRecord,
 } from "@/lib/clinic-data";
@@ -14,11 +12,9 @@ import { useState } from "react";
 import { toast } from "sonner";
 import {
   Building2,
-  Check,
-  X,
+  ClipboardList,
   Trash2,
   ShieldCheck,
-  Clock,
   Search,
 } from "lucide-react";
 
@@ -60,28 +56,6 @@ function SuperFacilities() {
       )
     : active;
 
-  const approve = useMutation({
-    mutationFn: (clinicId: number) => approveClinic(clinicId),
-    onSuccess: () => {
-      toast.success("Clinic approved — now live");
-      queryClient.invalidateQueries({ queryKey: ["clinics"] });
-    },
-    // approveClinic refuses offline — its message says nothing changed on
-    // the platform, which is what the Super Admin needs to know.
-    onError: (err) =>
-      toast.error(err instanceof Error ? err.message : "Could not approve"),
-  });
-
-  const reject = useMutation({
-    mutationFn: (clinicId: number) => rejectClinicApplication(clinicId),
-    onSuccess: () => {
-      toast.success("Application rejected");
-      queryClient.invalidateQueries({ queryKey: ["clinics"] });
-    },
-    onError: (err) =>
-      toast.error(err instanceof Error ? err.message : "Could not reject"),
-  });
-
   const remove = useMutation({
     mutationFn: (clinicId: number) => deleteClinicIfEmpty(clinicId),
     onSuccess: (res) => {
@@ -98,71 +72,17 @@ function SuperFacilities() {
   return (
     <AppShell role="super_admin" title="Facilities">
       {pending.length > 0 && (
-        <div className="bg-white rounded-xl border overflow-hidden mb-6">
-          <div className="p-5 border-b flex items-center gap-2">
-            <Clock size={16} className="text-[oklch(0.6_0.18_70)]" />
-            <h3 className="font-semibold">Pending applications</h3>
-            <span className="text-xs text-muted-foreground ml-auto">
-              {pending.length} awaiting review
-            </span>
-          </div>
-          <div className="divide-y">
-            {pending.map((c) => (
-              <div
-                key={c.clinicId}
-                className="p-5 flex flex-wrap items-start justify-between gap-4"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 mb-3">
-                    <p className="font-semibold text-base">{c.clinicName}</p>
-                    <span
-                      className={`text-[10px] tracking-wider px-2 py-0.5 rounded-full border capitalize ${
-                        c.type === "private"
-                          ? "text-[oklch(0.45_0.18_290)] border-[oklch(0.8_0.12_290)]"
-                          : "text-[oklch(0.4_0.15_245)] border-[oklch(0.8_0.1_245)]"
-                      }`}
-                    >
-                      {c.type}
-                    </span>
-                  </div>
-                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
-                    <DetailRow label="Contact person" value={c.contactName} />
-                    <DetailRow label="Email" value={c.contactEmail} />
-                    {c.contactPhone && (
-                      <DetailRow label="Phone" value={c.contactPhone} />
-                    )}
-                    {c.address && (
-                      <DetailRow label="Address" value={c.address} />
-                    )}
-                    {c.registrationNumber && (
-                      <DetailRow
-                        label="Registration no."
-                        value={c.registrationNumber}
-                      />
-                    )}
-                    <DetailRow label="Billing" value="Not set up yet" />
-                  </dl>
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  <button
-                    onClick={() => reject.mutate(c.clinicId)}
-                    disabled={reject.isPending}
-                    className="text-xs border px-3 py-1.5 rounded-md hover:bg-secondary inline-flex items-center gap-1"
-                  >
-                    <X size={13} /> Reject
-                  </button>
-                  <button
-                    onClick={() => approve.mutate(c.clinicId)}
-                    disabled={approve.isPending}
-                    className="text-xs bg-[oklch(0.18_0.06_260)] text-white px-3 py-1.5 rounded-md hover:bg-[oklch(0.25_0.08_260)] inline-flex items-center gap-1"
-                  >
-                    <Check size={13} /> Approve
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <Link
+          to="/super-admin/applications"
+          className="mb-6 flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 transition hover:bg-amber-100/60"
+        >
+          <ClipboardList size={18} className="shrink-0 text-amber-800" />
+          <p className="text-sm text-amber-900">
+            <strong>{pending.length}</strong> clinic application
+            {pending.length === 1 ? "" : "s"} waiting for review. Open Clinic
+            Applications to check and approve them.
+          </p>
+        </Link>
       )}
 
       <div className="bg-white rounded-xl border overflow-hidden">
@@ -365,17 +285,6 @@ function AssignAdmin({
           </div>
         </form>
       </div>
-    </div>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value?: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[10px] tracking-wider text-muted-foreground">
-        {label.toUpperCase()}
-      </dt>
-      <dd className="text-sm truncate">{value ?? "—"}</dd>
     </div>
   );
 }

@@ -871,6 +871,7 @@ export function usePatientRecord(pid: string | undefined): {
         ? `${(nextAppt.appointDateTime ?? "").slice(0, 10)} · ${nextAppt.appointType ?? ""}`
         : "None scheduled",
       history: history.map(({ id, description }) => ({ id, description })),
+      fastLane: p.fastLane === true,
     });
     setLoading(false);
   }, [pid, patientBase, userData, mrData, history, nextAppt]);

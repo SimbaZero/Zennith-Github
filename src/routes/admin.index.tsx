@@ -19,6 +19,18 @@ function AdminDashboard() {
     enabled: admin?.clinicId != null,
   });
 
+  // "Accounts" means staff who can actually sign in. Removing a login keeps
+  // the person's staff record (so they can be given a new one later), which
+  // is why counting records never went down after a removal. The number with
+  // no login is shown beside it, matching the banner on the All Staff page.
+  const withLogin = clinicStaff.filter((s) => s.hasLogin).length;
+  const noLogin = clinicStaff.length - withLogin;
+  const clinicLabel = admin?.clinicName ?? "your clinic";
+  const staffSub =
+    noLogin > 0
+      ? `with a login at ${clinicLabel} · ${noLogin} with no login`
+      : `with a login at ${clinicLabel}`;
+
   return (
     <AppShell
       role="admin"
@@ -30,8 +42,8 @@ function AdminDashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat
           label="STAFF ACCOUNTS"
-          value={String(clinicStaff.length)}
-          sub={`at ${admin?.clinicName ?? "your clinic"}`}
+          value={String(withLogin)}
+          sub={staffSub}
         />
         <Stat
           label="ROLES MANAGED"

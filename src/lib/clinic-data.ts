@@ -873,6 +873,8 @@ export interface PatientRecord {
   lastVisit: string;
   nextAppointment: string;
   history: { id: string; description: string }[];
+  /** Set only by a nurse or doctor — see src/lib/fast-lane.ts. */
+  fastLane: boolean;
 }
 
 /** Reception's view of a patient — administrative fields only (see the
@@ -1213,6 +1215,21 @@ export async function createAppointment(input: {
       });
     }
   }
+
+  // Tell the patient too. Until now only the clinician was told, so a patient
+  // booked by reception, a nurse or a doctor only found out by opening the
+  // app. Fire-and-forget: a failed notification must never undo a booking.
+  const rawPatientUserId = patient.data()?.userId;
+  if (rawPatientUserId != null && !Number.isNaN(Number(rawPatientUserId))) {
+    notifyUser({
+      userId: Number(rawPatientUserId),
+      title: "Appointment booked",
+      message: `Your ${input.type} appointment is booked for ${input.date} at ${input.time}.`,
+      link: "/patient/appointments",
+    }).catch((err) =>
+      console.error("Patient booking notification failed:", err),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1509,16 +1526,22 @@ export async function fetchRealClinics(): Promise<RealClinic[]> {
     await signInAnonymously(auth);
   }
   const snap = await getDocs(collection(db, "clinics"));
-  return snap.docs
-    .map((d) => {
-      const data = d.data();
-      return {
-        clinicId: Number(data.clinicId),
-        clinicName: data.clinicName ?? `Clinic ${data.clinicId}`,
-        type: data.type,
-      };
-    })
-    .sort((a, b) => a.clinicName.localeCompare(b.clinicName));
+  return (
+    snap.docs
+      // A clinic still waiting for review must not be selectable by patients.
+      // Clinics with no status at all are the original pre-loaded ones, which
+      // are active.
+      .filter((d) => d.data().status !== "pending")
+      .map((d) => {
+        const data = d.data();
+        return {
+          clinicId: Number(data.clinicId),
+          clinicName: data.clinicName ?? `Clinic ${data.clinicId}`,
+          type: data.type,
+        };
+      })
+      .sort((a, b) => a.clinicName.localeCompare(b.clinicName))
+  );
 }
 
 /**
@@ -1717,6 +1740,9 @@ export interface PatientUpdateInput {
   // too. Don't "deduplicate" them back.
   lastVisit?: string;
   insurancePolicyNumber?: string;
+  /** A nurse or doctor's clinical judgement — see src/lib/fast-lane.ts. Never
+   *  set by reception, which this interface is also used by. */
+  fastLane?: boolean;
 }
 
 export interface UserUpdateInput {
@@ -1841,6 +1867,13 @@ export interface ClinicRecord {
   contactEmail?: string;
   contactPhone?: string;
   registrationNumber?: string;
+  /** When the application was submitted (ISO). Older applications have none. */
+  submittedAt?: string;
+  /** Private clinics only: what the applicant chose when they registered. */
+  billingCycle?: "monthly" | "annual";
+  trialRequested?: boolean;
+  billingEmail?: string;
+  quotedZar?: number;
 }
 
 export async function listClinics(): Promise<ClinicRecord[]> {
@@ -1852,8 +1885,7 @@ export async function listClinics(): Promise<ClinicRecord[]> {
         clinicId: Number(data.clinicId),
         clinicName: data.clinicName ?? `Clinic ${data.clinicId}`,
         type: (data.type === "private" ? "private" : "public") as
-          | "public"
-          | "private",
+          "public" | "private",
         address: data.Coordinates,
         // Existing pre-loaded clinics have no status field at all — treat
         // those as already active rather than newly pending.
@@ -1864,6 +1896,11 @@ export async function listClinics(): Promise<ClinicRecord[]> {
         contactEmail: data.contactEmail,
         contactPhone: data.contactPhone,
         registrationNumber: data.registrationNumber,
+        submittedAt: data.submittedAt,
+        billingCycle: data.billingCycle,
+        trialRequested: data.trialRequested,
+        billingEmail: data.billingEmail,
+        quotedZar: data.quotedZar,
       } satisfies ClinicRecord;
     })
     .sort((a, b) => a.clinicName.localeCompare(b.clinicName));
@@ -1880,6 +1917,13 @@ export async function submitClinicApplication(input: {
   contactPhone?: string;
   registrationNumber?: string;
   plan: "public-standard" | "private-standard";
+  /** Private clinics: the plan choice made on the registration form. */
+  billing?: {
+    cycle: "monthly" | "annual";
+    trialRequested: boolean;
+    billingEmail: string;
+    quotedZar: number;
+  };
 }): Promise<ClinicRecord> {
   const clinicId = await runTransaction(db, async (tx) => {
     const ref = doc(db, "counters", "registration");
@@ -1898,6 +1942,7 @@ export async function submitClinicApplication(input: {
     ...(input.address ? { Coordinates: input.address } : {}),
     contactName: input.contactName,
     contactEmail: input.contactEmail,
+    submittedAt: new Date().toISOString(),
     plan: input.plan,
     // TODO(billing): no real payment processor is connected yet. Billing is
     // arranged manually after approval. Real card/debit-order capture needs
@@ -1905,6 +1950,14 @@ export async function submitClinicApplication(input: {
     // final pricing decision — neither exists yet, so this is deliberately
     // not faked with a fake bank-details form.
     billingStatus: "not-set-up",
+    ...(input.billing
+      ? {
+          billingCycle: input.billing.cycle,
+          trialRequested: input.billing.trialRequested,
+          billingEmail: input.billing.billingEmail,
+          quotedZar: input.billing.quotedZar,
+        }
+      : {}),
     ...(input.contactPhone ? { contactPhone: input.contactPhone } : {}),
     ...(input.registrationNumber
       ? { registrationNumber: input.registrationNumber }
@@ -1914,12 +1967,20 @@ export async function submitClinicApplication(input: {
   return { clinicId, status: "pending", ...input };
 }
 
-export async function approveClinic(clinicId: number): Promise<void> {
+export async function approveClinic(
+  clinicId: number,
+  meta?: { approvedBy?: string; note?: string },
+): Promise<void> {
   // Approving a clinic switches on access for everyone who works there. A
   // Super Admin needs to know it has actually taken effect on the platform,
   // not that it is sitting in a queue on their own machine.
   assertOnline();
-  await updateDoc(doc(db, "clinics", String(clinicId)), { status: "active" });
+  await updateDoc(doc(db, "clinics", String(clinicId)), {
+    status: "active",
+    approvedAt: new Date().toISOString(),
+    ...(meta?.approvedBy ? { approvedBy: meta.approvedBy } : {}),
+    ...(meta?.note?.trim() ? { reviewNote: meta.note.trim() } : {}),
+  });
 }
 
 export async function rejectClinicApplication(clinicId: number): Promise<void> {
@@ -1998,10 +2059,15 @@ export function useDatabaseReachable(): "checking" | "online" | "offline" {
     }
 
     check();
-    const id = setInterval(check, 15_000);
+    // Each check is a real server read. It used to run every 15 seconds
+    // (240 reads an hour for every open admin tab); now every 60 seconds and
+    // only while the tab is visible.
+    const id = setInterval(() => {
+      if (!document.hidden) check();
+    }, 60_000);
 
     // React immediately when the browser gains/loses its connection, instead
-    // of waiting up to 15s for the next poll.
+    // of waiting up to a minute for the next poll.
     const onOnline = () => check();
     const onOffline = () => !cancelled && setState("offline");
     window.addEventListener("online", onOnline);
@@ -2279,6 +2345,31 @@ export async function resolveDeletionRequest(
     description: `Deletion request for ${patientId} marked ${outcome}: ${note}`,
     timestamp: serverTimestamp(),
   });
+
+  // Tell the patient the outcome. Deliberately does NOT include the admin's
+  // note: that is an internal record of what staff did (including how the
+  // patient was contacted), not a message written for the patient. A failed
+  // notification must never undo the decision that was just saved.
+  try {
+    const p = await getDoc(doc(db, "patients", patientId));
+    const rawUserId = p.exists() ? p.data().userId : null;
+    if (rawUserId != null && !Number.isNaN(Number(rawUserId))) {
+      await notifyUser({
+        userId: Number(rawUserId),
+        title:
+          outcome === "declined"
+            ? "Your data deletion request was declined"
+            : "Your data deletion request was handled",
+        message:
+          outcome === "declined"
+            ? "Your clinic reviewed your request and declined it. Please speak to the clinic if you would like to know why."
+            : "Your clinic has responded to your data deletion request. Please contact the clinic if you have any questions.",
+        link: "/patient/privacy",
+      });
+    }
+  } catch (err) {
+    console.error("Could not notify the patient of the outcome:", err);
+  }
 }
 
 // ---------------------------------------------------------------------------

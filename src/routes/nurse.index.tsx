@@ -205,7 +205,15 @@ function HandoverLog() {
     refresh();
     // Simple polling instead of onSnapshot, matching this file's existing
     // plain-async-function style rather than mixing in a live listener.
-    const id = setInterval(refresh, 5000);
+    //
+    // This used to run every 5 seconds. Each run downloads EVERY handover
+    // note the clinic has ever written (the "today" filter is applied
+    // afterwards, in the browser), so one open tab cost tens of thousands of
+    // database reads an hour. Now every 30 seconds, and skipped while the tab
+    // is hidden. A nurse's own add / remove / finalize still refreshes at once.
+    const id = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 30_000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nurse?.clinicId, shift]);

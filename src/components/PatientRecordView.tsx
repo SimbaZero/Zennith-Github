@@ -5,6 +5,7 @@ import { usePatientRecord } from "@/lib/doctor-service";
 import { HIDDEN_BY_PATIENT } from "@/lib/privacy";
 import { updatePatient, updateMedicalRecord } from "@/lib/clinic-data";
 import { useClinicInventory, dispenseMedication } from "@/lib/nurse-service";
+import { FastLaneToggle } from "@/components/FastLaneToggle";
 import { addDoc, collection } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import {
@@ -382,6 +383,17 @@ export function PatientRecordView({
             ? error
             : `Could not load a medical record for "${pid}".`}
         </p>
+      )}
+
+      {record && (
+        <div className="mb-4 print:hidden">
+          <FastLaneToggle
+            patientId={record.patientId}
+            clinicId={clinicId}
+            prescription={record.prescription}
+            fastLane={record.fastLane}
+          />
+        </div>
       )}
 
       {record && (

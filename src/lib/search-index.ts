@@ -259,10 +259,10 @@ const superAdminIndex: SearchEntry[] = [
     keywords: ["hospitals", "clinics", "register"],
   },
   {
-    label: "Platform Logs",
+    label: "Clinic Applications",
     section: "Platform",
-    path: "/super-admin/audit",
-    keywords: ["logs", "audit", "system"],
+    path: "/super-admin/applications",
+    keywords: ["applications", "approve", "review", "clinics", "register"],
   },
 ];
 

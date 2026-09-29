@@ -9,10 +9,12 @@ import {
   useMedicationStatus,
   usePatientNotifications,
 } from "@/lib/patient-service";
+import { MedicationReminders } from "@/components/MedicationReminders";
 import {
   FileText,
   Calendar,
   Bell,
+  Pill,
   Search,
   CheckCircle2,
   AlertCircle,
@@ -160,6 +162,24 @@ function PatientDashboard() {
           </ul>
         )}
       </div>
+
+      {patient?.prescription?.trim() && patient.patientId && (
+        <div className="bg-white rounded-xl border p-5 mb-6">
+          <div className="flex items-center gap-2 mb-1">
+            <Pill size={16} className="text-[oklch(0.55_0.18_245)]" />
+            <h3 className="font-semibold">Medication Reminders</h3>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">
+            For {patient.prescription}
+          </p>
+          <MedicationReminders
+            patientId={patient.patientId}
+            userId={patient.userId}
+            med={patient.prescription}
+            savedTimes={patient.reminderTimes ?? []}
+          />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-xl border p-5">

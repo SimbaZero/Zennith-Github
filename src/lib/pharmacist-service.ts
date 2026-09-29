@@ -262,6 +262,10 @@ export interface PatientDirectoryEntry {
   fullName: string;
   medicalRecordNo?: number;
   chronicCondition?: string;
+  /** A nurse or doctor's clinical judgement — see src/lib/fast-lane.ts.
+   *  Only Fast Lane patients may collect medication directly from the
+   *  pharmacist without queuing through a nurse. */
+  fastLane: boolean;
 }
 
 /**
@@ -304,6 +308,7 @@ export function usePatientDirectory(): {
             fullName: userNameById.get(p.userId) || "Unknown patient",
             medicalRecordNo: p.medicalRecordNo,
             chronicCondition: p.chronicCondition,
+            fastLane: p.fastLane === true,
           };
         });
 

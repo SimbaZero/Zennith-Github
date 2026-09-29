@@ -16,6 +16,9 @@ import {
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { isOffline } from "@/lib/offline";
+import { notifyClinicAdmins } from "@/lib/notify";
+import { cleanReminderTimes, type AdherenceLogEntry } from "@/lib/reminders";
+import { notifyUser } from "@/lib/notify";
 
 // ---------------------------------------------------------------------------
 // AUTH RACE FIX — same pattern as doctor-service.ts. On a hard reload our
@@ -63,6 +66,13 @@ export interface CurrentPatient {
   // from before signup started collecting one).
   clinicId?: number;
   clinicName?: string;
+  /** Times (24h "HH:MM") the patient asked to be reminded to take their
+   *  medication. Empty/absent means no reminders set. */
+  reminderTimes?: string[];
+  /** Set by a nurse or doctor, not by the patient (see nurse/doctor-service).
+   *  Only fast-lane patients may collect medication without queuing at the
+   *  pharmacy. */
+  fastLane?: boolean;
 }
 
 /**
@@ -247,6 +257,10 @@ export function useCurrentPatient(): {
       lastVisit: mr.lastVisit,
       clinicId: patientBase.clinicId,
       clinicName: clinicData.clinicName,
+      reminderTimes: Array.isArray(patientBase.reminderTimes)
+        ? patientBase.reminderTimes
+        : [],
+      fastLane: patientBase.fastLane === true,
     });
     setLoading(false);
   }, [patientId, patientBase, userData, mrData, clinicData]);
@@ -509,6 +523,136 @@ export async function requestAppointmentReminder(
 // patientId instead and pass patient.patientId from the caller.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Medication reminders (patient-set) and self-reported dose logging.
+// See src/lib/reminders.ts for the rules these follow.
+// ---------------------------------------------------------------------------
+
+export async function saveReminderTimes(
+  patientId: string,
+  times: string[],
+): Promise<void> {
+  await setDoc(
+    doc(db, "patients", patientId),
+    { reminderTimes: cleanReminderTimes(times) },
+    { merge: true },
+  );
+}
+
+export function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Live "was today's dose marked taken" for one medication, by anyone
+ *  (patient or nurse) — used to silence a reminder once a dose is logged
+ *  either way. */
+export function useTodayDoseTaken(
+  patientId: string | undefined,
+  med: string | undefined,
+): boolean {
+  const [taken, setTaken] = useState(false);
+  useEffect(() => {
+    if (!patientId || !med?.trim()) {
+      setTaken(false);
+      return;
+    }
+    const ref = doc(
+      db,
+      "patients",
+      patientId,
+      "adherenceLogs",
+      `${todayIsoDate()}_${med.trim()}`,
+    );
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setTaken(snap.exists() && snap.data().taken === true),
+      (err) => console.error("Dose status listener failed:", err),
+    );
+    return () => unsub();
+  }, [patientId, med]);
+  return taken;
+}
+
+/** The patient marking their own dose as taken. Tagged source: "patient" so
+ *  it is never mistaken for a dose a nurse witnessed. */
+/**
+ * Writes a real notification for a due reminder — shown on the alerts page
+ * and the notification bell, not just the in-page banner. Deliberately
+ * idempotent: the doc id is derived from the user, date and time, so calling
+ * this again for the same reminder (a second open tab, a re-render) overwrites
+ * the same notification rather than creating a duplicate. Fire-and-forget:
+ * a failed notification must never block the reminder banner itself.
+ */
+export async function notifyReminderDue(
+  userId: number,
+  med: string,
+  time: string,
+): Promise<void> {
+  const date = todayIsoDate();
+  await setDoc(
+    doc(db, "notifications", `reminder_${userId}_${date}_${time}`),
+    {
+      notifId: Date.now(),
+      userId,
+      title: "Medication reminder",
+      message: `Time to take your ${med.trim()}.`,
+      isRead: false,
+      timeSent: new Date().toISOString(),
+      link: "/patient",
+    },
+    { merge: true },
+  );
+}
+
+export async function logSelfReportedDose(
+  patientId: string,
+  med: string,
+): Promise<void> {
+  const date = todayIsoDate();
+  await setDoc(
+    doc(db, "patients", patientId, "adherenceLogs", `${date}_${med.trim()}`),
+    {
+      med: med.trim(),
+      date,
+      taken: true,
+      source: "patient",
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+/** The last `days` days of dose logs for one medication, oldest first —
+ *  fast-lane evidence for a clinician to weigh (see reminders.ts). Logs with
+ *  no `source` predate this feature and are treated as nurse-witnessed,
+ *  which is what they were at the time. */
+export async function fetchAdherenceHistory(
+  patientId: string,
+  med: string,
+  days = 30,
+): Promise<AdherenceLogEntry[]> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffIso = cutoff.toISOString().slice(0, 10);
+  const snap = await getDocs(
+    query(
+      collection(db, "patients", patientId, "adherenceLogs"),
+      where("med", "==", med.trim()),
+      where("date", ">=", cutoffIso),
+    ),
+  );
+  return snap.docs
+    .map((d) => {
+      const x = d.data();
+      return {
+        date: String(x.date ?? ""),
+        taken: x.taken === true,
+        source: x.source === "patient" ? "patient" : "nurse",
+      } as AdherenceLogEntry;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export interface VisitHistoryEntry {
   docId: string;
   description: string;
@@ -679,6 +823,21 @@ export async function requestDataDeletion(input: {
 
   await request;
   await audit;
+
+  // Tell the clinic's admin(s), so the request is seen rather than sitting on
+  // the audit page until someone happens to open it. This is a real
+  // notification, sent to each admin of the patient's clinic, and it links to
+  // the page where the request is reviewed. Not sent offline (it needs a live
+  // lookup of the admins) — the request itself is already saved and still
+  // appears on that page once it syncs. It never blocks or fails the request.
+  if (input.clinicId != null) {
+    void notifyClinicAdmins({
+      clinicId: input.clinicId,
+      title: "Data deletion requested",
+      message: `${input.patientId} has asked to have their account and data deactivated.`,
+      link: "/admin/audit",
+    });
+  }
 }
 // ---------------------------------------------------------------------------
 // Medication collection status.

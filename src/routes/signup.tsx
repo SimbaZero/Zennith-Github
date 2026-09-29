@@ -4,6 +4,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AuthBackground } from "@/components/AuthBackground";
+import { Field, FieldError, PasswordChecklist } from "@/components/FormField";
+import { focusFirstError, inputClass } from "@/lib/form-ui";
 import {
   signUpPatient,
   fetchRealClinics,
@@ -11,12 +13,19 @@ import {
 } from "@/lib/clinic-data";
 import { sendWelcomeEmail } from "@/lib/welcome-email";
 import {
+  fieldForServerError,
+  friendlyServerMessage,
+  normalizeId,
+  SIGNUP_FIELD_ORDER,
+  validateSignupForm,
+  type SignupErrors,
+  type SignupFormValues,
+} from "@/lib/form-rules";
+import {
   DOCUMENT_CHECK_NOTE,
   ID_TYPE_LABELS,
   SA_ID_CHECK_NOTE,
-  validateIdByType,
   validateSaId,
-  type IdType,
 } from "@/lib/sa-id";
 
 export const Route = createFileRoute("/signup")({ component: Signup });
@@ -26,18 +35,23 @@ export const Route = createFileRoute("/signup")({ component: Signup });
 // Asylum seekers and refugees must be able to sign up too; a patient with no
 // document at all can still be registered in person at reception.
 
+const FIELD_PREFIX = "signup";
+
 function Signup() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<SignupFormValues>({
     name: "",
     email: "",
     phone: "",
-    idType: "sa_id" as IdType,
+    idType: "sa_id",
     idNumber: "",
     password: "",
     confirm: "",
     clinicId: "",
   });
+  // Problems tied to one field (shown in red under that field) …
+  const [errors, setErrors] = useState<SignupErrors>({});
+  // … and problems that belong to the whole form (e.g. sign-in not enabled).
   const [error, setError] = useState("");
 
   // Decoded live so the person can see we read their date of birth correctly.
@@ -50,6 +64,26 @@ function Signup() {
     queryFn: fetchRealClinics,
   });
 
+  // Updates one value and clears that field's red error as soon as the person
+  // starts fixing it.
+  const set = <K extends keyof SignupFormValues>(
+    key: K,
+    value: SignupFormValues[K],
+  ) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    setErrors((prev) => {
+      const next: Record<string, string | undefined> = { ...prev };
+      delete next[key];
+      if (key === "password") delete next.confirm;
+      return next;
+    });
+  };
+
+  const showFieldErrors = (found: SignupErrors) => {
+    setErrors(found);
+    focusFirstError(SIGNUP_FIELD_ORDER, found, FIELD_PREFIX);
+  };
+
   const signup = useMutation({
     mutationFn: async () => {
       const res = await signUpPatient({
@@ -58,7 +92,7 @@ function Signup() {
         phone: form.phone,
         password: form.password,
         clinicId: Number(form.clinicId),
-        idNumber: normalizedId(),
+        idNumber: normalizeId(form.idNumber, form.idType),
         idType: form.idType,
         dob: saIdCheck?.valid ? saIdCheck.dateOfBirth : undefined,
       });
@@ -72,7 +106,11 @@ function Signup() {
     },
     onSuccess: (res) => {
       if (!res.ok) {
-        setError(res.error || "Could not create account");
+        const raw = res.error || "Could not create account";
+        const message = friendlyServerMessage(raw);
+        const field = fieldForServerError(raw);
+        if (field) showFieldErrors({ [field]: message });
+        else setError(message);
         return;
       }
       toast.success(
@@ -86,37 +124,15 @@ function Signup() {
     onError: () => setError("Could not create account — please try again"),
   });
 
-  const normalizedId = () => {
-    const id = form.idNumber.replace(/\s+/g, "");
-    return form.idType === "sa_id" ? id : id.toUpperCase();
-  };
-
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
-    if (!/^[+\d\s-]{7,}$/.test(form.phone)) {
-      setError("Enter a valid phone number.");
-      return;
-    }
-
-    const id = normalizedId();
-    const idCheck = validateIdByType(id, form.idType);
-    if (!idCheck.valid) {
-      setError(idCheck.reason ?? "Check your ID number.");
-      return;
-    }
-
-    if (form.password.length < 6) {
-      setError("Password must be at least 6 characters.");
-      return;
-    }
-    if (form.password !== form.confirm) {
-      setError("Passwords do not match.");
-      return;
-    }
-    if (!form.clinicId) {
-      setError("Please choose your nearest clinic.");
+    // Every field is checked at once, so the person sees all the problems
+    // (each in red under its own field) instead of fixing them one by one.
+    const found = validateSignupForm(form);
+    if (Object.keys(found).length > 0) {
+      showFieldErrors(found);
       return;
     }
 
@@ -124,12 +140,15 @@ function Signup() {
     // attempted. signUpPatient checks again server-side — this is convenience,
     // not the safeguard.
     setCheckingId(true);
-    const taken = await idNumberInUse(id).catch(() => false);
+    const taken = await idNumberInUse(
+      normalizeId(form.idNumber, form.idType),
+    ).catch(() => false);
     setCheckingId(false);
     if (taken) {
-      setError(
-        "An account already exists with this ID number. Try signing in, or use 'Forgot password'.",
-      );
+      showFieldErrors({
+        idNumber:
+          "An account already exists with this ID number. Try signing in, or use 'Forgot password'.",
+      });
       return;
     }
 
@@ -148,28 +167,40 @@ function Signup() {
             Join the Zennith care platform
           </p>
         </div>
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} noValidate className="space-y-4">
           <Field
+            id={`${FIELD_PREFIX}-name`}
             label="Full name"
             value={form.name}
-            onChange={(v) => setForm({ ...form, name: v })}
+            onChange={(v) => set("name", v)}
+            error={errors.name}
+            autoComplete="name"
           />
           <Field
+            id={`${FIELD_PREFIX}-email`}
             label="Email"
             type="email"
             value={form.email}
-            onChange={(v) => setForm({ ...form, email: v })}
+            onChange={(v) => set("email", v)}
+            error={errors.email}
+            autoComplete="email"
           />
           <Field
+            id={`${FIELD_PREFIX}-phone`}
             label="Phone number"
             type="tel"
             value={form.phone}
-            onChange={(v) => setForm({ ...form, phone: v })}
+            onChange={(v) => set("phone", v)}
             placeholder="082 123 4567"
+            error={errors.phone}
+            autoComplete="tel"
           />
 
           <div>
-            <label className="text-sm font-medium block mb-1.5">
+            <label
+              htmlFor={`${FIELD_PREFIX}-idNumber`}
+              className="text-sm font-medium block mb-1.5"
+            >
               Identification
             </label>
             <div className="grid grid-cols-2 gap-2 mb-2">
@@ -184,7 +215,7 @@ function Signup() {
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setForm({ ...form, idType: key })}
+                  onClick={() => set("idType", key)}
                   className={`px-3 py-2 rounded-md text-sm border transition ${
                     form.idType === key
                       ? "bg-[oklch(0.55_0.18_245)] text-white border-transparent"
@@ -196,15 +227,20 @@ function Signup() {
               ))}
             </div>
             <input
+              id={`${FIELD_PREFIX}-idNumber`}
               value={form.idNumber}
-              onChange={(e) => setForm({ ...form, idNumber: e.target.value })}
+              onChange={(e) => set("idNumber", e.target.value)}
               placeholder={
                 form.idType === "sa_id"
                   ? "13 digits"
                   : `${ID_TYPE_LABELS[form.idType]} number`
               }
-              required
-              className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
+              aria-invalid={errors.idNumber ? true : undefined}
+              className={inputClass(!!errors.idNumber)}
+            />
+            <FieldError
+              id={`${FIELD_PREFIX}-idNumber-error`}
+              message={errors.idNumber}
             />
             {saIdCheck?.valid && (
               <p className="text-xs text-muted-foreground mt-1">
@@ -231,15 +267,19 @@ function Signup() {
           </div>
 
           <div>
-            <label className="text-sm font-medium block mb-1.5">
+            <label
+              htmlFor={`${FIELD_PREFIX}-clinicId`}
+              className="text-sm font-medium block mb-1.5"
+            >
               Nearest clinic
             </label>
             <select
+              id={`${FIELD_PREFIX}-clinicId`}
               value={form.clinicId}
-              onChange={(e) => setForm({ ...form, clinicId: e.target.value })}
-              required
+              onChange={(e) => set("clinicId", e.target.value)}
               disabled={clinicsLoading}
-              className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] bg-white"
+              aria-invalid={errors.clinicId ? true : undefined}
+              className={inputClass(!!errors.clinicId, "bg-white")}
             >
               <option value="" disabled>
                 {clinicsLoading ? "Loading clinics..." : "Select a clinic"}
@@ -250,22 +290,37 @@ function Signup() {
                 </option>
               ))}
             </select>
+            <FieldError
+              id={`${FIELD_PREFIX}-clinicId-error`}
+              message={errors.clinicId}
+            />
           </div>
 
           <Field
+            id={`${FIELD_PREFIX}-password`}
             label="Password"
             type="password"
             value={form.password}
-            onChange={(v) => setForm({ ...form, password: v })}
+            onChange={(v) => set("password", v)}
+            error={errors.password}
+            autoComplete="new-password"
+            hint={<PasswordChecklist value={form.password} />}
           />
           <Field
+            id={`${FIELD_PREFIX}-confirm`}
             label="Confirm password"
             type="password"
             value={form.confirm}
-            onChange={(v) => setForm({ ...form, confirm: v })}
+            onChange={(v) => set("confirm", v)}
+            error={errors.confirm}
+            autoComplete="new-password"
           />
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
 
           <button
             disabled={busy}
@@ -289,33 +344,5 @@ function Signup() {
         </form>
       </div>
     </AuthBackground>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  type = "text",
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  type?: string;
-  placeholder?: string;
-}) {
-  return (
-    <div>
-      <label className="text-sm font-medium block mb-1.5">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        required
-        className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
-      />
-    </div>
   );
 }

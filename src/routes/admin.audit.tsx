@@ -512,7 +512,8 @@ function DeletionRequestRow({
           <p className="text-xs text-muted-foreground mb-2">
             Marking this handled does not delete anything — medical records must
             be retained for a legally defined period. Record what you actually
-            did, including how the patient was contacted.
+            did, including how the patient was contacted. This note is internal
+            — the patient is sent a standard message about the outcome.
           </p>
           <input
             value={note}

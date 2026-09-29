@@ -121,7 +121,11 @@ const navByRole: Record<Role, NavItem[]> = {
   super_admin: [
     { to: "/super-admin", label: "Dashboard", icon: LayoutDashboard },
     { to: "/super-admin/facilities", label: "Facilities", icon: Building2 },
-    { to: "/super-admin/audit", label: "Platform Logs", icon: Activity },
+    {
+      to: "/super-admin/applications",
+      label: "Clinic Applications",
+      icon: ClipboardList,
+    },
   ],
 };
 
