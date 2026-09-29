@@ -52,6 +52,10 @@ export async function handleSmsInboundRequest(request: Request, url: URL, env: u
 /**
  * POST /api/sms/reminders — runs the reminder job now, for testing or a
  * missed cron. Requires `Authorization: Bearer <SMS_REMINDER_TRIGGER_SECRET>`.
+ *
+ * POST /api/sms/reminders?test=now — testing only: sends each upcoming
+ * appointment's next reminder immediately, outside the usual time windows.
+ * Refused unless SMS_ONLY_TO is set, so it can only ever text listed numbers.
  */
 export async function handleReminderTriggerRequest(request: Request, env: unknown): Promise<Response> {
   if (request.method !== "POST") {
@@ -67,8 +71,13 @@ export async function handleReminderTriggerRequest(request: Request, env: unknow
     return Response.json({ ok: false, reason: "unauthorized" }, { status: 401 });
   }
 
+  const sendNow = new URL(request.url).searchParams.get("test") === "now";
+  if (sendNow && !readEnv(env, "SMS_ONLY_TO")) {
+    return Response.json({ ok: false, reason: "test-needs-sms-only-to" }, { status: 400 });
+  }
+
   try {
-    const results = await processDueAppointmentReminders(new Date(), env);
+    const results = await processDueAppointmentReminders(new Date(), env, { sendNow });
     return Response.json({ ok: true, results });
   } catch (error) {
     console.error("[sms-reminders] failed:", error);

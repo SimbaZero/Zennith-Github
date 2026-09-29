@@ -81,7 +81,17 @@ function isDocumentId(id: string): boolean {
  * handled on its own, so a failure is reported for that appointment and the
  * rest still go out.
  */
-export async function processDueAppointmentReminders(now = new Date(), env?: unknown) {
+export async function processDueAppointmentReminders(
+  now = new Date(),
+  env?: unknown,
+  /**
+   * sendNow (testing only, and only while SMS_ONLY_TO is set): ignore the
+   * 18:00/20:00/08:00 windows and send each upcoming appointment's next
+   * unsent reminder straight away. sendSms still refuses numbers not on
+   * SMS_ONLY_TO, so only the tester is texted.
+   */
+  options: { sendNow?: boolean } = {},
+) {
   const fs = firestoreAdminFromEnv(env);
   const subrequestLimit = Number(readEnv(env, "WORKER_SUBREQUEST_LIMIT")) || 50;
   let smsRequests = 0;
@@ -113,6 +123,7 @@ export async function processDueAppointmentReminders(now = new Date(), env?: unk
 
     const appointmentDateTime = new Date(appointment.appointDateTime);
     if (Number.isNaN(appointmentDateTime.getTime())) continue;
+    if (options.sendNow && appointmentDateTime <= wallNow) continue;
 
     const patientId = appointment.patientId;
     if (!patientId) continue;
@@ -122,9 +133,11 @@ export async function processDueAppointmentReminders(now = new Date(), env?: unk
     const targets = getReminderTargetsForAppointment(appointment.appointDateTime, clinician);
 
     for (const target of targets) {
-      const isDue = wallNow >= target.scheduledFor && wallNow <= addMinutes(target.scheduledFor, 30);
+      const isDue =
+        options.sendNow || (wallNow >= target.scheduledFor && wallNow <= addMinutes(target.scheduledFor, 30));
       if (!isDue || reminderLog.includes(target.kind)) continue;
       due.push({ appointmentId: appointmentDoc.id, patientId: String(patientId), target });
+      if (options.sendNow) break;
     }
   }
   if (due.length === 0) return results;
