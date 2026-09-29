@@ -20,6 +20,7 @@ import { notifyClinicAdmins } from "@/lib/notify";
 import {
   adherenceDocId,
   cleanReminderTimes,
+  formatTime12h,
   type AdherenceLogEntry,
 } from "@/lib/reminders";
 import { notifyUser } from "@/lib/notify";
@@ -559,8 +560,12 @@ export function todayIsoDate(): string {
  */
 export interface DoseStatus {
   loaded: boolean;
-  /** True when today's log exists and says taken. */
+  /** True when today's log exists and says at least one dose was taken. */
   taken: boolean;
+  /** Which reminder times were marked taken today. `null` means the log has
+   *  no per-time detail — a nurse's log, or a day-level tick from before
+   *  each time was its own dose — and so covers the whole day. */
+  takenTimes: string[] | null;
   /** Who recorded it. The patient may only undo their own claim. */
   source: "patient" | "nurse" | null;
   /** The lookup itself failed (e.g. the database is over its daily limit),
@@ -571,6 +576,7 @@ export interface DoseStatus {
 const DOSE_UNKNOWN: DoseStatus = {
   loaded: false,
   taken: false,
+  takenTimes: null,
   source: null,
   failed: false,
 };
@@ -603,12 +609,21 @@ export function useTodayDoseStatus(
           loaded: true,
           failed: false,
           taken: x?.taken === true,
+          takenTimes: Array.isArray(x?.takenTimes)
+            ? cleanReminderTimes(x.takenTimes)
+            : null,
           source: x ? (x.source === "patient" ? "patient" : "nurse") : null,
         });
       },
       (err) => {
         console.error("Dose status listener failed:", err);
-        setStatus({ loaded: true, failed: true, taken: false, source: null });
+        setStatus({
+          loaded: true,
+          failed: true,
+          taken: false,
+          takenTimes: null,
+          source: null,
+        });
       },
     );
     return () => unsub();
@@ -636,7 +651,7 @@ export async function notifyReminderDue(
       notifId: Date.now(),
       userId,
       title: "Medication reminder",
-      message: `Time to take your ${med.trim()}.`,
+      message: `Time to take your ${med.trim()} (${formatTime12h(time)}).`,
       isRead: false,
       timeSent: new Date().toISOString(),
       // The page plus the card on it. "/patient" alone did nothing when you
@@ -647,9 +662,23 @@ export async function notifyReminderDue(
   );
 }
 
+/** One reminder time's dose, for a patient who takes several a day. */
+export interface DoseSlotWrite {
+  /** The reminder time being marked, "HH:MM". */
+  time: string;
+  /** Times already marked today, so marking this one doesn't lose them. */
+  takenTimes: string[];
+  /** How many reminder times the patient has — how many doses to expect. */
+  expected: number;
+}
+
+/** The patient marking their own dose as taken. Tagged source: "patient" so
+ *  it is never mistaken for a dose a nurse witnessed. With `slot`, only that
+ *  reminder time's dose is marked; without it, the day's single dose is. */
 export async function logSelfReportedDose(
   patientId: string,
   med: string,
+  slot?: DoseSlotWrite,
 ): Promise<void> {
   const date = todayIsoDate();
   await setDoc(
@@ -660,27 +689,40 @@ export async function logSelfReportedDose(
       taken: true,
       source: "patient",
       updatedAt: serverTimestamp(),
+      ...(slot
+        ? {
+            takenTimes: cleanReminderTimes([...slot.takenTimes, slot.time]),
+            expected: slot.expected,
+          }
+        : {}),
     },
     { merge: true },
   );
 }
 
-/** Takes back the patient's OWN "I took it" for today (a mis-tap, or a
- *  demo being repeated). A dose a nurse witnessed can't be undone here — the
+/** Takes back the patient's OWN "I took it" (a mis-tap, or a demo being
+ *  repeated). With `slot`, only that reminder time's dose is taken back and
+ *  the others stay marked. A dose a nurse witnessed can't be undone here — the
  *  security rules refuse it, and the UI doesn't offer it. */
 export async function undoSelfReportedDose(
   patientId: string,
   med: string,
+  slot?: DoseSlotWrite,
 ): Promise<void> {
   const date = todayIsoDate();
+  const remaining = slot
+    ? cleanReminderTimes(slot.takenTimes.filter((t) => t !== slot.time))
+    : [];
   await setDoc(
     doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
     {
       med: med.trim(),
       date,
-      taken: false,
+      taken: slot ? remaining.length > 0 : false,
       source: "patient",
       updatedAt: serverTimestamp(),
+      takenTimes: remaining,
+      ...(slot ? { expected: slot.expected } : {}),
     },
     { merge: true },
   );
@@ -719,6 +761,9 @@ export async function fetchAdherenceHistory(
           date: String(x.date ?? ""),
           taken: x.taken === true,
           source: x.source === "patient" ? "patient" : "nurse",
+          ...(typeof x.expected === "number" && Array.isArray(x.takenTimes)
+            ? { expected: x.expected, takenCount: x.takenTimes.length }
+            : {}),
         }) as AdherenceLogEntry,
     )
     .sort((a, b) => a.date.localeCompare(b.date));

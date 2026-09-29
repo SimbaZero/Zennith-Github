@@ -159,6 +159,14 @@ function AdherenceEvidence({
         <p>
           <strong>{summary.percentage}%</strong> of {summary.loggedDays} logged
           day{summary.loggedDays === 1 ? "" : "s"} marked taken.
+          {summary.partialDays > 0 && (
+            <span className="text-muted-foreground">
+              {" "}
+              {summary.partialDays} of those{" "}
+              {summary.partialDays === 1 ? "was" : "were"} only partly taken
+              (some of the day's doses missed).
+            </span>
+          )}
           {summary.selfReportedDays > 0 && (
             <span className="text-muted-foreground">
               {" "}

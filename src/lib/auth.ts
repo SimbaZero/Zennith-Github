@@ -370,6 +370,20 @@ export async function addUser(u: {
     const legacyUserId = await nextLegacyUserId(db);
     const roleCapitalized = u.role.charAt(0).toUpperCase() + u.role.slice(1);
 
+    // Which clinic this person belongs to. The admin's own clinicId is the
+    // reliable source. `facilityId` is an older field that only some accounts
+    // carry — an admin created by the super admin has a clinicId and NO
+    // facilityId. Relying on facilityId alone saved their new staff with no
+    // clinic at all: the person never appeared in anyone's staff list, and
+    // when they signed in they had no clinic, so no patients and no name.
+    const facilityNum = u.facilityId ? Number(u.facilityId) : undefined;
+    const clinicOfNewUser: number | string | undefined =
+      typeof u.clinicId === "number" && !Number.isNaN(u.clinicId)
+        ? u.clinicId
+        : facilityNum !== undefined && !Number.isNaN(facilityNum)
+          ? facilityNum
+          : u.facilityId;
+
     await setDoc(doc(secondaryDb, USERS, cred.user.uid), {
       username: u.username.trim().toLowerCase(),
       role: u.role,
@@ -379,6 +393,7 @@ export async function addUser(u: {
       email: u.email.trim().toLowerCase(),
       legacyUserId,
       ...(u.facilityId ? { facilityId: u.facilityId } : {}),
+      ...(clinicOfNewUser !== undefined ? { clinicId: clinicOfNewUser } : {}),
       ...(u.firstName ? { firstName: u.firstName.trim() } : {}),
       ...(u.lastName ? { lastName: u.lastName.trim() } : {}),
       ...(u.licenseNumber
@@ -427,11 +442,7 @@ export async function addUser(u: {
       if (coll) {
         const roleRecordId = await nextRoleRecordId(u.role as StaffRole, db);
         writtenRefs.push(doc(db, coll, roleRecordId));
-        const clinicIdNum = u.facilityId ? Number(u.facilityId) : undefined;
-        const clinicIdValue =
-          clinicIdNum !== undefined && !Number.isNaN(clinicIdNum)
-            ? clinicIdNum
-            : u.facilityId;
+        const clinicIdValue = clinicOfNewUser;
         await setDoc(doc(db, coll, roleRecordId), {
           [ROLE_ID_FIELD[u.role]!]: roleRecordId,
           userId: legacyUserId,
