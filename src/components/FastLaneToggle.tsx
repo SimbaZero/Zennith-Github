@@ -111,18 +111,25 @@ function AdherenceEvidence({
   med: string;
 }) {
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [summary, setSummary] = useState<AdherenceSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setFailed(false);
     fetchAdherenceHistory(patientId, med, 30)
       .then((rows) => {
         if (!cancelled) setSummary(summarizeAdherence(rows));
       })
       .catch((err) => {
         console.error("Adherence history failed to load:", err);
-        if (!cancelled) setSummary(null);
+        // Say so. Showing "no dose logs" here would be a false statement
+        // about the patient, made to a clinician who is deciding on it.
+        if (!cancelled) {
+          setSummary(null);
+          setFailed(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -138,12 +145,17 @@ function AdherenceEvidence({
         DOSE HISTORY — LAST 30 DAYS (EVIDENCE, NOT A SCORE)
       </p>
       {loading && <p className="text-muted-foreground">Loading…</p>}
-      {!loading && (!summary || summary.loggedDays === 0) && (
+      {!loading && failed && (
+        <p className="text-muted-foreground">
+          Couldn't load dose history. Try again in a moment.
+        </p>
+      )}
+      {!loading && !failed && (!summary || summary.loggedDays === 0) && (
         <p className="text-muted-foreground">
           No dose logs on record for {med}.
         </p>
       )}
-      {!loading && summary && summary.loggedDays > 0 && (
+      {!loading && !failed && summary && summary.loggedDays > 0 && (
         <p>
           <strong>{summary.percentage}%</strong> of {summary.loggedDays} logged
           day{summary.loggedDays === 1 ? "" : "s"} marked taken.

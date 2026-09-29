@@ -17,6 +17,19 @@
 
 export const MAX_REMINDER_TIMES = 4;
 
+/**
+ * The Firestore document id for one medication's dose log on one day.
+ *
+ * A "/" in a medication name (the pharmacy stocks lines like
+ * "Lamivudine/TDF/DTG") would split the id into extra path segments and send
+ * the write somewhere the security rules refuse, so it is replaced. Used by
+ * BOTH the patient's "I took it" and the nurse's dose tick, so the two always
+ * agree on which document is "today's dose".
+ */
+export function adherenceDocId(date: string, med: string): string {
+  return `${date}_${med.trim().replace(/\//g, "-")}`;
+}
+
 /** 24-hour "HH:MM", e.g. "08:00" or "21:30". */
 export function isValidTimeString(value: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
@@ -72,6 +85,28 @@ export function dueReminderTime(
     }
   }
   return null;
+}
+
+/**
+ * The next reminder after `now`: a later time today if there is one,
+ * otherwise the first time tomorrow. Null when no times are set. A time
+ * that is due right now is NOT "next" — that case has its own banner.
+ */
+export function nextReminder(
+  times: string[],
+  now: Date,
+): { time: string; tomorrow: boolean } | null {
+  const valid = sortTimes(dedupeTimes(times.filter(isValidTimeString)));
+  if (valid.length === 0) return null;
+  const minutes = (t: string) => {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  };
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const later = valid.find((t) => minutes(t) > nowMinutes);
+  return later
+    ? { time: later, tomorrow: false }
+    : { time: valid[0], tomorrow: true };
 }
 
 // ---- fast-lane evidence -----------------------------------------------------

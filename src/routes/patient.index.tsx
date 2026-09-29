@@ -164,7 +164,10 @@ function PatientDashboard() {
       </div>
 
       {patient?.prescription?.trim() && patient.patientId && (
-        <div className="bg-white rounded-xl border p-5 mb-6">
+        <div
+          id="medication-reminders"
+          className="scroll-mt-24 bg-white rounded-xl border p-5 mb-6 transition-shadow duration-300"
+        >
           <div className="flex items-center gap-2 mb-1">
             <Pill size={16} className="text-[oklch(0.55_0.18_245)]" />
             <h3 className="font-semibold">Medication Reminders</h3>

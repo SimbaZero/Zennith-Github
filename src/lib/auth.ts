@@ -293,7 +293,7 @@ export async function addUser(u: {
   contactNumber?: string;
   idType?: "sa_id" | "passport";
   idNumber?: string;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<{ ok: boolean; error?: string; emailFailed?: boolean }> {
   // Creating a staff account calls Firebase Auth and sends a set-password
   // email — neither of which is a Firestore write, so neither can be queued
   // offline. Without this the admin would watch the form hang and have no
@@ -446,7 +446,6 @@ export async function addUser(u: {
             : {}),
         });
       }
-
     } catch (legacyErr: any) {
       // This used to be swallowed ("the account is already good"). It wasn't:
       // without the staff record the person never appears in the staff list,
@@ -498,7 +497,21 @@ export async function addUser(u: {
       action_type: "staff.create",
       description: `Created ${u.role} account "${u.username}" at clinicId ${u.clinicId}`,
     });
-    return { ok: true };
+
+    // The password above is a random throwaway nobody knows, so THIS EMAIL IS
+    // THE ONLY WAY the new person can ever sign in. It was documented in the
+    // comments ("via the reset link below") but never actually sent, while
+    // the page told the admin it had been. A failure here doesn't undo the
+    // account (it exists and is valid) — it's reported so the admin can tell
+    // the person to use "Forgot password" instead.
+    let emailFailed = false;
+    try {
+      await sendPasswordResetEmail(auth, u.email.trim().toLowerCase());
+    } catch (err) {
+      emailFailed = true;
+      console.error("Invite email failed to send:", err);
+    }
+    return { ok: true, emailFailed };
   } catch (err: any) {
     // Undo a half-finished create so the e-mail is free to use again.
     if (createdUser && !profileWritten) {
@@ -562,7 +575,9 @@ export async function removeUser(username: string): Promise<void> {
       actingClinicId ??
       null;
     if (snap.empty) {
-      throw new Error(`No login found for "${username}" — nothing was removed.`);
+      throw new Error(
+        `No login found for "${username}" — nothing was removed.`,
+      );
     }
     await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
     // Logged only AFTER the delete succeeded, so the platform log never
@@ -789,7 +804,7 @@ export async function createLoginForExistingStaff(input: {
   fullName: string;
   userId: number; // the staff record's existing users.userId
   clinicId: number;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<{ ok: boolean; error?: string; emailFailed?: boolean }> {
   // Same as addUser — real Firebase Auth calls plus a set-password email,
   // none of which Firestore's offline queue covers.
   assertOnline();
@@ -817,9 +832,11 @@ export async function createLoginForExistingStaff(input: {
       legacyUserId: input.userId,
     });
 
+    let emailFailed = false;
     try {
       await sendPasswordResetEmail(auth, input.email.trim().toLowerCase());
     } catch (err) {
+      emailFailed = true;
       console.error("Invite email failed to send:", err);
     }
 
@@ -830,7 +847,7 @@ export async function createLoginForExistingStaff(input: {
       description: `Created a login for existing ${input.role} ${input.staffId} (${input.fullName})`,
     });
 
-    return { ok: true };
+    return { ok: true, emailFailed };
   } catch (err: any) {
     if (err.code === "auth/email-already-in-use")
       return { ok: false, error: "That email already has an account" };

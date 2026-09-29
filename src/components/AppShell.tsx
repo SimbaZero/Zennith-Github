@@ -58,6 +58,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCurrentNurse } from "@/lib/nurse-service";
 import { resolveCurrentReceptionist } from "@/lib/clinic-data";
 import { useCurrentAdmin } from "@/lib/auth";
+import { jumpToSection } from "@/lib/jump-to-section";
 
 export type NavItem = { to: string; label: string; icon: LucideIcon };
 
@@ -634,7 +635,16 @@ function NotificationsButton({ role }: { role: Role }) {
                     // announcement — jump to where you can act on it.
                     if (n.link) {
                       setOpen(false);
-                      navigate({ to: n.link as any });
+                      // "/page#section" goes to the page AND scrolls to
+                      // (and briefly highlights) that section.
+                      const [path, hash] = n.link.split("#");
+                      (
+                        navigate as unknown as (opts: {
+                          to: string;
+                          hash?: string;
+                        }) => void
+                      )({ to: path, hash: hash || undefined });
+                      if (hash) jumpToSection(hash);
                     }
                   }}
                   className={`w-full text-left p-3 border-b last:border-b-0 hover:bg-secondary/50 ${

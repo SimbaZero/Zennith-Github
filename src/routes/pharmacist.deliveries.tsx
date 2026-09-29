@@ -565,10 +565,17 @@ function PharmacyStockTiles({
             rank: 2,
           };
 
-  const tiles = stock
+  const [search, setSearch] = useState("");
+  const allTiles = stock
     .map((s) => ({ s, t: tone(s.units, s.threshold) }))
     .sort((a, b) => a.t.rank - b.t.rank || a.s.name.localeCompare(b.s.name));
-  const needOrder = tiles.filter((x) => x.t.rank < 2).length;
+  const needOrder = allTiles.filter((x) => x.t.rank < 2).length;
+  const term = search.trim().toLowerCase();
+  const tiles = term
+    ? allTiles.filter((x) => x.s.name.toLowerCase().includes(term))
+    : allTiles;
+  // Distinct names for the browser's built-in autocomplete list.
+  const names = Array.from(new Set(allTiles.map((x) => x.s.name))).sort();
 
   return (
     <div className="bg-white rounded-xl border p-5 mb-6">
@@ -586,8 +593,28 @@ function PharmacyStockTiles({
             : `${needOrder} to order from supplier`}
         </span>
       </div>
-      {tiles.length === 0 ? (
+      <div className="mb-3">
+        <input
+          type="search"
+          list="pharmacy-stock-names"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search a medication, e.g. Metformin"
+          aria-label="Search pharmacy stock"
+          className="w-full sm:max-w-xs border rounded-md px-3 py-2 text-sm"
+        />
+        <datalist id="pharmacy-stock-names">
+          {names.map((n) => (
+            <option key={n} value={n} />
+          ))}
+        </datalist>
+      </div>
+      {allTiles.length === 0 ? (
         <p className="text-sm text-muted-foreground">Loading stock…</p>
+      ) : tiles.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No medication matches "{search.trim()}".
+        </p>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-72 overflow-y-auto pr-1">
           {tiles.map(({ s, t }) => (

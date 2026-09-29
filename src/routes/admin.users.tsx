@@ -197,9 +197,17 @@ function CreateUser() {
         toast.error(res.error || "Could not create user");
         return;
       }
-      toast.success(
-        `${fullName} created — a set-password email was sent to ${form.email}`,
-      );
+      if (res.emailFailed) {
+        toast.warning(
+          `${fullName} was created, but the set-password email could not be sent. Ask them to use "Forgot password" on the sign-in page with ${form.email}.`,
+          { duration: 12000 },
+        );
+      } else {
+        toast.success(
+          `${fullName} created — a set-password email was sent to ${form.email}. It can take a few minutes; ask them to check spam.`,
+          { duration: 9000 },
+        );
+      }
       setForm({ firstName: "", lastName: "", username: "", email: "", role: form.role });
       setExtra(() => {
         const seeded: Record<string, string> = {};

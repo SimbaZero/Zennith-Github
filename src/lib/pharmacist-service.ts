@@ -1008,13 +1008,18 @@ export function useMedicationUsage(
     // that page was removed, which is why every medication showed "no usage
     // data" while medication was plainly being handed out. What a clinic
     // actually consumes is what nurses dispense to patients.
-    const source =
-      clinicId == null
-        ? collection(db, "patientDispensing")
-        : query(
-            collection(db, "patientDispensing"),
-            where("clinicId", "==", clinicId),
-          );
+    // Wait until the clinic is known. This used to fall back to reading the
+    // WHOLE dispensing history for every clinic while the selected clinic was
+    // still loading, then re-read a narrower slice: that was the long first
+    // load, and the one-second flash of everyone's numbers.
+    if (clinicId == null) {
+      setUsage({});
+      return;
+    }
+    const source = query(
+      collection(db, "patientDispensing"),
+      where("clinicId", "==", clinicId),
+    );
     const unsub = onSnapshot(
       source,
       (snap) => {

@@ -17,7 +17,11 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { isOffline } from "@/lib/offline";
 import { notifyClinicAdmins } from "@/lib/notify";
-import { cleanReminderTimes, type AdherenceLogEntry } from "@/lib/reminders";
+import {
+  adherenceDocId,
+  cleanReminderTimes,
+  type AdherenceLogEntry,
+} from "@/lib/reminders";
 import { notifyUser } from "@/lib/notify";
 
 // ---------------------------------------------------------------------------
@@ -543,38 +547,75 @@ export function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Live "was today's dose marked taken" for one medication, by anyone
- *  (patient or nurse) — used to silence a reminder once a dose is logged
- *  either way. */
-export function useTodayDoseTaken(
+/**
+ * What we know about today's dose for one medication.
+ *
+ * `loaded` is false until the database has actually answered. That matters:
+ * this used to be a plain true/false that started at "not taken", so for the
+ * first moment after every visit to the dashboard the app believed the dose
+ * hadn't been taken and flashed a reminder (and sent a notification) for a
+ * dose that was already logged — then the real answer arrived and hid it.
+ * Nothing should act on "not taken" until `loaded` is true.
+ */
+export interface DoseStatus {
+  loaded: boolean;
+  /** True when today's log exists and says taken. */
+  taken: boolean;
+  /** Who recorded it. The patient may only undo their own claim. */
+  source: "patient" | "nurse" | null;
+  /** The lookup itself failed (e.g. the database is over its daily limit),
+   *  so "not taken" would be a guess, not a fact. */
+  failed: boolean;
+}
+
+const DOSE_UNKNOWN: DoseStatus = {
+  loaded: false,
+  taken: false,
+  source: null,
+  failed: false,
+};
+
+/** Live status of today's dose, by anyone (patient or nurse) — so a dose a
+ *  nurse witnessed silences the reminder too. */
+export function useTodayDoseStatus(
   patientId: string | undefined,
   med: string | undefined,
-): boolean {
-  const [taken, setTaken] = useState(false);
+): DoseStatus {
+  const [status, setStatus] = useState<DoseStatus>(DOSE_UNKNOWN);
+  // Read every render (cheap) so a page left open past midnight moves on to
+  // the new day's log instead of watching yesterday's.
+  const today = todayIsoDate();
   useEffect(() => {
-    if (!patientId || !med?.trim()) {
-      setTaken(false);
-      return;
-    }
+    setStatus(DOSE_UNKNOWN);
+    if (!patientId || !med?.trim()) return;
     const ref = doc(
       db,
       "patients",
       patientId,
       "adherenceLogs",
-      `${todayIsoDate()}_${med.trim()}`,
+      adherenceDocId(today, med),
     );
     const unsub = onSnapshot(
       ref,
-      (snap) => setTaken(snap.exists() && snap.data().taken === true),
-      (err) => console.error("Dose status listener failed:", err),
+      (snap) => {
+        const x = snap.exists() ? snap.data() : null;
+        setStatus({
+          loaded: true,
+          failed: false,
+          taken: x?.taken === true,
+          source: x ? (x.source === "patient" ? "patient" : "nurse") : null,
+        });
+      },
+      (err) => {
+        console.error("Dose status listener failed:", err);
+        setStatus({ loaded: true, failed: true, taken: false, source: null });
+      },
     );
     return () => unsub();
-  }, [patientId, med]);
-  return taken;
+  }, [patientId, med, today]);
+  return status;
 }
 
-/** The patient marking their own dose as taken. Tagged source: "patient" so
- *  it is never mistaken for a dose a nurse witnessed. */
 /**
  * Writes a real notification for a due reminder — shown on the alerts page
  * and the notification bell, not just the in-page banner. Deliberately
@@ -598,7 +639,9 @@ export async function notifyReminderDue(
       message: `Time to take your ${med.trim()}.`,
       isRead: false,
       timeSent: new Date().toISOString(),
-      link: "/patient",
+      // The page plus the card on it. "/patient" alone did nothing when you
+      // were already on the dashboard — the bell now scrolls to this card.
+      link: "/patient#medication-reminders",
     },
     { merge: true },
   );
@@ -610,11 +653,32 @@ export async function logSelfReportedDose(
 ): Promise<void> {
   const date = todayIsoDate();
   await setDoc(
-    doc(db, "patients", patientId, "adherenceLogs", `${date}_${med.trim()}`),
+    doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
     {
       med: med.trim(),
       date,
       taken: true,
+      source: "patient",
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+/** Takes back the patient's OWN "I took it" for today (a mis-tap, or a
+ *  demo being repeated). A dose a nurse witnessed can't be undone here — the
+ *  security rules refuse it, and the UI doesn't offer it. */
+export async function undoSelfReportedDose(
+  patientId: string,
+  med: string,
+): Promise<void> {
+  const date = todayIsoDate();
+  await setDoc(
+    doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
+    {
+      med: med.trim(),
+      date,
+      taken: false,
       source: "patient",
       updatedAt: serverTimestamp(),
     },
@@ -634,22 +698,29 @@ export async function fetchAdherenceHistory(
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffIso = cutoff.toISOString().slice(0, 10);
+  // ONE range filter on one field. Adding `where("med", "==", …)` as well
+  // would need a composite index that has to be created by hand in the
+  // Firebase console; without it the query throws and the clinician would see
+  // no history at all. A patient has at most a few dozen logs in 30 days, so
+  // filtering by medication here costs nothing.
   const snap = await getDocs(
     query(
       collection(db, "patients", patientId, "adherenceLogs"),
-      where("med", "==", med.trim()),
       where("date", ">=", cutoffIso),
     ),
   );
+  const wanted = med.trim();
   return snap.docs
-    .map((d) => {
-      const x = d.data();
-      return {
-        date: String(x.date ?? ""),
-        taken: x.taken === true,
-        source: x.source === "patient" ? "patient" : "nurse",
-      } as AdherenceLogEntry;
-    })
+    .map((d) => d.data())
+    .filter((x) => String(x.med ?? "").trim() === wanted)
+    .map(
+      (x) =>
+        ({
+          date: String(x.date ?? ""),
+          taken: x.taken === true,
+          source: x.source === "patient" ? "patient" : "nurse",
+        }) as AdherenceLogEntry,
+    )
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
