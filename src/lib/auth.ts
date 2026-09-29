@@ -8,6 +8,8 @@ import {
   sendPasswordResetEmail,
   signOut as fbSignOut,
   getAuth as getFbAuth,
+  deleteUser as fbDeleteUser,
+  type User as FbUser,
 } from "firebase/auth";
 import {
   doc,
@@ -26,6 +28,7 @@ import {
 import { assertOnline } from "@/lib/offline";
 import { auth, db, firebaseConfig } from "@/firebase";
 import { logAction } from "./audit";
+import { friendlyServerMessage } from "@/lib/form-rules";
 
 export type Role =
   | "doctor"
@@ -312,6 +315,21 @@ export async function addUser(u: {
       };
     }
   }
+  // The username is what the person signs in with, so it must be unique. This
+  // was never checked, and the only "already exists" message came from the
+  // e-mail check below — which is why every failure blamed the username.
+  {
+    const wanted = u.username.trim().toLowerCase();
+    const taken = await getDocs(
+      query(collection(db, USERS), where("username", "==", wanted), limit(1)),
+    );
+    if (!taken.empty) {
+      return {
+        ok: false,
+        error: `The username "${wanted}" is already taken. Choose another.`,
+      };
+    }
+  }
   if (u.idNumber) {
     if (await idNumberExists(u.idNumber)) {
       return {
@@ -333,12 +351,18 @@ export async function addUser(u: {
     firebaseConfig,
     `user-creation-${Date.now()}`,
   );
+  // Held outside the try so a failure AFTER the login was created can undo
+  // it. Otherwise a database error (e.g. the daily quota) leaves a login with
+  // no profile behind, and every retry with the same e-mail is refused.
+  let createdUser: FbUser | null = null;
+  let profileWritten = false;
   try {
     const cred = await createUserWithEmailAndPassword(
       getFbAuth(secondary),
       u.email.trim().toLowerCase(),
       throwawayPassword,
     );
+    createdUser = cred.user;
     const secondaryDb = getFirestore(secondary);
 
     // Legacy-table IDs are allocated against the ADMIN's own session
@@ -367,6 +391,8 @@ export async function addUser(u: {
       ...(u.idNumber ? { idNumber: u.idNumber.trim() } : {}),
     });
 
+    profileWritten = true;
+
     // Everything below writes via the PRIMARY `db` — i.e. still
     // authenticated as the ADMIN, not the brand-new user on `secondaryDb`.
     // "doctors" / "nurses" / "pharmacists" / "adminRecords" are admin-only
@@ -379,8 +405,13 @@ export async function addUser(u: {
     // Wrapped in its own try/catch: if a rule still blocks one of these,
     // the account + login (created above) remain valid — we don't want a
     // legacy-table hiccup to make the UI claim the whole thing failed.
+    // Everything written below is remembered so that, if any step fails, the
+    // whole account can be undone instead of being left half-made (a login
+    // that exists but never appears in the staff list).
+    const writtenRefs: ReturnType<typeof doc>[] = [];
     try {
       // "users" — shared legacy table every role record points back to.
+      writtenRefs.push(doc(db, "users", String(legacyUserId)));
       await setDoc(doc(db, "users", String(legacyUserId)), {
         userId: legacyUserId,
         names: u.firstName?.trim() ?? "",
@@ -395,6 +426,7 @@ export async function addUser(u: {
       const coll = ROLE_COLLECTION[u.role];
       if (coll) {
         const roleRecordId = await nextRoleRecordId(u.role as StaffRole, db);
+        writtenRefs.push(doc(db, coll, roleRecordId));
         const clinicIdNum = u.facilityId ? Number(u.facilityId) : undefined;
         const clinicIdValue =
           clinicIdNum !== undefined && !Number.isNaN(clinicIdNum)
@@ -415,21 +447,49 @@ export async function addUser(u: {
         });
       }
 
-      // "adminRecords" — audit trail of accounts created via this panel.
+    } catch (legacyErr: any) {
+      // This used to be swallowed ("the account is already good"). It wasn't:
+      // without the staff record the person never appears in the staff list,
+      // yet their ID number and username stay taken. Undo everything and
+      // report the failure so the admin can simply try again.
+      console.error(
+        "addUser: staff record failed, rolling back:",
+        legacyErr.code ?? legacyErr.message ?? legacyErr,
+      );
+      await Promise.all(
+        writtenRefs.map((r) =>
+          deleteDoc(r).catch((e) => console.error("rollback:", e)),
+        ),
+      );
+      await deleteDoc(doc(db, USERS, cred.user.uid)).catch((e) =>
+        console.error("rollback profile:", e),
+      );
+      await fbDeleteUser(cred.user).catch((e) =>
+        console.error("rollback login:", e),
+      );
+      return {
+        ok: false,
+        error: /resource-exhausted|quota/i.test(
+          `${legacyErr.code} ${legacyErr.message}`,
+        )
+          ? friendlyServerMessage("quota")
+          : "Could not finish creating the account, so nothing was saved. Please try again.",
+      };
+    }
+
+    // "adminRecords" is a side audit trail only. It must NEVER undo an
+    // otherwise-good account: a missing rule or a hiccup here just gets
+    // logged. (It previously sat inside the block above, so a denied write
+    // here rolled back every new account.)
+    try {
       const adminRecordId = await nextAdminRecordId(db);
       await setDoc(doc(db, "adminRecords", String(adminRecordId)), {
         adminRecordId,
         timeStampCreated: new Date().toISOString(),
         userIdAdded: legacyUserId,
       });
-    } catch (legacyErr: any) {
-      // Account + profile are already good at this point — don't fail the
-      // whole operation over a secondary table. Surface it in the console
-      // so it's not silently lost, though.
-      console.error(
-        "addUser: legacy table sync (users/role table/adminRecords) failed:",
-        legacyErr.code ?? legacyErr.message ?? legacyErr,
-      );
+    } catch (e) {
+      console.warn("addUser: adminRecords entry skipped:", e);
     }
 
     logAction({
@@ -440,8 +500,22 @@ export async function addUser(u: {
     });
     return { ok: true };
   } catch (err: any) {
+    // Undo a half-finished create so the e-mail is free to use again.
+    if (createdUser && !profileWritten) {
+      await fbDeleteUser(createdUser).catch((e) =>
+        console.error("addUser: could not roll back new login:", e),
+      );
+    }
     if (err.code === "auth/email-already-in-use")
-      return { ok: false, error: "Username already exists" };
+      return {
+        ok: false,
+        error:
+          "That e-mail address already has a Zennith login. Use a different e-mail.",
+      };
+    if (err.code === "auth/invalid-email")
+      return { ok: false, error: "That e-mail address isn't valid." };
+    if (/resource-exhausted|quota/i.test(`${err.code} ${err.message}`))
+      return { ok: false, error: friendlyServerMessage("quota") };
     if (err.code === "auth/weak-password")
       return { ok: false, error: "Password must be at least 6 characters" };
     if (err.code === "auth/operation-not-allowed")
@@ -487,7 +561,12 @@ export async function removeUser(username: string): Promise<void> {
       (snap.docs[0]?.data()?.clinicId as number | undefined) ??
       actingClinicId ??
       null;
+    if (snap.empty) {
+      throw new Error(`No login found for "${username}" — nothing was removed.`);
+    }
     await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+    // Logged only AFTER the delete succeeded, so the platform log never
+    // records a removal that didn't happen.
     logAction({
       clinicId: removedClinicId,
       actor_id: getUsername() || "system",
@@ -496,6 +575,12 @@ export async function removeUser(username: string): Promise<void> {
     });
   } catch (err) {
     console.error("removeUser failed:", err);
+    // Rethrow so the caller shows a failure instead of "removed".
+    throw new Error(
+      err instanceof Error
+        ? friendlyServerMessage(err.message)
+        : "Could not remove the login.",
+    );
   }
 }
 

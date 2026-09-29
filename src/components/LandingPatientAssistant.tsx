@@ -125,7 +125,8 @@ export function LandingPatientAssistant() {
               >
                 <p>{message.text}</p>
                 {message.action &&
-                  (message.action.href.startsWith("/") ? (
+                  (message.action.href === "/signup" ||
+                  message.action.href === "/login" ? (
                     <Link
                       to={message.action.href}
                       onClick={() => setOpen(false)}

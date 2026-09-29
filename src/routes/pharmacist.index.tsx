@@ -24,6 +24,24 @@ function PharmacistDashboard() {
   );
 
   const total = clinicStock.reduce((sum, x) => sum + x.units, 0);
+
+  // Real dispensing figures, summed from the same 30-day history the
+  // forecasts use (same UTC day keys as useMedicationUsage). These replaced
+  // hardcoded placeholders that showed the same numbers to every clinic.
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const weekStart = new Date();
+  weekStart.setDate(weekStart.getDate() - 6);
+  const weekKey = weekStart.toISOString().slice(0, 10);
+  let dispensedToday = 0;
+  let dispensedWeek = 0;
+  for (const f of forecasts) {
+    for (const day of f.history) {
+      if (day.date === todayKey) dispensedToday += day.units;
+      if (day.date >= weekKey && day.date <= todayKey) {
+        dispensedWeek += day.units;
+      }
+    }
+  }
   // "Order now" (or out of stock) first, then "Reorder soon". Zero-unit items
   // have no usage history to forecast from, so they're pulled in explicitly.
   // No cap — the card scrolls instead.
@@ -49,12 +67,11 @@ function PharmacistDashboard() {
           sub={`${criticalCount} order now`}
           tone="danger"
         />
-        {/* TODO(db): "DISTRIBUTED TODAY" is a hardcoded placeholder, not
-            real data — nothing queries for this yet. Same for "THIS
-            WEEK" below (Units dispensed / Stock updates / Low stock
-            alerts). Flagging so it isn't mistaken for real — needs a
-            real decision on what these should actually query. */}
-        <Stat label="DISTRIBUTED TODAY" value="148" sub="units to nurses" />
+        <Stat
+          label="DISPENSED TODAY"
+          value={dispensedToday.toLocaleString()}
+          sub="units to patients"
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -144,11 +161,12 @@ function PharmacistDashboard() {
             <p className="text-[11px] tracking-wider text-muted-foreground mb-2">
               THIS WEEK
             </p>
-            {/* TODO(db): these three are hardcoded placeholders too — see
-                note above. */}
-            <Row label="Units dispensed" value="1,248" />
-            <Row label="Stock updates" value="23" />
-            <Row label="Low stock alerts" value="4" />
+            <Row
+              label="Units dispensed"
+              value={dispensedWeek.toLocaleString()}
+            />
+            <Row label="Medications tracked" value={String(forecasts.length)} />
+            <Row label="Low stock alerts" value={String(lowOut)} />
           </div>
         </div>
       </div>

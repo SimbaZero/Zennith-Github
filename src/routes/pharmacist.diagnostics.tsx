@@ -4,9 +4,12 @@ import { AppShell } from "@/components/AppShell";
 import {
   usePatientDirectory,
   getPrescriptionForPatient,
+  dispenseFromPharmacy,
+  useInventory,
   type PatientDirectoryEntry,
 } from "@/lib/pharmacist-service";
 import { useCurrentPharmacist } from "@/lib/pharmacist-service";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 import { logAction } from "@/lib/audit";
 import {
   HANDOVER_AUDIT_ACTION,
@@ -33,7 +36,6 @@ function PrescriptionLookup() {
   const [selected, setSelected] = useState<PatientDirectoryEntry | null>(null);
   const [prescription, setPrescription] = useState<string | null>(null);
   const [prescriptionLoading, setPrescriptionLoading] = useState(false);
-  const [confirming, setConfirming] = useState(false);
   const [handedOver, setHandedOver] = useState(false);
 
   const query = q.trim().toLowerCase();
@@ -188,39 +190,14 @@ function PrescriptionLookup() {
                   </p>
                 ) : handedOver ? (
                   <p className="text-sm text-green-800 mt-3">
-                    Hand-over confirmed for {selected.patientId}.
+                    Dispensed to {selected.patientId}. Pharmacy stock updated.
                   </p>
                 ) : (
-                  <button
-                    onClick={async () => {
-                      if (!prescription) return;
-                      setConfirming(true);
-                      try {
-                        const actor = pharmacist?.fullName || "pharmacist";
-                        logAction({
-                          clinicId: pharmacist?.clinicId ?? null,
-                          actor_id: actor,
-                          action_type: HANDOVER_AUDIT_ACTION,
-                          description: handoverLogText(
-                            selected.patientId,
-                            prescription,
-                            actor,
-                          ),
-                        });
-                        setHandedOver(true);
-                        toast.success(
-                          `Hand-over recorded for ${selected.patientId}`,
-                        );
-                      } finally {
-                        setConfirming(false);
-                      }
-                    }}
-                    disabled={confirming || !prescription}
-                    className="mt-3 w-full inline-flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white text-sm py-2 rounded-md hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
-                  >
-                    <PackageCheck size={15} />
-                    {confirming ? "Confirming…" : "Confirm hand-over"}
-                  </button>
+                  <DispensePanel
+                    patient={selected}
+                    prescription={prescription}
+                    onDone={() => setHandedOver(true)}
+                  />
                 )}
               </div>
             </div>
@@ -228,5 +205,161 @@ function PrescriptionLookup() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+// Loosened so "Metformin 850mg" on a prescription still finds "Metformin" in
+// stock: lower-case, dose removed, letters only.
+function looseName(n: string): string {
+  return n
+    .toLowerCase()
+    .replace(/\d+\s*(mg|ml|g|mcg|iu)\b/g, "")
+    .replace(/[^a-z]/g, "");
+}
+
+function DispensePanel({
+  patient,
+  prescription,
+  onDone,
+}: {
+  patient: PatientDirectoryEntry;
+  prescription: string | null;
+  onDone: () => void;
+}) {
+  const { pharmacist } = useCurrentPharmacist();
+  const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
+  const { stock } = useInventory();
+  const clinicId = realClinic.activeClinicId ?? pharmacist?.clinicId;
+
+  const [docId, setDocId] = useState("");
+  const [qty, setQty] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Stock lines that match the prescription. The pharmacist picks one when
+  // there is more than one, so nothing is deducted from a line by guesswork.
+  const matches = useMemo(() => {
+    const want = looseName(prescription ?? "");
+    if (!want) return [];
+    return stock.filter((s) => {
+      if (!s.docId) return false;
+      const have = looseName(s.name);
+      return have && (have.includes(want) || want.includes(have));
+    });
+  }, [stock, prescription]);
+
+  const chosen =
+    matches.find((m) => m.docId === docId) ??
+    (matches.length === 1 ? matches[0] : undefined);
+  const n = Number(qty);
+  const valid =
+    !!chosen &&
+    Number.isInteger(n) &&
+    n > 0 &&
+    n <= chosen.units &&
+    clinicId != null &&
+    !!pharmacist?.pharmacistId;
+
+  if (!prescription) return null;
+  if (matches.length === 0) {
+    return (
+      <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-3">
+        "{prescription}" isn't in the pharmacy's stock list, so it can't be
+        dispensed here.
+      </p>
+    );
+  }
+
+  const confirm = async () => {
+    if (!chosen?.docId || clinicId == null || !pharmacist?.pharmacistId) return;
+    setBusy(true);
+    try {
+      const actor = pharmacist.fullName || "pharmacist";
+      const res = await dispenseFromPharmacy({
+        inventoryDocId: chosen.docId,
+        patientId: patient.patientId,
+        clinicId,
+        unitsGiven: n,
+        pharmacistId: pharmacist.pharmacistId,
+        pharmacistName: actor,
+        medicalRecordNo: patient.medicalRecordNo,
+      });
+      logAction({
+        clinicId,
+        actor_id: actor,
+        action_type: HANDOVER_AUDIT_ACTION,
+        description: `${handoverLogText(patient.patientId, res.medName, actor)} Quantity: ${n}.`,
+      });
+      toast.success(
+        `${n} × ${res.medName} dispensed to ${patient.patientId} — ${res.remaining} left in pharmacy`,
+      );
+      onDone();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not dispense. Nothing was changed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 space-y-3">
+      {matches.length > 1 && (
+        <div>
+          <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+            TAKE FROM
+          </label>
+          <select
+            value={chosen?.docId ?? ""}
+            onChange={(e) => setDocId(e.target.value)}
+            className="w-full border rounded-md px-3 py-2 text-sm bg-white"
+          >
+            <option value="" disabled>
+              Choose the stock line…
+            </option>
+            {matches.map((m) => (
+              <option key={m.docId} value={m.docId}>
+                {m.name} ({m.units} in pharmacy)
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div>
+        <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+          QUANTITY TO DISPENSE
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={chosen?.units}
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          placeholder="e.g. 30"
+          className={`w-full border rounded-md px-3 py-2 text-sm ${
+            chosen && n > chosen.units ? "border-red-400 bg-red-50" : ""
+          }`}
+        />
+        {chosen && (
+          <p
+            className={`text-xs mt-1 ${
+              n > chosen.units ? "text-red-600" : "text-muted-foreground"
+            }`}
+          >
+            {n > chosen.units
+              ? `Only ${chosen.units} in the pharmacy.`
+              : `${chosen.units} in the pharmacy now.`}
+          </p>
+        )}
+      </div>
+      <button
+        onClick={confirm}
+        disabled={busy || !valid}
+        className="w-full inline-flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white text-sm py-2 rounded-md hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
+      >
+        <PackageCheck size={15} />
+        {busy ? "Dispensing…" : "Confirm dispensing"}
+      </button>
+    </div>
   );
 }

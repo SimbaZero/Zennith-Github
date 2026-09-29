@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   removeUser,
   useCurrentAdmin,
@@ -61,19 +62,24 @@ function Staff() {
   );
   const [editing, setEditing] = useState<ClinicStaffMember | null>(null);
 
+  const [toRemove, setToRemove] = useState<ClinicStaffMember | null>(null);
+
   const remove = useMutation({
     mutationFn: (username: string) => removeUser(username),
     onSuccess: (_, u) => {
       toast.success(`Login "${u}" removed`);
+      setToRemove(null);
       queryClient.invalidateQueries({ queryKey: ["clinic-staff"] });
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
     // removeUser refuses offline — show its message, which says nothing was
     // changed, rather than a generic line the admin can't act on.
-    onError: (err) =>
+    onError: (err) => {
+      setToRemove(null);
       toast.error(
         err instanceof Error ? err.message : "Could not remove account",
-      ),
+      );
+    },
   });
 
   const filtered = useMemo(
@@ -269,16 +275,7 @@ function Staff() {
                     )}
                     {s.hasLogin && s.username && (
                       <button
-                        onClick={() => {
-                          const ok = window.confirm(
-                            `Remove ${s.fullName}'s login (${s.username})?\n\n` +
-                              `This deletes their login and their ${s.role} record. ` +
-                              `Past activity they recorded stays, but their name ` +
-                              `will no longer resolve against it.\n\n` +
-                              `This cannot be undone from here.`,
-                          );
-                          if (ok) remove.mutate(s.username!);
-                        }}
+                        onClick={() => setToRemove(s)}
                         className="text-destructive hover:bg-destructive/10 p-1.5 rounded"
                         aria-label="Remove login"
                       >
@@ -304,6 +301,21 @@ function Staff() {
           </table>
         </div>
       </div>
+      <ConfirmDialog
+        open={toRemove !== null}
+        destructive
+        busy={remove.isPending}
+        title={`Remove ${toRemove?.fullName ?? "this person"}'s login?`}
+        description={
+          `This deletes their login (${toRemove?.username ?? ""}) and their ${toRemove?.role ?? "staff"} record.\n\n` +
+          `Past activity they recorded stays, but their name will no longer resolve against it. This cannot be undone from here.`
+        }
+        confirmLabel="Remove login"
+        onCancel={() => setToRemove(null)}
+        onConfirm={() => {
+          if (toRemove?.username) remove.mutate(toRemove.username);
+        }}
+      />
     </AppShell>
   );
 }

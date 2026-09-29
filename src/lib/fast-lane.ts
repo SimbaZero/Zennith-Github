@@ -27,7 +27,7 @@ export function handoverLogText(
   med: string,
   by: string,
 ): string {
-  return `Dispensed "${med}" to ${patientId} (Fast Lane) — confirmed by ${by}.`;
+  return `Dispensed "${med}" to ${patientId} (Fast Lane) — dispensing confirmed by ${by}.`;
 }
 
 /**

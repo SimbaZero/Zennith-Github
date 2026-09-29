@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AuthBackground } from "@/components/AuthBackground";
+import { ClinicSearchSelect } from "@/components/ClinicSearchSelect";
 import { Field, FieldError, PasswordChecklist } from "@/components/FormField";
 import { focusFirstError, inputClass } from "@/lib/form-ui";
 import {
@@ -273,23 +274,15 @@ function Signup() {
             >
               Nearest clinic
             </label>
-            <select
+            <ClinicSearchSelect
               id={`${FIELD_PREFIX}-clinicId`}
+              clinics={clinics}
               value={form.clinicId}
-              onChange={(e) => set("clinicId", e.target.value)}
-              disabled={clinicsLoading}
-              aria-invalid={errors.clinicId ? true : undefined}
-              className={inputClass(!!errors.clinicId, "bg-white")}
-            >
-              <option value="" disabled>
-                {clinicsLoading ? "Loading clinics..." : "Select a clinic"}
-              </option>
-              {clinics.map((c) => (
-                <option key={c.clinicId} value={c.clinicId}>
-                  {c.clinicName}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => set("clinicId", v)}
+              loading={clinicsLoading}
+              invalid={!!errors.clinicId}
+              errorId={`${FIELD_PREFIX}-clinicId-error`}
+            />
             <FieldError
               id={`${FIELD_PREFIX}-clinicId-error`}
               message={errors.clinicId}

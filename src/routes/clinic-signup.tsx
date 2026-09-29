@@ -278,17 +278,11 @@ function ClinicSignup() {
                     Billing begins after the trial.
                   </span>
                 </label>
-                <div className="mt-3">
-                  <Field
-                    id={`${FIELD_PREFIX}-billingEmail`}
-                    label="Send invoices to (optional)"
-                    type="email"
-                    value={form.billingEmail}
-                    onChange={(v) => set("billingEmail", v)}
-                    placeholder={form.contactEmail || "Defaults to your email"}
-                    error={errors.billingEmail}
-                  />
-                </div>
+                {/* "Send invoices to" is hidden until billing exists — no
+                    invoices are sent yet, so asking for an address implied a
+                    feature that isn't there. The billingEmail field and its
+                    validation are untouched, so restoring this is putting the
+                    Field back here. */}
               </div>
             ) : (
               <div>

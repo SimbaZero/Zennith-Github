@@ -129,6 +129,8 @@ function Deliveries() {
         </span>
       </div>
 
+      <PharmacyStockTiles stock={available} />
+
       {/* Pharmacy's own restocking — moved here from the Distribution page,
           which is being retired. This is the pharmacy receiving from its
           wholesaler, which is a different thing from sending to a clinic. */}
@@ -186,7 +188,7 @@ function Deliveries() {
                     >
                       {available.map((s) => (
                         <option key={s.docId} value={s.docId}>
-                          {s.name} ({s.units} on hand)
+                          {s.name} ({s.units} in pharmacy)
                         </option>
                       ))}
                     </select>
@@ -194,7 +196,8 @@ function Deliveries() {
                       <input
                         type="number"
                         min={1}
-                        value={line.quantity}
+                        value={line.quantity === 0 ? "" : line.quantity}
+                        placeholder="Qty"
                         onChange={(e) => {
                           const next = [...lines];
                           next[i] = {
@@ -482,7 +485,7 @@ function SupplierIntake({
             >
               {stock.map((s, i) => (
                 <option key={s.docId ?? s.name} value={i}>
-                  {s.name} ({s.units} on hand)
+                  {s.name} ({s.units} in pharmacy)
                 </option>
               ))}
             </select>
@@ -519,6 +522,92 @@ function SupplierIntake({
             {saving ? "Saving…" : "Add"}
           </button>
         </form>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "What the pharmacy has right now" — a quick colored overview sitting above
+// the send / receive forms, so the pharmacist sees what is on the shelf before
+// deciding what to send. These are the SAME stock lines the forms below use, so
+// the numbers can't disagree with them. Colour follows each line's own
+// reorder level:
+//   red    = out of stock            -> order from your supplier now
+//   amber  = at or below reorder level -> order from your supplier soon
+//   green  = fine
+// A clinic's own stock is a separate thing (see Stock Levels).
+// ---------------------------------------------------------------------------
+function PharmacyStockTiles({
+  stock,
+}: {
+  stock: ReturnType<typeof useInventory>["stock"];
+}) {
+  const tone = (units: number, threshold: number) =>
+    units <= 0
+      ? {
+          box: "bg-red-50 border-red-200",
+          num: "text-red-700",
+          tag: "Out of stock — order now",
+          rank: 0,
+        }
+      : threshold > 0 && units <= threshold
+        ? {
+            box: "bg-amber-50 border-amber-200",
+            num: "text-amber-700",
+            tag: "Low — order from supplier",
+            rank: 1,
+          }
+        : {
+            box: "bg-emerald-50 border-emerald-200",
+            num: "text-emerald-700",
+            tag: "OK",
+            rank: 2,
+          };
+
+  const tiles = stock
+    .map((s) => ({ s, t: tone(s.units, s.threshold) }))
+    .sort((a, b) => a.t.rank - b.t.rank || a.s.name.localeCompare(b.s.name));
+  const needOrder = tiles.filter((x) => x.t.rank < 2).length;
+
+  return (
+    <div className="bg-white rounded-xl border p-5 mb-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+        <div>
+          <h3 className="font-semibold">In your pharmacy right now</h3>
+          <p className="text-xs text-muted-foreground">
+            What you can dispense or send. Red and amber need ordering from
+            your supplier.
+          </p>
+        </div>
+        <span className="text-xs text-muted-foreground">
+          {needOrder === 0
+            ? "Nothing to order"
+            : `${needOrder} to order from supplier`}
+        </span>
+      </div>
+      {tiles.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Loading stock…</p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-72 overflow-y-auto pr-1">
+          {tiles.map(({ s, t }) => (
+            <div
+              key={s.docId ?? s.name}
+              className={`rounded-lg border p-3 ${t.box}`}
+            >
+              <p className="text-xs font-medium leading-tight truncate">
+                {s.name}
+              </p>
+              <p className={`text-2xl font-bold mt-1 ${t.num}`}>
+                {s.units.toLocaleString()}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                {t.tag}
+                {s.clinicId != null ? ` · clinic ${s.clinicId} line` : ""}
+              </p>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

@@ -11,6 +11,7 @@ import {
   addDoc,
   orderBy,
   limit,
+  serverTimestamp,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
@@ -22,7 +23,7 @@ import {
   userIdForStaff,
 } from "@/lib/notify";
 import { logAction } from "@/lib/audit";
-import { assertOnline } from "@/lib/offline";
+import { assertOnline, runTransactionOnline } from "@/lib/offline";
 
 // Shape the existing UI already expects (see pharmacist.index.tsx, pharmacist.stock.tsx).
 // Real Firestore `inventory` docs use different field names (medName, quantity) —
@@ -82,7 +83,9 @@ export function useInventory(): {
   loading: boolean;
   usingFallback: boolean;
 } {
-  const [stock, setStock] = useState<StockItem[]>(mockStock);
+  // Starts EMPTY, not with mockStock: the demo numbers flashed on screen for
+  // a moment before the real inventory arrived.
+  const [stock, setStock] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [usingFallback, setUsingFallback] = useState(false);
 
@@ -1083,7 +1086,7 @@ export function useClinicForecasts(clinicId: number | undefined): {
   const clinicStock = useMemo(
     () =>
       clinicId == null
-        ? stock
+        ? [] // clinic not resolved yet — show nothing rather than every clinic's stock
         : stock.filter((s) => s.clinicId == null || s.clinicId === clinicId),
     [stock, clinicId],
   );
@@ -1347,4 +1350,85 @@ export async function findMedicationAtOtherClinics(
           r.medName.toLowerCase().includes(term)),
     )
     .sort((a, b) => b.quantity - a.quantity);
+}
+
+// ---------------------------------------------------------------------------
+// Pharmacist dispensing (Fast Lane patients collecting straight from the
+// pharmacy). Mirrors the nurse's dispenseMedication: ONE transaction checks
+// the stock, deducts it and writes the dispensing record, so two people can't
+// both hand out the last box, and a failure part-way can't leave stock reduced
+// with nothing recorded. The record lands in `patientDispensing`, so it also
+// feeds the usage forecasts and the patient's "last collected" status.
+// ---------------------------------------------------------------------------
+export async function dispenseFromPharmacy(input: {
+  inventoryDocId: string;
+  patientId: string;
+  clinicId: number;
+  unitsGiven: number;
+  pharmacistId: string;
+  pharmacistName: string;
+  medicalRecordNo?: number;
+}): Promise<{ medName: string; remaining: number }> {
+  assertOnline();
+  if (!Number.isInteger(input.unitsGiven) || input.unitsGiven <= 0)
+    throw new Error("Enter a whole number of units greater than 0.");
+
+  const invRef = doc(db, "inventory", input.inventoryDocId);
+  const patientSnap = await getDoc(doc(db, "patients", input.patientId));
+  const patientUserId = patientSnap.exists()
+    ? Number(patientSnap.data().userId)
+    : null;
+
+  return runTransactionOnline(db, async (tx) => {
+    const snap = await tx.get(invRef);
+    if (!snap.exists()) throw new Error("Medication not found in inventory.");
+    const data = snap.data();
+    const current = toNumber(data.quantity);
+    if (current < input.unitsGiven) {
+      throw new Error(
+        `Not enough stock — only ${current} unit${current === 1 ? "" : "s"} left.`,
+      );
+    }
+    const medName = String(data.medName ?? "medication");
+
+    tx.update(invRef, {
+      quantity: current - input.unitsGiven,
+      lastUpdated: new Date().toISOString(),
+    });
+    tx.set(doc(collection(db, "patientDispensing")), {
+      dispenseId: Date.now(), // TODO(db): placeholder, same convention as the nurse dispense
+      patientId: input.patientId,
+      clinicId: input.clinicId,
+      medName,
+      inventId: data.inventId ?? null,
+      unitsGiven: input.unitsGiven,
+      nurseId: null,
+      pharmacistId: input.pharmacistId,
+      dispensedBy: input.pharmacistName,
+      source: "pharmacist_fast_lane",
+      note: null,
+      createdAt: serverTimestamp(),
+    });
+
+    if (input.medicalRecordNo != null) {
+      const lastVisit = new Date().toISOString().slice(0, 10);
+      tx.set(
+        doc(db, "medicalRecords", String(input.medicalRecordNo)),
+        { lastVisit },
+        { merge: true },
+      );
+      tx.set(doc(db, "patients", input.patientId), { lastVisit }, { merge: true });
+    }
+    if (patientUserId != null && !Number.isNaN(patientUserId)) {
+      tx.set(doc(collection(db, "notifications")), {
+        notifId: Date.now(),
+        userId: patientUserId,
+        title: "Medication dispensed",
+        message: `You were given ${input.unitsGiven}× ${medName}.`,
+        isRead: false,
+        timeSent: new Date().toISOString(),
+      });
+    }
+    return { medName, remaining: current - input.unitsGiven };
+  });
 }

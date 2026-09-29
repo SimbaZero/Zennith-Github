@@ -1,12 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   listClinics,
   deleteClinicIfEmpty,
   type ClinicRecord,
 } from "@/lib/clinic-data";
-import { getUsers } from "@/lib/auth";
+import { getUsers, removeUser } from "@/lib/auth";
 import { assignClinicAdmin } from "@/lib/super-admin-service";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -56,6 +57,18 @@ function SuperFacilities() {
       )
     : active;
 
+  // Deleting anything here is a two-step, deliberate act: click the bin, then
+  // confirm in a dialog. Removing a whole clinic also makes you type its name.
+  const [clinicToRemove, setClinicToRemove] = useState<ClinicRecord | null>(
+    null,
+  );
+  const [typedName, setTypedName] = useState("");
+  const [adminToRemove, setAdminToRemove] = useState<{
+    username: string;
+    label: string;
+    clinicName: string;
+  } | null>(null);
+
   const remove = useMutation({
     mutationFn: (clinicId: number) => deleteClinicIfEmpty(clinicId),
     onSuccess: (res) => {
@@ -64,9 +77,29 @@ function SuperFacilities() {
         return;
       }
       toast.success("Clinic removed");
+      setClinicToRemove(null);
+      setTypedName("");
       queryClient.invalidateQueries({ queryKey: ["clinics"] });
     },
-    onError: () => toast.error("Could not remove clinic"),
+    onError: (err) =>
+      toast.error(
+        err instanceof Error ? err.message : "Could not remove clinic",
+      ),
+  });
+
+  const removeAdmin = useMutation({
+    mutationFn: (username: string) => removeUser(username),
+    onSuccess: () => {
+      toast.success("Admin removed");
+      setAdminToRemove(null);
+      queryClient.invalidateQueries({ queryKey: ["profiles"] });
+    },
+    onError: (err) => {
+      setAdminToRemove(null);
+      toast.error(
+        err instanceof Error ? err.message : "Could not remove admin",
+      );
+    },
   });
 
   return (
@@ -127,10 +160,31 @@ function SuperFacilities() {
                 <tr key={c.clinicId} className="border-b last:border-0">
                   <td className="px-5 py-3 font-medium">
                     {c.clinicName}
-                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                      {admins.length > 0
-                        ? `Admin: ${admins.map((a) => a.fullName ?? a.username).join(", ")}`
-                        : "No admin assigned"}
+                    <div className="text-[11px] text-muted-foreground mt-1 space-y-0.5">
+                      {admins.length === 0 && <div>No admin assigned</div>}
+                      {admins.map((a) => (
+                        <div
+                          key={a.username}
+                          className="flex items-center gap-1.5"
+                        >
+                          <span>Admin: {a.fullName ?? a.username}</span>
+                          {!a.builtin && (
+                          <button
+                            onClick={() =>
+                              setAdminToRemove({
+                                username: a.username,
+                                label: a.fullName ?? a.username,
+                                clinicName: c.clinicName,
+                              })
+                            }
+                            className="text-destructive hover:bg-destructive/10 p-0.5 rounded"
+                            aria-label={`Remove admin ${a.fullName ?? a.username}`}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </td>
                   <td className="px-5 py-3 capitalize">{c.type}</td>
@@ -145,7 +199,10 @@ function SuperFacilities() {
                       <ShieldCheck size={12} /> Assign Admin
                     </button>
                     <button
-                      onClick={() => remove.mutate(c.clinicId)}
+                      onClick={() => {
+                        setTypedName("");
+                        setClinicToRemove(c);
+                      }}
                       disabled={remove.isPending}
                       className="text-destructive hover:bg-destructive/10 p-1.5 rounded inline-flex disabled:opacity-40"
                       aria-label="Remove"
@@ -171,6 +228,53 @@ function SuperFacilities() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmDialog
+        open={adminToRemove !== null}
+        destructive
+        busy={removeAdmin.isPending}
+        title={`Remove admin ${adminToRemove?.label ?? ""}?`}
+        description={
+          `This removes ${adminToRemove?.label ?? "this admin"}'s login for ${adminToRemove?.clinicName ?? "the clinic"}. ` +
+          `The clinic and its data stay. You can assign a new admin afterwards.`
+        }
+        confirmLabel="Remove admin"
+        onCancel={() => setAdminToRemove(null)}
+        onConfirm={() => {
+          if (adminToRemove) removeAdmin.mutate(adminToRemove.username);
+        }}
+      />
+
+      <ConfirmDialog
+        open={clinicToRemove !== null}
+        destructive
+        busy={remove.isPending}
+        confirmDisabled={
+          typedName.trim().toLowerCase() !==
+          (clinicToRemove?.clinicName ?? "").trim().toLowerCase()
+        }
+        title={`Remove ${clinicToRemove?.clinicName ?? "this clinic"}?`}
+        description={
+          "This deletes the clinic. It only works if no staff are still assigned to it. " +
+          "To confirm, type the clinic's name below."
+        }
+        confirmLabel="Remove clinic"
+        onCancel={() => {
+          setClinicToRemove(null);
+          setTypedName("");
+        }}
+        onConfirm={() => {
+          if (clinicToRemove) remove.mutate(clinicToRemove.clinicId);
+        }}
+      >
+        <input
+          value={typedName}
+          onChange={(e) => setTypedName(e.target.value)}
+          placeholder={clinicToRemove?.clinicName ?? ""}
+          className="w-full border rounded-md px-3 py-2 text-sm"
+          aria-label="Type the clinic name to confirm"
+        />
+      </ConfirmDialog>
 
       {assign.open && assign.clinic && (
         <AssignAdmin

@@ -75,6 +75,15 @@ service cloud.firestore {
       allow read: if isStaff() || isSuperAdmin()
                   || (role() == "patient" && patientId == myPatientId());
       allow write: if isStaff() || isSuperAdmin();
+
+      // A patient may record THEIR OWN dose ("I took it"), and only as a
+      // self-report. They can't write source "nurse", can't touch another
+      // patient's log, and can't overwrite a dose a nurse witnessed.
+      allow create: if role() == "patient" && patientId == myPatientId()
+                    && request.resource.data.source == "patient";
+      allow update: if role() == "patient" && patientId == myPatientId()
+                    && request.resource.data.source == "patient"
+                    && resource.data.get("source", "nurse") == "patient";
     }
 
     // Any other patient subcollection added later: staff-only by default,
