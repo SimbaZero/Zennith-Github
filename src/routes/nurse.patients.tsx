@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import {
-  usePatientDirectory,
+  usePatientFiles,
   useFindPatientById,
   useCurrentNurse,
   fetchAdherenceForToday,
@@ -144,36 +144,31 @@ export function PatientFilesTable({
 }) {
   const [q, setQ] = useState("");
 
-  // was useQuery(fetchPatientPage) — now a live hook, updates automatically
-  // Firestore has no real "contains" text search — this loads the whole
-  // clinic roster so name search actually covers everyone, not just an
-  // arbitrary first-30 cutoff. Fine at real-clinic scale (~30-35 patients
-  // seen so far); would need real search infrastructure (not just a bigger
-  // number here) if a clinic ever grows into the hundreds/thousands.
-  const {
-    patients: page,
-    loading: pageLoading,
-    error: pageError,
-  } = usePatientDirectory(500, clinicId);
-
   const idQuery = /^pat-\d+$/i.test(q.trim())
     ? `Pat-${q.trim().match(/\d+/)![0]}`
     : null;
+
+  // Shows 20 patients at a time; typing 2+ characters searches the whole
+  // clinic roster server-side (no more 500-patient ceiling). An exact
+  // Pat-### ID skips the name search and does a direct lookup instead.
+  const {
+    patients: page,
+    loading: pageLoading,
+    loadingMore,
+    error: pageError,
+    hasMore,
+    loadMore,
+    isSearching,
+  } = usePatientFiles(idQuery ? "" : q, clinicId);
   const { patient: found, loading: findLoading } = useFindPatientById(
     idQuery,
     clinicId,
   );
 
   const loading = idQuery ? findLoading : pageLoading;
-  const filtered = idQuery
-    ? found
-      ? [found]
-      : []
-    : page.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q.toLowerCase()) ||
-          p.patientId.toLowerCase().includes(q.toLowerCase()),
-      );
+  // Name search now happens server-side inside usePatientFiles, so `page`
+  // is already the (paged) result — no client-side filtering needed.
+  const filtered = idQuery ? (found ? [found] : []) : page;
 
   return (
     <div className="bg-white rounded-xl border overflow-hidden">
@@ -187,7 +182,11 @@ export function PatientFilesTable({
               ? `Could not load patients: ${pageError}`
               : pageLoading
                 ? "Loading patients…"
-                : `${page.length} patients at this clinic — search by name or exact Patient ID`}
+                : idQuery
+                  ? "Looking up Patient ID"
+                  : isSearching
+                    ? `${page.length}${hasMore ? "+" : ""} match${page.length === 1 && !hasMore ? "" : "es"} — searching by name (start of first name or surname)`
+                    : `Showing ${page.length}${hasMore ? "+" : ""} patients — search by name or exact Patient ID`}
           </p>
         </div>
         <input
@@ -248,13 +247,26 @@ export function PatientFilesTable({
                 >
                   {idQuery
                     ? `No patient with ID "${idQuery}".`
-                    : "No matching patients in the loaded page — try an exact Pat-### ID."}
+                    : isSearching
+                      ? "No patients found. Search matches the start of a first name or surname — or try an exact Pat-### ID."
+                      : "No patients at this clinic yet."}
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+      {!idQuery && (hasMore || loadingMore) && (
+        <div className="border-t p-3 text-center">
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="border px-4 py-1.5 rounded-md text-sm hover:bg-secondary disabled:opacity-50"
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

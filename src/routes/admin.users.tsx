@@ -8,6 +8,7 @@ import {
   type StaffRole,
 } from "@/lib/auth";
 import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   DOCUMENT_CHECK_NOTE,
@@ -38,19 +39,19 @@ const ROLE_FIELDS: Record<StaffRole, FieldDef[]> = {
   doctor: [
     { key: "licenseNumber", label: "HPCSA registration number", placeholder: "0123456", required: true, lockedPrefix: "MP" },
     { key: "specialty", label: "Specialty", placeholder: "e.g. General Practice", required: true },
-    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 0821234567", type: "tel", required: true },
   ],
   nurse: [
     { key: "licenseNumber", label: "SANC registration number", placeholder: "0123456", required: true, lockedPrefix: "NUR" },
     { key: "ward", label: "Ward / department", placeholder: "e.g. Outpatients" },
-    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 0821234567", type: "tel", required: true },
   ],
   pharmacist: [
     { key: "licenseNumber", label: "SAPC registration number", placeholder: "e.g. PHM0123456", required: true },
-    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 0821234567", type: "tel", required: true },
   ],
   receptionist: [
-    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 082 123 4567", type: "tel" },
+    { key: "contactNumber", label: "Contact number", placeholder: "e.g. 0821234567", type: "tel", required: true },
   ],
   // Clinic admins have no council registration or role-specific fields.
   admin: [],
@@ -70,10 +71,22 @@ function withLockedPrefix(prefix: string, raw: string) {
   return upper;
 }
 
+// South African numbers are 10 digits starting with 0 (082 123 4567). The
+// second digit is 1-8: 01x-05x landlines, 06x-08x mobile and service lines.
+function cleanPhone(raw: string) {
+  let digits = raw.replace(/\D/g, "");
+  // A pasted +27 / 0027 number becomes the local 0-prefixed form.
+  if (digits.startsWith("0027")) digits = digits.slice(2);
+  if (digits.startsWith("27") && digits.length >= 11) digits = "0" + digits.slice(2);
+  return digits.slice(0, 10);
+}
+const isValidSaPhone = (v: string) => /^0[1-8]\d{8}$/.test(v);
+
 type IdType = "sa_id" | "passport";
 
 function CreateUser() {
   const { admin } = useCurrentAdmin();
+  const queryClient = useQueryClient();
 
   const [form, setForm] = useState({
     firstName: "",
@@ -95,7 +108,11 @@ function CreateUser() {
   const set = (k: keyof typeof form) => (v: any) => setForm({ ...form, [k]: v });
 
   const setExtraField = (field: FieldDef) => (v: string) => {
-    const value = field.lockedPrefix ? withLockedPrefix(field.lockedPrefix, v) : v;
+    const value = field.lockedPrefix
+      ? withLockedPrefix(field.lockedPrefix, v)
+      : field.key === "contactNumber"
+        ? cleanPhone(v)
+        : v;
     setExtra((prev) => ({ ...prev, [field.key]: value }));
   };
 
@@ -133,6 +150,10 @@ function CreateUser() {
     });
     if (missingField) {
       toast.error(`${missingField.label} is required`);
+      return;
+    }
+    if (fields.some((f) => f.key === "contactNumber") && !isValidSaPhone(extra.contactNumber ?? "")) {
+      toast.error("Enter a valid South African phone number: 10 digits, starting with 0 (e.g. 0821234567)");
       return;
     }
 
@@ -197,6 +218,8 @@ function CreateUser() {
         toast.error(res.error || "Could not create user");
         return;
       }
+      // Refresh the dashboard tally and the All Staff list.
+      queryClient.invalidateQueries({ queryKey: ["clinic-staff"] });
       if (res.emailFailed) {
         toast.warning(
           `${fullName} was created, but the set-password email could not be sent. Ask them to use "Forgot password" on the sign-in page with ${form.email}.`,
@@ -391,6 +414,7 @@ function CreateUser() {
                     </label>
                     <input
                       type={f.type ?? "text"}
+                      inputMode={f.type === "tel" ? "numeric" : undefined}
                       value={extra[f.key] ?? (f.lockedPrefix ?? "")}
                       onChange={(e) => setExtraField(f)(e.target.value)}
                       onKeyDown={(e) => {

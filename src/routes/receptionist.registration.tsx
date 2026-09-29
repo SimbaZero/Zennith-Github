@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
-import { registerPatient, resolveCurrentReceptionist } from "@/lib/clinic-data";
+import {
+  peekNextPatientId,
+  registerPatient,
+  resolveCurrentReceptionist,
+} from "@/lib/clinic-data";
 import {
   DOCUMENT_CHECK_NOTE,
   ID_TYPE_LABELS,
@@ -29,7 +33,6 @@ const ID_TYPE_OPTIONS: Record<IdType | "none", string> = {
 };
 
 const initial = {
-  patientNo: "",
   patientName: "",
   district: "City of Johannesburg",
   town: "",
@@ -68,7 +71,14 @@ const initial = {
 };
 
 function Registration() {
+  const queryClient = useQueryClient();
   const [f, setF] = useState(initial);
+  // The patient number is assigned by the system, never typed in. Shown here
+  // so reception can quote it, but it can't be edited.
+  const { data: nextPatientId } = useQuery({
+    queryKey: ["next-patient-id"],
+    queryFn: peekNextPatientId,
+  });
   const set =
     <K extends keyof typeof initial>(k: K) =>
     (v: (typeof initial)[K]) =>
@@ -162,6 +172,7 @@ function Registration() {
         `${f.patientName} registered successfully — Patient ID ${patientId}`,
       );
       setF(initial);
+      queryClient.invalidateQueries({ queryKey: ["next-patient-id"] });
     },
     // registerPatient refuses offline (it allocates shared IDs in a
     // transaction). Its message explains that and says nothing was saved —
@@ -234,10 +245,10 @@ function Registration() {
         <Section id="file-id" title="FILE IDENTIFICATION">
           <Grid cols={2}>
             <Field
-              label="PATIENT NO / OLD FILE NO"
-              value={f.patientNo}
-              onChange={set("patientNo")}
-              placeholder="e.g. P-0492"
+              label="PATIENT NO"
+              value={nextPatientId ?? "Loading…"}
+              onChange={() => {}}
+              disabled
             />
             <Field
               label="PATIENT NAME *"

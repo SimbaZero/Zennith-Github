@@ -656,6 +656,218 @@ export function useFindPatientById(
 
   return { patient, loading };
 }
+
+// ---------------------------------------------------------------------------
+// Paged patient files + server-side name search.
+//
+// Replaces usePatientDirectory(500, clinicId) on the Patient Files pages.
+// That hook live-loaded (and enriched, i.e. 1-2 extra reads per patient) the
+// first 500 patients and the page filtered them in the browser — so anyone
+// past #500 could not be found by name, only by exact Pat-### ID.
+//
+// Now:
+//  - Browsing shows PATIENT_PAGE_SIZE rows at a time, with "Load more".
+//    Still a live listener; loading more just raises the query limit.
+//  - Searching (2+ characters) queries Firestore for users whose first name
+//    or surname STARTS WITH the typed text, maps them to this clinic's
+//    patients, and shows the matches PATIENT_PAGE_SIZE at a time. It covers
+//    every patient, not just the first 500.
+// Firestore has no "contains" query, so search is prefix-based (case variants
+// are tried, since Firestore range queries are case-sensitive).
+// ---------------------------------------------------------------------------
+
+export const PATIENT_PAGE_SIZE = 20;
+const SEARCH_MIN_CHARS = 2;
+const SEARCH_USER_CAP = 150; // max matching users looked up per search
+const SEARCH_RESULT_CAP = 100; // max patients kept per search
+
+function nameVariants(term: string): string[] {
+  const cap = term.charAt(0).toUpperCase() + term.slice(1).toLowerCase();
+  return Array.from(new Set([term, term.toLowerCase(), cap, term.toUpperCase()]));
+}
+
+async function searchPatientsByName(
+  term: string,
+  clinicId?: number,
+): Promise<PatientDirectoryEntry[]> {
+  const tokens = term.toLowerCase().split(/\s+/).filter(Boolean);
+  const first = term.split(/\s+/).filter(Boolean)[0] ?? "";
+
+  // 1. Users whose first name or surname starts with the first typed word.
+  const userQueries = nameVariants(first).flatMap((v) =>
+    (["names", "surname"] as const).map((field) =>
+      getDocs(
+        query(
+          collection(db, "users"),
+          where(field, ">=", v),
+          where(field, "<=", v + "\uf8ff"),
+          limit(50),
+        ),
+      ),
+    ),
+  );
+  const settled = await Promise.allSettled(userQueries);
+  if (settled.every((s) => s.status === "rejected")) {
+    throw (settled[0] as PromiseRejectedResult).reason;
+  }
+  const userIds = new Set<string>();
+  for (const s of settled) {
+    if (s.status === "fulfilled") s.value.docs.forEach((d) => userIds.add(d.id));
+  }
+
+  // 2. Which of those users are patients at this clinic. patients.userId may
+  //    be stored as a string or a number, so match both. "in" allows 30 values.
+  const ids = Array.from(userIds).slice(0, SEARCH_USER_CAP);
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 15) chunks.push(ids.slice(i, i + 15));
+  const patientSnaps = await Promise.all(
+    chunks.map((c) => {
+      const values = c.flatMap((id) =>
+        Number.isFinite(Number(id)) ? [id, Number(id)] : [id],
+      );
+      const base = collection(db, "patients");
+      return getDocs(
+        clinicId != null
+          ? query(base, where("clinicId", "==", clinicId), where("userId", "in", values))
+          : query(base, where("userId", "in", values)),
+      );
+    }),
+  );
+
+  const seen = new Set<string>();
+  const docs = patientSnaps
+    .flatMap((s) => s.docs)
+    .filter((d) => (seen.has(d.id) ? false : (seen.add(d.id), true)));
+  const rows = await Promise.all(docs.map((d) => enrichPatient(d.id, d.data())));
+
+  // 3. Every typed word must appear in the full name ("thabo nk" works).
+  return rows
+    .filter((r) => tokens.every((t) => r.name.toLowerCase().includes(t)))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, SEARCH_RESULT_CAP);
+}
+
+export function usePatientFiles(
+  search: string,
+  clinicId?: number,
+): {
+  patients: PatientDirectoryEntry[];
+  loading: boolean;
+  loadingMore: boolean;
+  error: string | null;
+  hasMore: boolean;
+  loadMore: () => void;
+  isSearching: boolean;
+} {
+  const term = search.trim();
+  const isSearching = term.length >= SEARCH_MIN_CHARS;
+
+  // ----- browse mode (live) -----
+  const [limitCount, setLimitCount] = useState(PATIENT_PAGE_SIZE);
+  const [browseRows, setBrowseRows] = useState<PatientDirectoryEntry[]>([]);
+  const [browseHasMore, setBrowseHasMore] = useState(false);
+  const [browseLoading, setBrowseLoading] = useState(true);
+  const [browseMore, setBrowseMore] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLimitCount(PATIENT_PAGE_SIZE);
+  }, [clinicId]);
+
+  useEffect(() => {
+    if (isSearching) return; // no listener while searching — saves reads
+    let cancelled = false;
+    if (limitCount === PATIENT_PAGE_SIZE) setBrowseLoading(true);
+    else setBrowseMore(true);
+    setBrowseError(null);
+    const q =
+      clinicId != null
+        ? query(
+            collection(db, "patients"),
+            where("clinicId", "==", clinicId),
+            orderBy("userId"),
+            limit(limitCount),
+          )
+        : query(collection(db, "patients"), orderBy("userId"), limit(limitCount));
+    const unsubscribe = onSnapshot(
+      q,
+      async (snapshot) => {
+        const rows = await Promise.all(
+          snapshot.docs.map((d) => enrichPatient(d.id, d.data())),
+        );
+        if (cancelled) return;
+        setBrowseRows(rows);
+        setBrowseHasMore(snapshot.size >= limitCount);
+        setBrowseLoading(false);
+        setBrowseMore(false);
+        setBrowseError(null);
+      },
+      (err) => {
+        console.error("Failed to load patient directory:", err);
+        if (cancelled) return;
+        setBrowseError(err.message ?? "Could not load patients");
+        setBrowseLoading(false);
+        setBrowseMore(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [clinicId, limitCount, isSearching]);
+
+  // ----- search mode (one-shot, debounced) -----
+  const [results, setResults] = useState<PatientDirectoryEntry[]>([]);
+  const [visible, setVisible] = useState(PATIENT_PAGE_SIZE);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isSearching) return;
+    let cancelled = false;
+    setSearchLoading(true);
+    setSearchError(null);
+    setVisible(PATIENT_PAGE_SIZE);
+    const timer = setTimeout(() => {
+      searchPatientsByName(term, clinicId)
+        .then((rows) => {
+          if (!cancelled) setResults(rows);
+        })
+        .catch((err) => {
+          console.error("Patient search failed:", err);
+          if (!cancelled) setSearchError(err?.message ?? "Search failed");
+        })
+        .finally(() => {
+          if (!cancelled) setSearchLoading(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [term, clinicId, isSearching]);
+
+  if (isSearching) {
+    return {
+      patients: results.slice(0, visible),
+      loading: searchLoading,
+      loadingMore: false,
+      error: searchError,
+      hasMore: results.length > visible,
+      loadMore: () => setVisible((v) => v + PATIENT_PAGE_SIZE),
+      isSearching,
+    };
+  }
+  return {
+    patients: browseRows,
+    loading: browseLoading,
+    loadingMore: browseMore,
+    error: browseError,
+    hasMore: browseHasMore,
+    loadMore: () => setLimitCount((n) => n + PATIENT_PAGE_SIZE),
+    isSearching,
+  };
+}
 // ---------------------------------------------------------------------------
 // Live patient record — used by the shared PatientRecordView (nurse + doctor).
 //
