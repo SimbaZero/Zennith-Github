@@ -17,7 +17,12 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { isOffline } from "@/lib/offline";
 import { notifyClinicAdmins } from "@/lib/notify";
-import { cleanReminderTimes, type AdherenceLogEntry } from "@/lib/reminders";
+import {
+  adherenceDocId,
+  cleanReminderTimes,
+  formatTime12h,
+  type AdherenceLogEntry,
+} from "@/lib/reminders";
 import { notifyUser } from "@/lib/notify";
 
 // ---------------------------------------------------------------------------
@@ -543,38 +548,89 @@ export function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Live "was today's dose marked taken" for one medication, by anyone
- *  (patient or nurse) — used to silence a reminder once a dose is logged
- *  either way. */
-export function useTodayDoseTaken(
+/**
+ * What we know about today's dose for one medication.
+ *
+ * `loaded` is false until the database has actually answered. That matters:
+ * this used to be a plain true/false that started at "not taken", so for the
+ * first moment after every visit to the dashboard the app believed the dose
+ * hadn't been taken and flashed a reminder (and sent a notification) for a
+ * dose that was already logged — then the real answer arrived and hid it.
+ * Nothing should act on "not taken" until `loaded` is true.
+ */
+export interface DoseStatus {
+  loaded: boolean;
+  /** True when today's log exists and says at least one dose was taken. */
+  taken: boolean;
+  /** Which reminder times were marked taken today. `null` means the log has
+   *  no per-time detail — a nurse's log, or a day-level tick from before
+   *  each time was its own dose — and so covers the whole day. */
+  takenTimes: string[] | null;
+  /** Who recorded it. The patient may only undo their own claim. */
+  source: "patient" | "nurse" | null;
+  /** The lookup itself failed (e.g. the database is over its daily limit),
+   *  so "not taken" would be a guess, not a fact. */
+  failed: boolean;
+}
+
+const DOSE_UNKNOWN: DoseStatus = {
+  loaded: false,
+  taken: false,
+  takenTimes: null,
+  source: null,
+  failed: false,
+};
+
+/** Live status of today's dose, by anyone (patient or nurse) — so a dose a
+ *  nurse witnessed silences the reminder too. */
+export function useTodayDoseStatus(
   patientId: string | undefined,
   med: string | undefined,
-): boolean {
-  const [taken, setTaken] = useState(false);
+): DoseStatus {
+  const [status, setStatus] = useState<DoseStatus>(DOSE_UNKNOWN);
+  // Read every render (cheap) so a page left open past midnight moves on to
+  // the new day's log instead of watching yesterday's.
+  const today = todayIsoDate();
   useEffect(() => {
-    if (!patientId || !med?.trim()) {
-      setTaken(false);
-      return;
-    }
+    setStatus(DOSE_UNKNOWN);
+    if (!patientId || !med?.trim()) return;
     const ref = doc(
       db,
       "patients",
       patientId,
       "adherenceLogs",
-      `${todayIsoDate()}_${med.trim()}`,
+      adherenceDocId(today, med),
     );
     const unsub = onSnapshot(
       ref,
-      (snap) => setTaken(snap.exists() && snap.data().taken === true),
-      (err) => console.error("Dose status listener failed:", err),
+      (snap) => {
+        const x = snap.exists() ? snap.data() : null;
+        setStatus({
+          loaded: true,
+          failed: false,
+          taken: x?.taken === true,
+          takenTimes: Array.isArray(x?.takenTimes)
+            ? cleanReminderTimes(x.takenTimes)
+            : null,
+          source: x ? (x.source === "patient" ? "patient" : "nurse") : null,
+        });
+      },
+      (err) => {
+        console.error("Dose status listener failed:", err);
+        setStatus({
+          loaded: true,
+          failed: true,
+          taken: false,
+          takenTimes: null,
+          source: null,
+        });
+      },
     );
     return () => unsub();
-  }, [patientId, med]);
-  return taken;
+  }, [patientId, med, today]);
+  return status;
 }
 
-/** The patient marking their own dose as taken. Tagged source: "patient" so
- *  it is never mistaken for a dose a nurse witnessed. */
 /**
  * Writes a real notification for a due reminder — shown on the alerts page
  * and the notification bell, not just the in-page banner. Deliberately
@@ -595,28 +651,78 @@ export async function notifyReminderDue(
       notifId: Date.now(),
       userId,
       title: "Medication reminder",
-      message: `Time to take your ${med.trim()}.`,
+      message: `Time to take your ${med.trim()} (${formatTime12h(time)}).`,
       isRead: false,
       timeSent: new Date().toISOString(),
-      link: "/patient",
+      // The page plus the card on it. "/patient" alone did nothing when you
+      // were already on the dashboard — the bell now scrolls to this card.
+      link: "/patient#medication-reminders",
     },
     { merge: true },
   );
 }
 
+/** One reminder time's dose, for a patient who takes several a day. */
+export interface DoseSlotWrite {
+  /** The reminder time being marked, "HH:MM". */
+  time: string;
+  /** Times already marked today, so marking this one doesn't lose them. */
+  takenTimes: string[];
+  /** How many reminder times the patient has — how many doses to expect. */
+  expected: number;
+}
+
+/** The patient marking their own dose as taken. Tagged source: "patient" so
+ *  it is never mistaken for a dose a nurse witnessed. With `slot`, only that
+ *  reminder time's dose is marked; without it, the day's single dose is. */
 export async function logSelfReportedDose(
   patientId: string,
   med: string,
+  slot?: DoseSlotWrite,
 ): Promise<void> {
   const date = todayIsoDate();
   await setDoc(
-    doc(db, "patients", patientId, "adherenceLogs", `${date}_${med.trim()}`),
+    doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
     {
       med: med.trim(),
       date,
       taken: true,
       source: "patient",
       updatedAt: serverTimestamp(),
+      ...(slot
+        ? {
+            takenTimes: cleanReminderTimes([...slot.takenTimes, slot.time]),
+            expected: slot.expected,
+          }
+        : {}),
+    },
+    { merge: true },
+  );
+}
+
+/** Takes back the patient's OWN "I took it" (a mis-tap, or a demo being
+ *  repeated). With `slot`, only that reminder time's dose is taken back and
+ *  the others stay marked. A dose a nurse witnessed can't be undone here — the
+ *  security rules refuse it, and the UI doesn't offer it. */
+export async function undoSelfReportedDose(
+  patientId: string,
+  med: string,
+  slot?: DoseSlotWrite,
+): Promise<void> {
+  const date = todayIsoDate();
+  const remaining = slot
+    ? cleanReminderTimes(slot.takenTimes.filter((t) => t !== slot.time))
+    : [];
+  await setDoc(
+    doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
+    {
+      med: med.trim(),
+      date,
+      taken: slot ? remaining.length > 0 : false,
+      source: "patient",
+      updatedAt: serverTimestamp(),
+      takenTimes: remaining,
+      ...(slot ? { expected: slot.expected } : {}),
     },
     { merge: true },
   );
@@ -634,22 +740,32 @@ export async function fetchAdherenceHistory(
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
   const cutoffIso = cutoff.toISOString().slice(0, 10);
+  // ONE range filter on one field. Adding `where("med", "==", …)` as well
+  // would need a composite index that has to be created by hand in the
+  // Firebase console; without it the query throws and the clinician would see
+  // no history at all. A patient has at most a few dozen logs in 30 days, so
+  // filtering by medication here costs nothing.
   const snap = await getDocs(
     query(
       collection(db, "patients", patientId, "adherenceLogs"),
-      where("med", "==", med.trim()),
       where("date", ">=", cutoffIso),
     ),
   );
+  const wanted = med.trim();
   return snap.docs
-    .map((d) => {
-      const x = d.data();
-      return {
-        date: String(x.date ?? ""),
-        taken: x.taken === true,
-        source: x.source === "patient" ? "patient" : "nurse",
-      } as AdherenceLogEntry;
-    })
+    .map((d) => d.data())
+    .filter((x) => String(x.med ?? "").trim() === wanted)
+    .map(
+      (x) =>
+        ({
+          date: String(x.date ?? ""),
+          taken: x.taken === true,
+          source: x.source === "patient" ? "patient" : "nurse",
+          ...(typeof x.expected === "number" && Array.isArray(x.takenTimes)
+            ? { expected: x.expected, takenCount: x.takenTimes.length }
+            : {}),
+        }) as AdherenceLogEntry,
+    )
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 

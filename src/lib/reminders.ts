@@ -17,6 +17,19 @@
 
 export const MAX_REMINDER_TIMES = 4;
 
+/**
+ * The Firestore document id for one medication's dose log on one day.
+ *
+ * A "/" in a medication name (the pharmacy stocks lines like
+ * "Lamivudine/TDF/DTG") would split the id into extra path segments and send
+ * the write somewhere the security rules refuse, so it is replaced. Used by
+ * BOTH the patient's "I took it" and the nurse's dose tick, so the two always
+ * agree on which document is "today's dose".
+ */
+export function adherenceDocId(date: string, med: string): string {
+  return `${date}_${med.trim().replace(/\//g, "-")}`;
+}
+
 /** 24-hour "HH:MM", e.g. "08:00" or "21:30". */
 export function isValidTimeString(value: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
@@ -74,24 +87,105 @@ export function dueReminderTime(
   return null;
 }
 
+// ---- one dose per reminder time --------------------------------------------
+
+/** How long after its time a reminder counts as "due now". After that the
+ *  dose is "not marked" — still possible to record late, but no longer nagging. */
+export const DOSE_WINDOW_MINUTES = 30;
+
+export type SlotState = "taken" | "due" | "missed" | "upcoming";
+
+export interface DoseSlot {
+  time: string;
+  state: SlotState;
+}
+
+/**
+ * Today's doses, one per reminder time. This exists because "taken" used to
+ * be a single flag for the whole day: a patient on a morning-and-night
+ * medication who marked the morning dose had the evening reminder silenced,
+ * even though they had set two times. Each time is now its own dose.
+ *
+ * `dayCovered` is a dose a NURSE witnessed: that counts for the whole day, as
+ * it always has, because a nurse's log has no time on it.
+ */
+export function doseSlots(
+  times: string[],
+  now: Date,
+  takenTimes: string[],
+  dayCovered = false,
+): DoseSlot[] {
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return sortTimes(dedupeTimes(times.filter(isValidTimeString))).map((time) => {
+    if (dayCovered || takenTimes.includes(time)) {
+      return { time, state: "taken" as const };
+    }
+    const [h, m] = time.split(":").map(Number);
+    const at = h * 60 + m;
+    if (nowMinutes < at) return { time, state: "upcoming" as const };
+    if (nowMinutes < at + DOSE_WINDOW_MINUTES)
+      return { time, state: "due" as const };
+    return { time, state: "missed" as const };
+  });
+}
+
+/**
+ * The next reminder after `now`: a later time today if there is one,
+ * otherwise the first time tomorrow. Null when no times are set. A time
+ * that is due right now is NOT "next" — that case has its own banner.
+ */
+export function nextReminder(
+  times: string[],
+  now: Date,
+): { time: string; tomorrow: boolean } | null {
+  const valid = sortTimes(dedupeTimes(times.filter(isValidTimeString)));
+  if (valid.length === 0) return null;
+  const minutes = (t: string) => {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  };
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const later = valid.find((t) => minutes(t) > nowMinutes);
+  return later
+    ? { time: later, tomorrow: false }
+    : { time: valid[0], tomorrow: true };
+}
+
 // ---- fast-lane evidence -----------------------------------------------------
 
 export interface AdherenceLogEntry {
   date: string; // YYYY-MM-DD
   taken: boolean;
   source: "patient" | "nurse";
+  /** For a patient on several doses a day: how many were expected, and how
+   *  many the patient marked. Absent on a nurse's log and on older logs,
+   *  which are simply "the day's dose". */
+  expected?: number;
+  takenCount?: number;
 }
 
 export interface AdherenceSummary {
-  /** Doses logged as taken, out of the days that have a log at all. Days
-   *  with no log are not counted as missed — no log usually just means no
-   *  reminder time was set yet, not that a dose was skipped. */
+  /** Days that have a log at all. Days with no log are not counted as missed
+   *  — no log usually just means no reminder time was set yet, not that a
+   *  dose was skipped. */
   loggedDays: number;
+  /** Logged days on which at least one dose was marked taken. */
   takenDays: number;
-  /** 0–100, or null when there is nothing logged to judge. */
+  /** Logged days where some, but not all, of the day's doses were taken. */
+  partialDays: number;
+  /** 0–100, or null when there is nothing logged to judge. A day with two
+   *  doses where one was taken counts as half a day. */
   percentage: number | null;
   /** taken=true entries logged by the patient themself, not witnessed. */
   selfReportedDays: number;
+}
+
+/** How much of one day's dosing was taken, 0 to 1. */
+function dayCredit(d: AdherenceLogEntry): number {
+  if (d.expected != null && d.expected > 0 && d.takenCount != null) {
+    return Math.min(1, d.takenCount / d.expected);
+  }
+  return d.taken ? 1 : 0;
 }
 
 /** A plain summary for a clinician to weigh — not a verdict. Deduplicates by
@@ -103,11 +197,16 @@ export function summarizeAdherence(
   for (const e of entries) byDate.set(e.date, e);
   const days = [...byDate.values()];
   const taken = days.filter((d) => d.taken);
+  const credit = days.reduce((sum, d) => sum + dayCredit(d), 0);
   return {
     loggedDays: days.length,
     takenDays: taken.length,
+    partialDays: days.filter((d) => {
+      const c = dayCredit(d);
+      return c > 0 && c < 1;
+    }).length,
     percentage:
-      days.length === 0 ? null : Math.round((taken.length / days.length) * 100),
+      days.length === 0 ? null : Math.round((credit / days.length) * 100),
     selfReportedDays: taken.filter((d) => d.source === "patient").length,
   };
 }

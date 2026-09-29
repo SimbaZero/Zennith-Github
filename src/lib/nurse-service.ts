@@ -22,6 +22,7 @@ import {
 } from "@/lib/offline";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
+import { adherenceDocId } from "@/lib/reminders";
 
 // Reused, not duplicated — these were previously private to doctor-service.ts.
 // See doctor-service.ts for what each one actually does; the comments there
@@ -536,7 +537,7 @@ export async function setAdherence(
 ): Promise<void> {
   const date = todayIso();
   const write = setDoc(
-    doc(db, "patients", patientId, "adherenceLogs", `${date}_${med}`),
+    doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
     {
       med,
       date,

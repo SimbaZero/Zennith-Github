@@ -402,9 +402,17 @@ function CreateLoginPanel({
         toast.error(res.error ?? "Could not create login");
         return;
       }
-      toast.success(
-        `Login created for ${staff.fullName} — a set-password email was sent to ${email}`,
-      );
+      if (res.emailFailed) {
+        toast.warning(
+          `Login created for ${staff.fullName}, but the set-password email could not be sent. Ask them to use "Forgot password" on the sign-in page with ${email}.`,
+          { duration: 12000 },
+        );
+      } else {
+        toast.success(
+          `Login created for ${staff.fullName} — a set-password email was sent to ${email}. It can take a few minutes; ask them to check spam.`,
+          { duration: 9000 },
+        );
+      }
       onDone();
     } catch (err) {
       toast.error(
