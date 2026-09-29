@@ -6,26 +6,45 @@
 // stored, sent and checked without ever reaching the browser. The caller is
 // identified by a verified Firebase ID token, and the phone number comes from
 // the patient's record (users/{legacyUserId}.contactNum), never from the
-// request, so a code can only go to the number the clinic holds.
+// request.
 //
-// State lives in smsChallenges/{uid} and smsPhoneLimits/{number}, which
-// firestore.rules deny to every client; this code reaches them as the
-// service account.
+// State lives in collections firestore.rules deny to every client; this code
+// reaches them as the service account:
+//   smsChallenges/{uid}      the current code (hashed), attempt and send counters,
+//                            and verifiedPhone: the number this account has
+//                            proved it receives texts on
+//   smsPhoneLimits/{number}  sends to a number that no account has verified yet
+//   smsGlobalLimits/daily    all such unverified sends, app-wide
 import type { SendSmsCodeResult, SmsCodeFailure, VerifySmsCodeResult } from "../lib/sms-otp";
 import { isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile } from "../lib/smsportal";
+import { readEnv } from "./env";
 import { verifyIdToken } from "./firebase-auth";
-import { FirestoreConfigError, firestoreAdminFromEnv, type FirestoreAdmin, WriteConflict } from "./firestore-admin";
+import {
+  FirestoreConfigError,
+  firestoreAdminFromEnv,
+  type FirestoreAdmin,
+  type FirestoreDoc,
+  type FirestoreWrite,
+  WriteConflict,
+} from "./firestore-admin";
 
 const CODE_TTL_MS = 5 * 60_000;
 const MAX_ATTEMPTS = 5;
 const RESEND_COOLDOWN_MS = 60_000;
 const SEND_WINDOW_MS = 60 * 60_000;
 const MAX_SENDS_PER_WINDOW = 5;
-// Per phone number, across accounts: a new account can point at anyone's
-// record (see firestore.rules profiles create), so the per-account limit alone
-// wouldn't stop someone flooding one person's phone. Higher than the
-// per-account limit so a family sharing a number can still sign in.
-const MAX_SENDS_PER_PHONE_WINDOW = 10;
+// Wrong guesses across all codes: resending resets the per-code attempts, so
+// without this someone with the password could keep guessing indefinitely.
+const ATTEMPT_WINDOW_MS = 24 * 60 * 60_000;
+const MAX_ATTEMPTS_PER_ATTEMPT_WINDOW = 20;
+
+// Numbers entered at self-signup aren't verified, so until an account proves
+// it receives texts on a number, its sends also count against that number and
+// against an app-wide daily budget. Accounts that have verified their number
+// skip both, so nobody can lock a patient out by using up a shared limit.
+const MAX_UNVERIFIED_SENDS_PER_PHONE = 10;
+const DAILY_WINDOW_MS = 24 * 60 * 60_000;
+const DEFAULT_UNVERIFIED_SENDS_PER_DAY = 200;
 
 // users docs are keyed by the numeric legacy user ID.
 const USER_ID = /^\d{1,20}$/;
@@ -64,6 +83,17 @@ function adminOrNull(env: unknown): FirestoreAdmin | null {
     if (error instanceof FirestoreConfigError) return null;
     throw error;
   }
+}
+
+/** A rolling counter stored as { windowStart, sends }: the count still in the window. */
+function windowCount(doc: FirestoreDoc | null, windowMs: number, now: number) {
+  const open = now - Number(doc?.data.windowStart ?? 0) < windowMs;
+  return { windowStart: open ? Number(doc?.data.windowStart) : now, sends: open ? Number(doc?.data.sends ?? 0) : 0 };
+}
+
+/** Pin a write to the version read, or to "still doesn't exist". */
+function pinnedTo(doc: FirestoreDoc | null) {
+  return doc?.updateTime ? { updateTime: doc.updateTime } : { exists: false };
 }
 
 /**
@@ -106,58 +136,72 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
   const phoneLast4 = phone.slice(-4);
 
   const now = Date.now();
-  const existing = await fs.get("smsChallenges", patient.uid);
-  const prev = existing?.data ?? {};
+  const challenge = await fs.get("smsChallenges", patient.uid);
+  const prev = challenge?.data ?? {};
+
+  // Locked after too many wrong codes: a new code would only let guessing continue.
+  const attemptWindowOpen = now - Number(prev.attemptWindowStart ?? 0) < ATTEMPT_WINDOW_MS;
+  if (attemptWindowOpen && Number(prev.attemptsInWindow ?? 0) >= MAX_ATTEMPTS_PER_ATTEMPT_WINDOW) {
+    return { ok: false, reason: "rate-limited", retryAt: Number(prev.attemptWindowStart) + ATTEMPT_WINDOW_MS };
+  }
 
   const sentAt = Number(prev.sentAt ?? 0);
   if (now - sentAt < RESEND_COOLDOWN_MS) {
     // Still valid for someone who refreshed the page: the code already sent works.
     return { ok: false, reason: "cooldown", retryAt: sentAt + RESEND_COOLDOWN_MS, phoneLast4 };
   }
-  const windowOpen = now - Number(prev.windowStart ?? 0) < SEND_WINDOW_MS;
-  const windowStart = windowOpen ? Number(prev.windowStart) : now;
-  const sends = windowOpen ? Number(prev.sends ?? 0) : 0;
-  if (sends >= MAX_SENDS_PER_WINDOW) {
-    return { ok: false, reason: "rate-limited", retryAt: windowStart + SEND_WINDOW_MS };
+  const own = windowCount(challenge, SEND_WINDOW_MS, now);
+  if (own.sends >= MAX_SENDS_PER_WINDOW) {
+    return { ok: false, reason: "rate-limited", retryAt: own.windowStart + SEND_WINDOW_MS };
   }
 
-  // Count the send against the phone number, pinned to the state just read.
-  const phoneKey = phone.slice(1);
-  const phoneDoc = await fs.get("smsPhoneLimits", phoneKey);
-  const phoneWindowOpen = now - Number(phoneDoc?.data.windowStart ?? 0) < SEND_WINDOW_MS;
-  const phoneWindowStart = phoneWindowOpen ? Number(phoneDoc?.data.windowStart) : now;
-  const phoneSends = phoneWindowOpen ? Number(phoneDoc?.data.sends ?? 0) : 0;
-  if (phoneSends >= MAX_SENDS_PER_PHONE_WINDOW) {
-    return { ok: false, reason: "rate-limited", retryAt: phoneWindowStart + SEND_WINDOW_MS };
+  const writes: FirestoreWrite[] = [];
+  if (prev.verifiedPhone !== phone) {
+    const phoneKey = phone.slice(1);
+    const phoneDoc = await fs.get("smsPhoneLimits", phoneKey);
+    const perPhone = windowCount(phoneDoc, SEND_WINDOW_MS, now);
+    if (perPhone.sends >= MAX_UNVERIFIED_SENDS_PER_PHONE) {
+      return { ok: false, reason: "rate-limited", retryAt: perPhone.windowStart + SEND_WINDOW_MS };
+    }
+    const globalDoc = await fs.get("smsGlobalLimits", "daily");
+    const global = windowCount(globalDoc, DAILY_WINDOW_MS, now);
+    const dailyLimit = Number(readEnv(env, "SMS_OTP_UNVERIFIED_DAILY_LIMIT")) || DEFAULT_UNVERIFIED_SENDS_PER_DAY;
+    if (global.sends >= dailyLimit) {
+      console.warn(`[sms-otp] app-wide daily limit of ${dailyLimit} unverified sends reached`);
+      return { ok: false, reason: "rate-limited", retryAt: global.windowStart + DAILY_WINDOW_MS };
+    }
+    writes.push(
+      { set: ["smsPhoneLimits", phoneKey], data: { ...perPhone, sends: perPhone.sends + 1 }, precondition: pinnedTo(phoneDoc) },
+      { set: ["smsGlobalLimits", "daily"], data: { ...global, sends: global.sends + 1 }, precondition: pinnedTo(globalDoc) },
+    );
   }
 
-  // Reserve the send before calling SMSPortal. Each write is pinned to the
-  // state just read, so a burst of parallel requests produces one text
-  // message, not one per request.
+  // Reserve the send before calling SMSPortal, in one atomic write pinned to
+  // the state just read: a burst of parallel requests produces one text and
+  // leaves no counter changed by the requests that lost.
   const code = randomCode();
   const salt = randomHex(16);
+  writes.push({
+    set: ["smsChallenges", patient.uid],
+    data: {
+      codeHash: await hashCode(salt, code),
+      salt,
+      expiresAt: now + CODE_TTL_MS,
+      attempts: 0,
+      phone,
+      sentAt: now,
+      windowStart: own.windowStart,
+      sends: own.sends + 1,
+      // Carried over: these outlive any one code.
+      verifiedPhone: typeof prev.verifiedPhone === "string" ? prev.verifiedPhone : undefined,
+      attemptWindowStart: attemptWindowOpen ? Number(prev.attemptWindowStart) : undefined,
+      attemptsInWindow: attemptWindowOpen ? Number(prev.attemptsInWindow ?? 0) : undefined,
+    },
+    precondition: pinnedTo(challenge),
+  });
   let reserved: string;
   try {
-    await fs.write(
-      "smsPhoneLimits",
-      phoneKey,
-      { windowStart: phoneWindowStart, sends: phoneSends + 1 },
-      { precondition: phoneDoc?.updateTime ? { updateTime: phoneDoc.updateTime } : { exists: false } },
-    );
-    reserved = await fs.write(
-      "smsChallenges",
-      patient.uid,
-      {
-        codeHash: await hashCode(salt, code),
-        salt,
-        expiresAt: now + CODE_TTL_MS,
-        attempts: 0,
-        sentAt: now,
-        windowStart,
-        sends: sends + 1,
-      },
-      { precondition: existing?.updateTime ? { updateTime: existing.updateTime } : { exists: false } },
-    );
+    reserved = (await fs.commit(writes)).at(-1) ?? "";
   } catch (error) {
     if (error instanceof WriteConflict) return { ok: false, reason: "busy" };
     throw error;
@@ -173,7 +217,7 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
   });
   if (!sent.ok || (sent.dryRun && !testMode)) {
     // Nothing was delivered: drop the code and the cooldown so the patient can
-    // retry straight away. The hourly send counts stay, which bounds retries.
+    // retry straight away. The send counts stay, which bounds retries.
     await fs
       .write(
         "smsChallenges",
@@ -203,14 +247,20 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
   const code = String(rawCode ?? "").trim();
   if (!/^\d{6}$/.test(code)) return { ok: false, reason: "invalid-code" };
 
+  const now = Date.now();
   const challenge = await fs.get("smsChallenges", patient.uid);
   const c = challenge?.data;
-  if (!challenge?.updateTime || !c?.codeHash || Date.now() > Number(c.expiresAt)) {
+  if (!challenge?.updateTime || !c?.codeHash || now > Number(c.expiresAt)) {
     return { ok: false, reason: "expired" };
   }
 
   const attempts = Number(c.attempts ?? 0);
-  if (attempts >= MAX_ATTEMPTS) return { ok: false, reason: "too-many-attempts" };
+  const attemptWindowOpen = now - Number(c.attemptWindowStart ?? 0) < ATTEMPT_WINDOW_MS;
+  const attemptWindowStart = attemptWindowOpen ? Number(c.attemptWindowStart) : now;
+  const attemptsInWindow = attemptWindowOpen ? Number(c.attemptsInWindow ?? 0) : 0;
+  if (attempts >= MAX_ATTEMPTS || attemptsInWindow >= MAX_ATTEMPTS_PER_ATTEMPT_WINDOW) {
+    return { ok: false, reason: "too-many-attempts" };
+  }
 
   // Count the attempt before comparing, pinned to the version just read:
   // parallel guesses conflict here instead of sharing one attempt.
@@ -219,8 +269,8 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
     counted = await fs.write(
       "smsChallenges",
       patient.uid,
-      { attempts: attempts + 1 },
-      { mask: ["attempts"], precondition: { updateTime: challenge.updateTime } },
+      { attempts: attempts + 1, attemptWindowStart, attemptsInWindow: attemptsInWindow + 1 },
+      { mask: ["attempts", "attemptWindowStart", "attemptsInWindow"], precondition: { updateTime: challenge.updateTime } },
     );
   } catch (error) {
     if (error instanceof WriteConflict) return { ok: false, reason: "busy" };
@@ -228,16 +278,26 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
   }
 
   if (!sameHash(await hashCode(String(c.salt), code), String(c.codeHash))) {
-    const attemptsLeft = MAX_ATTEMPTS - attempts - 1;
+    const attemptsLeft = Math.min(MAX_ATTEMPTS - attempts, MAX_ATTEMPTS_PER_ATTEMPT_WINDOW - attemptsInWindow) - 1;
     return attemptsLeft > 0
       ? { ok: false, reason: "invalid-code", attemptsLeft }
       : { ok: false, reason: "too-many-attempts" };
   }
 
-  // Burn the code so it can't be used twice. The send counters stay, so a
+  // Burn the code so it can't be used twice, and record the number this
+  // account has now proved it receives texts on. The send counters stay, so a
   // successful sign-in doesn't reset the rate limit.
+  const verifiedPhone = typeof c.phone === "string" ? c.phone : undefined;
   try {
-    await fs.write("smsChallenges", patient.uid, {}, { mask: ["codeHash", "salt", "expiresAt"], precondition: { updateTime: counted } });
+    await fs.write(
+      "smsChallenges",
+      patient.uid,
+      { verifiedPhone },
+      {
+        mask: ["codeHash", "salt", "expiresAt", ...(verifiedPhone ? ["verifiedPhone"] : [])],
+        precondition: { updateTime: counted },
+      },
+    );
   } catch (error) {
     if (error instanceof WriteConflict) return { ok: false, reason: "busy" };
     throw error;

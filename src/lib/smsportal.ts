@@ -23,13 +23,15 @@ export function formatPhoneForSms(raw: string | undefined | null): string {
 /**
  * A South African mobile number in E.164 form ("+27821234567"), or null if
  * `raw` isn't one. Stricter than formatPhoneForSms: sign-in codes must only
- * go to a real SA mobile, never to a landline or a malformed number.
+ * go to a real SA mobile, never to a landline, a toll-free or share-call
+ * number (080, 086), VoIP (087) or a malformed number.
  */
 export function toSouthAfricanMobile(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   let digits = raw.replace(/[\s().-]/g, "").replace(/^(\+|00)/, "");
   if (/^0\d{9}$/.test(digits)) digits = `27${digits.slice(1)}`;
-  return /^27[6-8]\d{8}$/.test(digits) ? `+${digits}` : null;
+  // Mobile ranges: 06x, 071-074, 076-079, 081-084.
+  return /^27(6\d|7[1-46-9]|8[1-4])\d{7}$/.test(digits) ? `+${digits}` : null;
 }
 
 /** Whether SMSPortal credentials are set, i.e. texts can actually be sent. */

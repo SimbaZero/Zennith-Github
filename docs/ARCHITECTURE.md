@@ -35,9 +35,11 @@ flowchart LR
      [src/server/sms-otp.ts](../src/server/sms-otp.ts). The server verifies
      the caller's Firebase ID token, texts a 6-digit code via SMSPortal to
      the number on `users/{legacyUserId}.contactNum`, and keeps only a salted
-     hash in `smsChallenges/{uid}` (5-minute expiry, 5 attempts, 1 send a
-     minute and 5 an hour per account, 10 an hour per phone). The first
-     verified code sets `profiles/{uid}.twoFactorMethod = "sms"`.
+     hash in `smsChallenges/{uid}` (5-minute expiry, 5 attempts per code and
+     20 per day, 1 send a minute and 5 an hour per account). Until an account
+     has verified its number, its sends also count against 10 an hour per
+     number and an app-wide daily cap. The first verified code records the
+     number server-side and sets `profiles/{uid}.twoFactorMethod = "sms"`.
    Users can't reset their own 2FA; an admin clears `totpSecret` and
    `twoFactorMethod` in the console.
 4. **Session** — after 2FA, `setAuth(role, username, facilityId)` caches the role in

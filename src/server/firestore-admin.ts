@@ -41,7 +41,9 @@ export interface FieldFilter {
 
 export type FirestoreWrite =
   | { update: [collection: string, id: string]; data: FirestoreData; appendToArrays?: Record<string, unknown[]> }
-  | { create: string; data: FirestoreData };
+  | { create: string; data: FirestoreData }
+  /** Replaces the whole document, optionally only if it's still at a known version. */
+  | { set: [collection: string, id: string]; data: FirestoreData; precondition?: WriteOptions["precondition"] };
 
 type RestValue = Record<string, unknown>;
 
@@ -142,16 +144,27 @@ export class FirestoreAdmin {
   }
 
   /**
-   * Applies several writes atomically in one request. `update` sets only the
-   * given fields on an existing document; `appendToArrays` adds values to
-   * array fields the way arrayUnion does, so concurrent runs can't drop each
-   * other's entries. `create` makes a new document (auto ID when none given).
+   * Applies several writes atomically in one request and returns each
+   * document's new version. `update` sets only the given fields on an
+   * existing document; `appendToArrays` adds values to array fields the way
+   * arrayUnion does, so concurrent runs can't drop each other's entries.
+   * `create` makes a new document with an auto ID. `set` replaces a document,
+   * optionally pinned to a version. If any precondition fails, nothing is
+   * written and WriteConflict is thrown.
    */
-  async commit(writes: FirestoreWrite[]): Promise<void> {
-    await this.request(`${this.documentsUrl}:commit`, {
-      method: "POST",
-      body: JSON.stringify({ writes: writes.map((write) => this.toRestWrite(write)) }),
-    });
+  async commit(writes: FirestoreWrite[]): Promise<string[]> {
+    const res = await this.request(
+      `${this.documentsUrl}:commit`,
+      { method: "POST", body: JSON.stringify({ writes: writes.map((write) => this.toRestWrite(write)) }) },
+      [400, 404, 409],
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      if (res.status !== 400 || /FAILED_PRECONDITION/.test(detail)) throw new WriteConflict(`commit: ${res.status}`);
+      throw new Error(`Firestore POST ${res.status}: ${detail.slice(0, 300)}`);
+    }
+    const body = (await res.json()) as { writeResults?: Array<{ updateTime?: string }> };
+    return (body.writeResults ?? []).map((result) => result.updateTime ?? "");
   }
 
   /**
@@ -192,6 +205,13 @@ export class FirestoreAdmin {
       return {
         update: { name: this.docName(write.create, autoId()), fields: encodeFields(data) },
         currentDocument: { exists: false },
+      };
+    }
+    if ("set" in write) {
+      const [collection, id] = write.set;
+      return {
+        update: { name: this.docName(collection, id), fields: encodeFields(data) },
+        ...(write.precondition ? { currentDocument: write.precondition } : {}),
       };
     }
     const [collection, id] = write.update;

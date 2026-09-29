@@ -179,17 +179,23 @@ service cloud.firestore {
     // phone the account uses (legacyUserId, patientId), or their second
     // factor: twoFactorMethod is only written by the server after a verified
     // text-message code, and an authenticator secret can be added once, at
-    // first enrolment, never replaced or removed (that let anyone with the
-    // password skip 2FA). An admin resets 2FA by clearing both fields.
+    // first enrolment, never replaced or removed (the old self-service reset
+    // let anyone with the password enrol their own authenticator). An admin
+    // resets 2FA by clearing both fields.
+    //
+    // KNOWN LIMITATION: profiles stay readable by any signed-in user, so a
+    // totpSecret is readable too. Moving it somewhere private is a separate fix.
     match /profiles/{uid} {
       // Absent and null count as the same value.
       function unchanged(field) {
         return request.resource.data.get(field, null) == resource.data.get(field, null);
       }
+      // An empty secret counts as none, as the app treats it.
       function firstTotpEnrolment() {
-        return resource.data.get("totpSecret", null) == null
+        return resource.data.get("totpSecret", null) in [null, ""]
           && resource.data.get("twoFactorMethod", null) == null
-          && request.resource.data.get("totpSecret", null) is string;
+          && request.resource.data.get("totpSecret", null) is string
+          && request.resource.data.totpSecret.size() >= 16;
       }
 
       allow read: if signedIn();
@@ -213,6 +219,9 @@ service cloud.firestore {
       allow read, write: if false;
     }
     match /smsPhoneLimits/{phone} {
+      allow read, write: if false;
+    }
+    match /smsGlobalLimits/{id} {
       allow read, write: if false;
     }
 

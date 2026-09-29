@@ -6,6 +6,8 @@
 // https://firebase.google.com/docs/auth/admin/verify-id-tokens#verify_id_tokens_using_a_third-party_jwt_library
 
 const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+// Tolerance for a token issued by a server whose clock is slightly ahead.
+// Expiry gets none: an expired token is rejected, as Firebase specifies.
 const CLOCK_SKEW_S = 60;
 // An unknown key ID triggers a refetch (Google rotates keys), but at most
 // this often, so made-up key IDs can't make every request fetch keys.
@@ -52,7 +54,7 @@ export async function verifyIdToken(idToken: unknown, projectId: string): Promis
   const now = Math.floor(Date.now() / 1000);
   if (claims.iss !== `https://securetoken.google.com/${projectId}` || claims.aud !== projectId) return null;
   if (typeof claims.sub !== "string" || !claims.sub || claims.sub.length > 128) return null;
-  if (typeof claims.exp !== "number" || claims.exp <= now - CLOCK_SKEW_S) return null;
+  if (typeof claims.exp !== "number" || claims.exp <= now) return null;
   if (typeof claims.iat !== "number" || claims.iat > now + CLOCK_SKEW_S) return null;
   if (typeof claims.auth_time !== "number" || claims.auth_time > now + CLOCK_SKEW_S) return null;
 
