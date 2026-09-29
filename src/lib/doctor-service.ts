@@ -572,10 +572,16 @@ export function usePatientDirectory(
         ? query(
             collection(db, "patients"),
             where("clinicId", "==", clinicId),
-            orderBy("userId"),
+            // Newest first: the list is capped, and new patients have the
+            // highest userId — oldest-first hid every recent signup.
+            orderBy("userId", "desc"),
             limit(pageSize),
           )
-        : query(collection(db, "patients"), orderBy("userId"), limit(pageSize));
+        : query(
+            collection(db, "patients"),
+            orderBy("userId", "desc"),
+            limit(pageSize),
+          );
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
