@@ -226,10 +226,15 @@ function smsMessage(
       return "Your sign-in session has ended. Go back and sign in again.";
     case "cooldown":
       return "A code was sent recently. Enter it below, or request a new one when the timer ends.";
-    case "rate-limited":
-      return `Too many codes requested. Try again after ${new Date(
-        extra.retryAt ?? Date.now(),
-      ).toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })}.`;
+    case "rate-limited": {
+      const retry = new Date(extra.retryAt ?? Date.now());
+      // Some limits last a day: show the date too, or "08:00" reads as today.
+      const when =
+        retry.getTime() - Date.now() > 12 * 60 * 60_000
+          ? retry.toLocaleString("en-ZA", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+          : retry.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
+      return `Text-message codes are paused for this account. Try again after ${when}.`;
+    }
     case "send-failed":
       return "We couldn't send the text message. Try again in a minute.";
     case "expired":
@@ -241,9 +246,9 @@ function smsMessage(
           } left.`
         : "Enter the 6-digit code from the text message.";
     case "too-many-attempts":
-      return "Too many incorrect attempts. Request a new code.";
+      return "Too many incorrect attempts. Request a new code; if that's refused, try again tomorrow or ask the clinic to reset your sign-in.";
     case "busy":
-      return "Another request is already in progress. Try again in a moment.";
+      return "We couldn't process that just now. Try again in a moment.";
     default:
       return "Something went wrong. Try again.";
   }

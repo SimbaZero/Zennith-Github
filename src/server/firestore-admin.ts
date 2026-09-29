@@ -24,7 +24,9 @@ export interface FirestoreDoc {
 }
 
 /** A conditional write lost to a concurrent change; re-read and decide again. */
-export class WriteConflict extends Error {}
+export class WriteConflict extends Error {
+  override name = "WriteConflict";
+}
 
 export interface WriteOptions {
   /** Fields to set; a listed field missing from `data` is deleted. Omit to replace the whole document. */
@@ -160,7 +162,9 @@ export class FirestoreAdmin {
     );
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      if (res.status !== 400 || /FAILED_PRECONDITION/.test(detail)) throw new WriteConflict(`commit: ${res.status}`);
+      if (res.status !== 400 || /FAILED_PRECONDITION/.test(detail)) {
+        throw new WriteConflict(`commit ${res.status}: ${detail.slice(0, 300)}`);
+      }
       throw new Error(`Firestore POST ${res.status}: ${detail.slice(0, 300)}`);
     }
     const body = (await res.json()) as { writeResults?: Array<{ updateTime?: string }> };
@@ -192,7 +196,7 @@ export class FirestoreAdmin {
       // a doc deleted since it was read is 404.
       const detail = await res.text().catch(() => "");
       if (res.status !== 400 || /FAILED_PRECONDITION/.test(detail)) {
-        throw new WriteConflict(`${collection}/${id}: ${res.status}`);
+        throw new WriteConflict(`${collection}/${id} ${res.status}: ${detail.slice(0, 300)}`);
       }
       throw new Error(`Firestore PATCH ${res.status}: ${detail.slice(0, 300)}`);
     }

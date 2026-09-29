@@ -221,6 +221,9 @@ service cloud.firestore {
     match /smsPhoneLimits/{phone} {
       allow read, write: if false;
     }
+    match /smsVerifiedPhoneLimits/{phone} {
+      allow read, write: if false;
+    }
     match /smsGlobalLimits/{id} {
       allow read, write: if false;
     }
