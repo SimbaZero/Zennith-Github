@@ -174,15 +174,46 @@ service cloud.firestore {
 
     // Nobody edits someone else's profile, and nobody changes their own role
     // or clinic — that would be self-promotion into another clinic's data.
+    //
+    // The owner also can't change the links that decide whose record and
+    // phone the account uses (legacyUserId, patientId), or their second
+    // factor: twoFactorMethod is only written by the server after a verified
+    // text-message code, and an authenticator secret can be added once, at
+    // first enrolment, never replaced or removed (that let anyone with the
+    // password skip 2FA). An admin resets 2FA by clearing both fields.
     match /profiles/{uid} {
+      // Absent and null count as the same value.
+      function unchanged(field) {
+        return request.resource.data.get(field, null) == resource.data.get(field, null);
+      }
+      function firstTotpEnrolment() {
+        return resource.data.get("totpSecret", null) == null
+          && resource.data.get("twoFactorMethod", null) == null
+          && request.resource.data.get("totpSecret", null) is string;
+      }
+
       allow read: if signedIn();
       allow create: if true; // a signing-up patient has no profile yet
       allow update: if isSuperAdmin() || role() == "admin"
                     || (request.auth.uid == uid
                         && request.resource.data.role == resource.data.role
                         && request.resource.data.get("clinicId", -1)
-                           == resource.data.get("clinicId", -1));
+                           == resource.data.get("clinicId", -1)
+                        && unchanged("legacyUserId")
+                        && unchanged("patientId")
+                        && unchanged("twoFactorMethod")
+                        && (unchanged("totpSecret") || firstTotpEnrolment()));
       allow delete: if isSuperAdmin() || role() == "admin";
+    }
+
+    // Text-message sign-in codes (hashed) and send counters. Only the server
+    // touches these, as the service account; no browser may read a code hash
+    // or reset a counter.
+    match /smsChallenges/{uid} {
+      allow read, write: if false;
+    }
+    match /smsPhoneLimits/{phone} {
+      allow read, write: if false;
     }
 
     match /doctors/{id} {

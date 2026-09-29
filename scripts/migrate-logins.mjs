@@ -87,7 +87,7 @@ for (const [role, people] of [...byRole.entries()].sort()) {
     };
     try {
       const c = await createUserWithEmailAndPassword(auth, email, password);
-      await setDoc(doc(db, "profiles", c.user.uid), profile);
+      await setDoc(doc(db, "profiles", c.user.uid), profile, { merge: true });
       created.push({ username, password, role, name: profile.fullName });
       console.log(`created ${username} (${role}) — ${profile.fullName}`);
     } catch (e) {
@@ -102,7 +102,7 @@ for (const [role, people] of [...byRole.entries()].sort()) {
             c = await signInWithEmailAndPassword(auth, email, storedPw);
             await updatePassword(c.user, password);
           }
-          await setDoc(doc(db, "profiles", c.user.uid), profile);
+          await setDoc(doc(db, "profiles", c.user.uid), profile, { merge: true });
           created.push({ username, password, role, name: profile.fullName });
           console.log(`exists  ${username} (${role}) — profile/password refreshed`);
         } catch {

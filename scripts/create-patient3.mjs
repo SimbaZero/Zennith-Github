@@ -60,7 +60,7 @@ await setDoc(doc(db, "profiles", uid), {
   legacyUserId: USER_ID,
   createdAt: new Date().toISOString(),
   builtin: true,
-});
+}, { merge: true });
 
 await setDoc(doc(db, "users", String(USER_ID)), {
   userId: USER_ID,

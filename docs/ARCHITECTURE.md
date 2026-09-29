@@ -23,12 +23,24 @@ flowchart LR
    verifies the password.
 2. **Role lookup** — the user's role comes from `profiles/{authUid}` in
    Firestore. No profile → sign-in rejected ("no role assigned").
-3. **Two-factor** — `two-factor.tsx` + [src/lib/totp.ts](../src/lib/totp.ts)
-   (RFC 6238 TOTP, SHA-1/30s/6-digit, verified against the RFC test vector).
-   First login shows a setup key to add to an authenticator app; the first
-   valid code stores the secret at `profiles/{uid}.totpSecret`. Later logins
-   verify the rotating code (±30s drift window).
-4. **Session** — after 2FA, `setAuth(role, username)` caches the role in
+3. **Two-factor** — `two-factor.tsx` reads the role and 2FA state from the
+   profile (`fetchTwoFactorProfile`), never from the URL. Two methods:
+   - **Authenticator app** (all roles): [src/lib/totp.ts](../src/lib/totp.ts)
+     (RFC 6238 TOTP, SHA-1/30s/6-digit, verified against the RFC test
+     vector). First login shows a setup key; the first valid code stores the
+     secret at `profiles/{uid}.totpSecret`. Later logins verify the rotating
+     code (±30s drift window).
+   - **Text message** (patients only, chosen at first login): server
+     functions in [src/lib/sms-otp.ts](../src/lib/sms-otp.ts) → 
+     [src/server/sms-otp.ts](../src/server/sms-otp.ts). The server verifies
+     the caller's Firebase ID token, texts a 6-digit code via SMSPortal to
+     the number on `users/{legacyUserId}.contactNum`, and keeps only a salted
+     hash in `smsChallenges/{uid}` (5-minute expiry, 5 attempts, 1 send a
+     minute and 5 an hour per account, 10 an hour per phone). The first
+     verified code sets `profiles/{uid}.twoFactorMethod = "sms"`.
+   Users can't reset their own 2FA; an admin clears `totpSecret` and
+   `twoFactorMethod` in the console.
+4. **Session** — after 2FA, `setAuth(role, username, facilityId)` caches the role in
    `localStorage`. Route guards (`beforeLoad` in each `<role>.tsx` layout) read
    this cache **synchronously**, so guards work before Firebase resolves.
    `AuthContext` listens to Firebase auth state and reconciles the cache

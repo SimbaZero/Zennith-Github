@@ -19,6 +19,18 @@ export type FirestoreData = Record<string, unknown>;
 export interface FirestoreDoc {
   id: string;
   data: FirestoreData;
+  /** The document's version, for pinning a later write to what was read. */
+  updateTime?: string;
+}
+
+/** A conditional write lost to a concurrent change; re-read and decide again. */
+export class WriteConflict extends Error {}
+
+export interface WriteOptions {
+  /** Fields to set; a listed field missing from `data` is deleted. Omit to replace the whole document. */
+  mask?: string[];
+  /** Only write if the document is still at this version, or does / doesn't exist. */
+  precondition?: { updateTime: string } | { exists: boolean };
 }
 
 export interface FieldFilter {
@@ -36,6 +48,7 @@ type RestValue = Record<string, unknown>;
 interface RestDocument {
   name: string;
   fields?: Record<string, RestValue>;
+  updateTime?: string;
 }
 
 export class FirestoreConfigError extends Error {}
@@ -72,6 +85,11 @@ export class FirestoreAdmin {
 
   constructor(private readonly account: ServiceAccount) {
     this.documentsUrl = `https://firestore.googleapis.com/v1/projects/${account.project_id}/databases/(default)/documents`;
+  }
+
+  /** The Firebase project this service account belongs to. */
+  get projectId(): string {
+    return this.account.project_id;
   }
 
   async get(collection: string, id: string): Promise<FirestoreDoc | null> {
@@ -134,6 +152,38 @@ export class FirestoreAdmin {
       method: "POST",
       body: JSON.stringify({ writes: writes.map((write) => this.toRestWrite(write)) }),
     });
+  }
+
+  /**
+   * Writes one document at a known ID and returns its new version. With a
+   * precondition, a write that lost a race throws WriteConflict instead of
+   * overwriting the other change.
+   */
+  async write(collection: string, id: string, data: FirestoreData, options: WriteOptions = {}): Promise<string> {
+    const params = new URLSearchParams();
+    for (const field of options.mask ?? []) params.append("updateMask.fieldPaths", quoteFieldPath(field));
+    const pre = options.precondition;
+    if (pre && "updateTime" in pre) params.set("currentDocument.updateTime", pre.updateTime);
+    if (pre && "exists" in pre) params.set("currentDocument.exists", String(pre.exists));
+    const defined = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
+    const query = params.toString();
+
+    const res = await this.request(
+      `${this.docUrl(collection, id)}${query ? `?${query}` : ""}`,
+      { method: "PATCH", body: JSON.stringify({ fields: encodeFields(defined) }) },
+      pre ? [400, 404, 409] : [],
+    );
+    if (!res.ok) {
+      // Only reachable with a precondition: a version mismatch is
+      // FAILED_PRECONDITION (400), exists:false on an existing doc is 409, and
+      // a doc deleted since it was read is 404.
+      const detail = await res.text().catch(() => "");
+      if (res.status !== 400 || /FAILED_PRECONDITION/.test(detail)) {
+        throw new WriteConflict(`${collection}/${id}: ${res.status}`);
+      }
+      throw new Error(`Firestore PATCH ${res.status}: ${detail.slice(0, 300)}`);
+    }
+    return ((await res.json()) as RestDocument).updateTime ?? "";
   }
 
   private toRestWrite(write: FirestoreWrite) {
@@ -271,7 +321,7 @@ function base64Url(bytes: Uint8Array): string {
 }
 
 function fromRestDocument(doc: RestDocument): FirestoreDoc {
-  return { id: doc.name.split("/").pop() ?? "", data: decodeFields(doc.fields ?? {}) };
+  return { id: doc.name.split("/").pop() ?? "", data: decodeFields(doc.fields ?? {}), updateTime: doc.updateTime };
 }
 
 function encodeFields(data: FirestoreData): Record<string, RestValue> {

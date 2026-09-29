@@ -365,7 +365,7 @@ Zennith has moved from prototype to a **Firebase-backed application** — every 
 
 - [x] Role-based UI for all 7 roles (patient, receptionist, nurse, pharmacist, doctor, admin, super admin)
 - [x] Multi-clinic / multi-facility support + facility-scoped audit log
-- [x] Real authentication & session management (Firebase Auth + TOTP two-factor)
+- [x] Real authentication & session management (Firebase Auth + two-factor: authenticator app, or a text-message code for patients)
 - [x] Persistent database (Cloud Firestore) + seeding/management scripts, including dense two-clinic demo data
 - [x] Pharmacist backend: stock, distribution, dispense trends
 - [x] Doctor / Receptionist / Admin modules on live Firestore

@@ -20,6 +20,28 @@ export function formatPhoneForSms(raw: string | undefined | null): string {
   return digits.startsWith("+") ? digits : `+${digits}`;
 }
 
+/**
+ * A South African mobile number in E.164 form ("+27821234567"), or null if
+ * `raw` isn't one. Stricter than formatPhoneForSms: sign-in codes must only
+ * go to a real SA mobile, never to a landline or a malformed number.
+ */
+export function toSouthAfricanMobile(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let digits = raw.replace(/[\s().-]/g, "").replace(/^(\+|00)/, "");
+  if (/^0\d{9}$/.test(digits)) digits = `27${digits.slice(1)}`;
+  return /^27[6-8]\d{8}$/.test(digits) ? `+${digits}` : null;
+}
+
+/** Whether SMSPortal credentials are set, i.e. texts can actually be sent. */
+export function isSmsConfigured(env?: unknown): boolean {
+  return !!readEnv(env, "SMSPORTAL_CLIENT_ID") && !!readEnv(env, "SMSPORTAL_API_SECRET");
+}
+
+/** SMSPORTAL_TEST_MODE=true: log instead of sending (development only). */
+export function isSmsTestMode(env?: unknown): boolean {
+  return readEnv(env, "SMSPORTAL_TEST_MODE") === "true";
+}
+
 export function buildAppointmentReminderText({
   appointmentDate,
   appointmentTime,
@@ -57,11 +79,14 @@ export async function sendSms({
   to,
   message,
   testMode,
+  sensitive = false,
   env,
 }: {
   to: string;
   message: string;
   testMode?: boolean;
+  /** The message is a secret (a sign-in code): never write it to the log. */
+  sensitive?: boolean;
   env?: unknown;
 }): Promise<{ ok: boolean; dryRun?: boolean; reason?: string }> {
   const phone = formatPhoneForSms(to);
@@ -72,7 +97,7 @@ export async function sendSms({
   const shouldTest = testMode ?? (readEnv(env, "SMSPORTAL_TEST_MODE") === "true");
 
   if (!clientId || !apiSecret || shouldTest) {
-    console.info(`[sms:test] ${phone} :: ${message}`);
+    console.info(`[sms:test] ${phone} :: ${sensitive ? "(message not logged)" : message}`);
     return { ok: true, dryRun: true };
   }
 
