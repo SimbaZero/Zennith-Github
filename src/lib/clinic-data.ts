@@ -1581,6 +1581,7 @@ export async function signUpPatient(
     `patient-signup-${Date.now()}`,
   );
   const fdb = getFirestore(secondary);
+  let failedStep = "";
   try {
     const cred = await createUserWithEmailAndPassword(
       getFbAuth(secondary),
@@ -1588,6 +1589,7 @@ export async function signUpPatient(
       input.password,
     );
 
+    failedStep = "counters";
     const ids = await runTransaction(fdb, async (tx) => {
       const ref = doc(fdb, "counters", "registration");
       const snap = await tx.get(ref);
@@ -1598,11 +1600,24 @@ export async function signUpPatient(
             recordNo: number;
           })
         : { patientNo: 9000, userNo: 90000, recordNo: 9000 };
-      const next = {
+      let next = {
         patientNo: cur.patientNo + 1,
         userNo: cur.userNo + 1,
         recordNo: cur.recordNo + 1,
       };
+      // Skip numbers already in use. setDoc on an existing document is an
+      // UPDATE, which the rules only allow for staff — so a counter that has
+      // fallen behind the data made every signup fail with "permission-denied".
+      for (let i = 0; i < 200; i++) {
+        const u = await tx.get(doc(fdb, "users", String(next.userNo)));
+        const m = await tx.get(doc(fdb, "medicalRecords", String(next.recordNo)));
+        if (!u.exists() && !m.exists()) break;
+        next = {
+          patientNo: next.patientNo + 1,
+          userNo: next.userNo + 1,
+          recordNo: next.recordNo + 1,
+        };
+      }
       tx.set(ref, next);
       return next;
     });
@@ -1611,8 +1626,15 @@ export async function signUpPatient(
     const [names, ...rest] = input.fullName.trim().split(/\s+/);
     const surname = rest.join(" ");
 
+    // Names which write was refused, so a permission problem points at one
+    // collection instead of a bare "permission-denied".
+    const tag = (label: string, p: Promise<void>): Promise<void> =>
+      p.catch((e: unknown) => {
+        failedStep = label;
+        throw e;
+      });
     await Promise.all([
-      setDoc(doc(fdb, "users", String(ids.userNo)), {
+      tag("users", setDoc(doc(fdb, "users", String(ids.userNo)), {
         userId: ids.userNo,
         names,
         surname,
@@ -1625,16 +1647,16 @@ export async function signUpPatient(
         email,
         DOB: input.dob || null,
         Age: ageFromDob(input.dob),
-      }),
-      setDoc(doc(fdb, "medicalRecords", String(ids.recordNo)), {
+      })),
+      tag("medicalRecords", setDoc(doc(fdb, "medicalRecords", String(ids.recordNo)), {
         medicalRecordNo: ids.recordNo,
         insurancePolicyNumber: null,
         lastVisit: null,
         allergies: null,
         bloodType: null,
         prescription: null,
-      }),
-      setDoc(doc(fdb, "patients", patientId), {
+      })),
+      tag("patients", setDoc(doc(fdb, "patients", patientId), {
         patientId,
         userId: ids.userNo,
         medicalRecordNo: ids.recordNo,
@@ -1645,8 +1667,8 @@ export async function signUpPatient(
         insurancePolicyNumber: null,
         lastVisit: null,
         clinicId: input.clinicId,
-      }),
-      setDoc(doc(fdb, "profiles", cred.user.uid), {
+      })),
+      tag("profiles", setDoc(doc(fdb, "profiles", cred.user.uid), {
         username: email,
         role: "patient",
         fullName: input.fullName.trim(),
@@ -1658,7 +1680,7 @@ export async function signUpPatient(
         patientId,
         builtin: false,
         createdAt: new Date().toISOString(),
-      }),
+      })),
     ]);
 
     return { ok: true, patientId };
@@ -1680,10 +1702,12 @@ export async function signUpPatient(
         ok: false,
         error: "Email/Password sign-in is not enabled in Firebase",
       };
-    console.error("signUpPatient failed:", code, message);
+    console.error("signUpPatient failed:", code, message, "at:", failedStep);
     return {
       ok: false,
-      error: `Could not create account (${code ?? message ?? "unknown"})`,
+      error: `Could not create account (${code ?? message ?? "unknown"}${
+        failedStep ? ` on ${failedStep}` : ""
+      })`,
     };
   } finally {
     await deleteApp(secondary);
