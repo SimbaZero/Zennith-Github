@@ -9,7 +9,7 @@ import {
 } from "@/lib/auth";
 import { fetchClinicStaff, type ClinicStaffMember } from "@/lib/clinic-data";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Trash2,
@@ -330,6 +330,43 @@ function CreateLoginPanel({
   onClose: () => void;
   onDone: () => void;
 }) {
+  // The panel opens above the table, but the admin clicked a button far down
+  // the list. Glide up to it so the action is actually seen. This is animated
+  // by hand (rather than scrollIntoView) so it is smooth in every browser, and
+  // it stops 80px short so the sticky 64px header doesn't cover the heading.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const start = window.scrollY;
+    const target = Math.max(0, el.getBoundingClientRect().top + start - 80);
+    const distance = target - start;
+    if (Math.abs(distance) < 2) return;
+
+    const duration = 600;
+    const ease = (t: number) =>
+      t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    let t0: number | null = null;
+    let raf = 0;
+    const step = (now: number) => {
+      if (t0 === null) t0 = now;
+      const p = Math.min((now - t0) / duration, 1);
+      window.scrollTo(0, start + distance * ease(p));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+
+    // Let the admin take over: any wheel or touch stops the glide.
+    const stop = () => cancelAnimationFrame(raf);
+    window.addEventListener("wheel", stop, { passive: true });
+    window.addEventListener("touchstart", stop, { passive: true });
+    return () => {
+      stop();
+      window.removeEventListener("wheel", stop);
+      window.removeEventListener("touchstart", stop);
+    };
+  }, [staff.staffId]);
+
   // Pre-filled from the existing record, so the admin doesn't retype a name
   // and accidentally create a second version of the same person.
   const [username, setUsername] = useState(
@@ -379,7 +416,10 @@ function CreateLoginPanel({
   };
 
   return (
-    <div className="mb-4 bg-white rounded-xl border border-[oklch(0.55_0.18_245)] p-5">
+    <div
+      ref={panelRef}
+      className="mb-4 bg-white rounded-xl border border-[oklch(0.55_0.18_245)] p-5"
+    >
       <div className="flex items-start justify-between gap-3 mb-3">
         <div>
           <h3 className="font-semibold">Create a login for {staff.fullName}</h3>

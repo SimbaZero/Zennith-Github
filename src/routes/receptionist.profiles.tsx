@@ -106,7 +106,6 @@ function Profiles() {
                     clinical role, so under POPIA they don't see diagnoses —
                     and PatientSummary no longer carries one. Don't add it
                     back; see the note above PatientSummary in clinic-data.ts. */}
-                <th className="px-5 py-3 font-medium">Last Visit</th>
                 <th className="px-5 py-3 font-medium"></th>
               </tr>
             </thead>
@@ -114,7 +113,7 @@ function Profiles() {
               {isLoading && (
                 <tr>
                   <td
-                    colSpan={4}
+                    colSpan={3}
                     className="px-5 py-6 text-center text-muted-foreground"
                   >
                     Loading...
@@ -124,7 +123,7 @@ function Profiles() {
               {isError && (
                 <tr>
                   <td
-                    colSpan={4}
+                    colSpan={3}
                     className="px-5 py-6 text-center text-destructive"
                   >
                     Failed to load patients.
@@ -134,7 +133,7 @@ function Profiles() {
               {!isLoading && filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={4}
+                    colSpan={3}
                     className="px-5 py-6 text-center text-muted-foreground"
                   >
                     No matching patients.
@@ -150,7 +149,6 @@ function Profiles() {
                     {p.patientId}
                   </td>
                   <td className="px-5 py-3 font-medium">{p.name}</td>
-                  <td className="px-5 py-3 font-mono text-xs">{p.lastVisit}</td>
                   <td className="px-5 py-3 text-right">
                     <button
                       onClick={() =>

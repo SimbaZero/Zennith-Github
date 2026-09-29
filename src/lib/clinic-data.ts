@@ -1403,6 +1403,25 @@ function ageFromDob(dob?: string): number | null {
   return age;
 }
 
+/**
+ * The Patient ID the next registration will get, for showing on the form.
+ * It is a preview: registerPatient allocates the real number when the form is
+ * submitted, so if another receptionist registers someone first the final
+ * number can be one higher (the success message always shows the real one).
+ */
+export async function peekNextPatientId(): Promise<string> {
+  const snap = await getDoc(doc(db, "counters", "registration"));
+  let patientNo = snap.exists()
+    ? Number((snap.data() as { patientNo: number }).patientNo) + 1
+    : 9001;
+  for (let i = 0; i < 100; i++) {
+    const taken = await getDoc(doc(db, "patients", `Pat-${patientNo}`));
+    if (!taken.exists()) break;
+    patientNo += 1;
+  }
+  return `Pat-${patientNo}`;
+}
+
 export async function registerPatient(
   input: RegistrationInput,
 ): Promise<string> {
@@ -1417,8 +1436,16 @@ export async function registerPatient(
     const cur = snap.exists()
       ? (snap.data() as { patientNo: number; userNo: number; recordNo: number })
       : { patientNo: 9000, userNo: 90000, recordNo: 9000 };
+    // Skip any number that already belongs to a patient, so a counter that has
+    // fallen behind the data can never overwrite an existing patient.
+    let patientNo = cur.patientNo + 1;
+    for (let i = 0; i < 100; i++) {
+      const taken = await tx.get(doc(db, "patients", `Pat-${patientNo}`));
+      if (!taken.exists()) break;
+      patientNo += 1;
+    }
     const next = {
-      patientNo: cur.patientNo + 1,
+      patientNo,
       userNo: cur.userNo + 1,
       recordNo: cur.recordNo + 1,
     };

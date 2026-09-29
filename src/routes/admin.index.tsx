@@ -17,6 +17,9 @@ function AdminDashboard() {
     queryKey: ["clinic-staff", admin?.clinicId],
     queryFn: () => fetchClinicStaff(admin!.clinicId!),
     enabled: admin?.clinicId != null,
+    // Always re-read when the dashboard opens, so the tally can't show a
+    // cached number from before staff were added or removed.
+    refetchOnMount: "always",
   });
 
   // "Accounts" means staff who can actually sign in. Removing a login keeps

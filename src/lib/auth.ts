@@ -427,7 +427,16 @@ export async function addUser(u: {
       if (coll) {
         const roleRecordId = await nextRoleRecordId(u.role as StaffRole, db);
         writtenRefs.push(doc(db, coll, roleRecordId));
-        const clinicIdNum = u.facilityId ? Number(u.facilityId) : undefined;
+        // The admin's own clinic is what the staff list and dashboard filter
+        // on, so it wins. The browser-stored facility id can be missing or
+        // stale, which used to save the record with no clinic at all — and
+        // an account nobody's list could see or count.
+        const clinicIdNum =
+          u.clinicId != null
+            ? Number(u.clinicId)
+            : u.facilityId
+              ? Number(u.facilityId)
+              : undefined;
         const clinicIdValue =
           clinicIdNum !== undefined && !Number.isNaN(clinicIdNum)
             ? clinicIdNum
