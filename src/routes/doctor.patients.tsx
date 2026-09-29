@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
-  usePatientDirectory,
+  usePatientFiles,
   useFindPatientById,
   useCurrentDoctor,
 } from "@/lib/doctor-service";
@@ -29,41 +29,49 @@ function DoctorPatients() {
 function DoctorPatientFilesTable({ clinicId }: { clinicId?: number }) {
   const [q, setQ] = useState("");
 
-  // Previously unscoped — a doctor could browse and search every patient
-  // in every clinic. Same fix already applied to Nurse and Receptionist.
-  const { patients: page, loading: pageLoading } = usePatientDirectory(
-    500,
-    clinicId,
-  );
-
   const idQuery = /^pat-\d+$/i.test(q.trim())
     ? `Pat-${q.trim().match(/\d+/)![0]}`
     : null;
+
+  // Scoped to the doctor's active clinic. Shows 20 at a time; typing 2+
+  // characters searches the whole clinic roster server-side (no more
+  // 500-patient ceiling). An exact Pat-### ID does a direct lookup instead.
+  const {
+    patients: page,
+    loading: pageLoading,
+    loadingMore,
+    error: pageError,
+    hasMore,
+    loadMore,
+    isSearching,
+  } = usePatientFiles(idQuery ? "" : q, clinicId);
   const { patient: found, loading: findLoading } = useFindPatientById(
     idQuery,
     clinicId,
   );
 
   const loading = idQuery ? findLoading : pageLoading;
-  const filtered = idQuery
-    ? found
-      ? [found]
-      : []
-    : page.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q.toLowerCase()) ||
-          p.patientId.toLowerCase().includes(q.toLowerCase()),
-      );
+  // Name search now happens server-side inside usePatientFiles, so `page`
+  // is already the (paged) result — no client-side filtering needed.
+  const filtered = idQuery ? (found ? [found] : []) : page;
 
   return (
     <div className="bg-white rounded-xl border overflow-hidden">
       <div className="flex items-center justify-between p-5 border-b">
         <div>
           <h3 className="font-semibold">Patient Files</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {pageLoading
-              ? "Loading patients…"
-              : `${page.length} patients at this clinic — search by name or exact Patient ID`}
+          <p
+            className={`text-xs mt-0.5 ${pageError ? "text-destructive" : "text-muted-foreground"}`}
+          >
+            {pageError
+              ? `Could not load patients: ${pageError}`
+              : pageLoading
+                ? "Loading patients…"
+                : idQuery
+                  ? "Looking up Patient ID"
+                  : isSearching
+                    ? `${page.length}${hasMore ? "+" : ""} match${page.length === 1 && !hasMore ? "" : "es"} — searching by name (start of first name or surname)`
+                    : `Showing ${page.length}${hasMore ? "+" : ""} patients — search by name or exact Patient ID`}
           </p>
         </div>
         <input
@@ -113,13 +121,26 @@ function DoctorPatientFilesTable({ clinicId }: { clinicId?: number }) {
                 >
                   {idQuery
                     ? `No patient with ID "${idQuery}".`
-                    : "No matching patients in the loaded page — try an exact Pat-### ID."}
+                    : isSearching
+                      ? "No patients found. Search matches the start of a first name or surname — or try an exact Pat-### ID."
+                      : "No patients at this clinic yet."}
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+      {!idQuery && (hasMore || loadingMore) && (
+        <div className="border-t p-3 text-center">
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="border px-4 py-1.5 rounded-md text-sm hover:bg-secondary disabled:opacity-50"
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
