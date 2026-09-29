@@ -94,6 +94,17 @@ export async function sendSms({
   const phone = formatPhoneForSms(to);
   if (!phone) return { ok: false, reason: "missing-phone" };
 
+  // Testing on a database of demo patients: SMS_ONLY_TO (comma-separated
+  // numbers) limits every text to those numbers, so nobody else is messaged.
+  const onlyTo = readEnv(env, "SMS_ONLY_TO");
+  if (onlyTo) {
+    const allowed = new Set(onlyTo.split(",").map((n) => formatPhoneForSms(n.trim())).filter(Boolean));
+    if (!allowed.has(phone)) {
+      console.info(`[sms] not sent: SMS_ONLY_TO is set and ${phone.slice(0, 5)}***** isn't on it`);
+      return { ok: false, reason: "not-on-sms-only-to" };
+    }
+  }
+
   const clientId = readEnv(env, "SMSPORTAL_CLIENT_ID") ?? "";
   const apiSecret = readEnv(env, "SMSPORTAL_API_SECRET") ?? "";
   const shouldTest = testMode ?? (readEnv(env, "SMSPORTAL_TEST_MODE") === "true");

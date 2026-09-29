@@ -14,6 +14,16 @@ export const Route = createFileRoute("/receptionist/appointments")({
   component: ReceptionAppointments,
 });
 
+// Reception has no clinical role, so it must not see why a patient is coming
+// in ("hypertension check-up" reveals a diagnosis). Only these generic kinds
+// can be booked from here, and any older free-text type on an existing record
+// is shown as plain "Appointment" instead of its wording.
+const APPOINTMENT_KINDS = ["Consultation", "Follow-up", "Procedure", "Review"];
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+function publicKind(type: string) {
+  return APPOINTMENT_KINDS.find((k) => squash(k) === squash(type)) ?? "Appointment";
+}
+
 function ReceptionAppointments() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -151,11 +161,22 @@ function ReceptionAppointments() {
               value={draft.time}
               onChange={(v) => setDraft({ ...draft, time: v })}
             />
-            <Field
-              label="Type"
-              value={draft.type}
-              onChange={(v) => setDraft({ ...draft, type: v })}
-            />
+            <div>
+              <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
+                Type
+              </label>
+              <select
+                value={draft.type}
+                onChange={(e) => setDraft({ ...draft, type: e.target.value })}
+                className="w-full px-3 py-2 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] bg-white"
+              >
+                {APPOINTMENT_KINDS.map((k) => (
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="md:col-span-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -225,7 +246,7 @@ function ReceptionAppointments() {
                     <td className="px-5 py-3 text-muted-foreground">
                       {a.clinician}
                     </td>
-                    <td className="px-5 py-3">{a.type}</td>
+                    <td className="px-5 py-3">{publicKind(a.type)}</td>
                     <td className="px-5 py-3">
                       <StatusBadge status={a.status} />
                     </td>

@@ -774,7 +774,11 @@ async function toPatientSummary(
   };
 }
 
-/** Was previously always the first 30 `patients` docs system-wide (ordered by
+/** NEWEST FIRST (orderBy userId desc): both directory queries are capped, and
+ *  new patients get the highest userId. Ordered oldest-first, anyone who
+ *  signed up after the cap was reached silently never appeared in the list.
+ *
+ *  Was previously always the first 30 `patients` docs system-wide (ordered by
  *  userId, no clinic filter) — receptionists saw a mixed bag from every
  *  clinic, and anything past #30 was invisible with no way to reach it via
  *  search (the search box only filtered what had already loaded). See #17
@@ -792,9 +796,14 @@ export async function fetchPatientPage(
       ? query(
           collection(db, "patients"),
           where("clinicId", "==", clinicId),
+          orderBy("userId", "desc"),
           limit(200),
         )
-      : query(collection(db, "patients"), orderBy("userId"), limit(200));
+      : query(
+          collection(db, "patients"),
+          orderBy("userId", "desc"),
+          limit(200),
+        );
   const snap = await getDocs(q);
   return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
 }
@@ -815,10 +824,14 @@ export function useReceptionPatientDirectory(
         ? query(
             collection(db, "patients"),
             where("clinicId", "==", clinicId),
-            orderBy("userId"),
+            orderBy("userId", "desc"),
             limit(pageSize),
           )
-        : query(collection(db, "patients"), orderBy("userId"), limit(pageSize));
+        : query(
+            collection(db, "patients"),
+            orderBy("userId", "desc"),
+            limit(pageSize),
+          );
     return onSnapshot(
       q,
       async (snapshot) => {
@@ -1403,6 +1416,25 @@ function ageFromDob(dob?: string): number | null {
   return age;
 }
 
+/**
+ * The Patient ID the next registration will get, for showing on the form.
+ * It is a preview: registerPatient allocates the real number when the form is
+ * submitted, so if another receptionist registers someone first the final
+ * number can be one higher (the success message always shows the real one).
+ */
+export async function peekNextPatientId(): Promise<string> {
+  const snap = await getDoc(doc(db, "counters", "registration"));
+  let patientNo = snap.exists()
+    ? Number((snap.data() as { patientNo: number }).patientNo) + 1
+    : 9001;
+  for (let i = 0; i < 100; i++) {
+    const taken = await getDoc(doc(db, "patients", `Pat-${patientNo}`));
+    if (!taken.exists()) break;
+    patientNo += 1;
+  }
+  return `Pat-${patientNo}`;
+}
+
 export async function registerPatient(
   input: RegistrationInput,
 ): Promise<string> {
@@ -1417,8 +1449,16 @@ export async function registerPatient(
     const cur = snap.exists()
       ? (snap.data() as { patientNo: number; userNo: number; recordNo: number })
       : { patientNo: 9000, userNo: 90000, recordNo: 9000 };
+    // Skip any number that already belongs to a patient, so a counter that has
+    // fallen behind the data can never overwrite an existing patient.
+    let patientNo = cur.patientNo + 1;
+    for (let i = 0; i < 100; i++) {
+      const taken = await tx.get(doc(db, "patients", `Pat-${patientNo}`));
+      if (!taken.exists()) break;
+      patientNo += 1;
+    }
     const next = {
-      patientNo: cur.patientNo + 1,
+      patientNo,
       userNo: cur.userNo + 1,
       recordNo: cur.recordNo + 1,
     };
@@ -1953,7 +1993,16 @@ export async function submitClinicApplication(input: {
     const ref = doc(db, "counters", "registration");
     const snap = await tx.get(ref);
     const cur = snap.exists() ? (snap.data() as Record<string, number>) : {};
-    const next = (cur.clinicNo ?? 0) + 1;
+    let next = (cur.clinicNo ?? 0) + 1;
+    // Skip ids that already belong to a clinic. The counter had no clinicNo,
+    // so it handed out 1, 2, 3… — ids of REAL clinics. Writing to one of
+    // those is an update, which the rules only allow for a Super Admin, so
+    // every application failed. (Same cause as the patient signup failure.)
+    for (let i = 0; i < 500; i++) {
+      const taken = await tx.get(doc(db, "clinics", String(next)));
+      if (!taken.exists()) break;
+      next += 1;
+    }
     tx.set(ref, { ...cur, clinicNo: next }, { merge: true });
     return next;
   });

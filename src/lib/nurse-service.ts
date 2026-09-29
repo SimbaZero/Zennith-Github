@@ -6,6 +6,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   getDocsFromCache,
   onSnapshot,
@@ -22,7 +23,6 @@ import {
 } from "@/lib/offline";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
-import { adherenceDocId } from "@/lib/reminders";
 
 // Reused, not duplicated — these were previously private to doctor-service.ts.
 // See doctor-service.ts for what each one actually does; the comments there
@@ -38,13 +38,21 @@ import {
   // (toBadgeStatus/resolvePatientNames are used
   // internally by this hook — no need to import
   // them separately here.)
+  usePatientFiles,
+  PATIENT_PAGE_SIZE,
   usePatientDirectory, // patient lookups have nothing doctor-specific in
   useFindPatientById, // them — re-exported below so nurse pages have one
   usePatientRecord, // import source instead of reaching into doctor-service.ts
   type DoctorAppointment,
 } from "@/lib/doctor-service";
 
-export { usePatientDirectory, useFindPatientById, usePatientRecord };
+export {
+  usePatientDirectory,
+  usePatientFiles,
+  PATIENT_PAGE_SIZE,
+  useFindPatientById,
+  usePatientRecord,
+};
 export type { DoctorAppointment as NurseAppointment };
 
 // ---------------------------------------------------------------------------
@@ -537,7 +545,7 @@ export async function setAdherence(
 ): Promise<void> {
   const date = todayIso();
   const write = setDoc(
-    doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
+    doc(db, "patients", patientId, "adherenceLogs", `${date}_${med}`),
     {
       med,
       date,
@@ -598,15 +606,30 @@ export async function saveDigitizedFile(
    *  the `clinicId` referenced below resolved to nothing. */
   clinicId?: number | null,
 ): Promise<{ patientId: string; matchedExisting: boolean }> {
+  // Digitizing registers patients and writes several tables, so it needs a
+  // connection and a clinic to file the patient under.
+  assertOnline();
+  if (clinicId == null) {
+    throw new Error(
+      "Your nurse account isn't linked to a clinic, so this file can't be saved. Contact your clinic admin.",
+    );
+  }
+
   let patientId: string;
   let matchedExisting = false;
   let medicalRecordNo: number | undefined;
 
-  const uSnap = await getDocs(
-    query(collection(db, "users"), where("idNumber", "==", data.idNumber)),
-  );
+  // Only look for an existing patient when the scan actually has an ID number.
+  // An empty one matches every patient registered without a document, so the
+  // scan would overwrite the wrong person's details and never create a new one.
+  const idNumber = data.idNumber.trim();
+  const uSnap = idNumber
+    ? await getDocs(
+        query(collection(db, "users"), where("idNumber", "==", idNumber)),
+      )
+    : null;
 
-  if (!uSnap.empty) {
+  if (uSnap && !uSnap.empty) {
     const userDocId = uSnap.docs[0].id;
     const pSnap = await getDocs(
       query(
@@ -669,9 +692,13 @@ export async function saveDigitizedFile(
       clinicId: clinicId ?? null,
     });
 
-    const pSnap = await getDoc(doc(db, "patients", patientId!));
-    const patientData = pSnap.data();
-    medicalRecordNo = patientData?.medicalRecordNo;
+    const pSnap = await getDocFromServer(doc(db, "patients", patientId!));
+    if (!pSnap.exists()) {
+      throw new Error(
+        `Patient ${patientId!} could not be found on the server after registering, so nothing is confirmed as saved. Please try again.`,
+      );
+    }
+    medicalRecordNo = pSnap.data().medicalRecordNo;
 
     await setDoc(
       doc(db, "patients", patientId!),
@@ -680,6 +707,14 @@ export async function saveDigitizedFile(
         dateOfBirth: data.dateOfBirth,
       },
       { merge: true },
+    );
+  }
+
+  // Without a medical record number the clinical details below would be
+  // skipped and the nurse still told "saved". Stop and say so instead.
+  if (medicalRecordNo == null) {
+    throw new Error(
+      `Patient ${patientId!} has no medical record number, so the clinical details were NOT saved.`,
     );
   }
 
@@ -721,6 +756,18 @@ export async function saveDigitizedFile(
       description: `Digitized file: ${data.notes || data.diagnosis || "no notes"}`,
       visitDate: todayIso(),
     });
+  }
+
+  // Confirm with the server instead of trusting that the writes above went
+  // through: read the patient and clinical record back before saying "saved".
+  const [savedPatient, savedRecord] = await Promise.all([
+    getDocFromServer(doc(db, "patients", patientId!)),
+    getDocFromServer(doc(db, "medicalRecords", String(medicalRecordNo))),
+  ]);
+  if (!savedPatient.exists() || !savedRecord.exists()) {
+    throw new Error(
+      "The server did not confirm that this file was saved, so treat it as not saved and try again.",
+    );
   }
 
   return { patientId: patientId!, matchedExisting };

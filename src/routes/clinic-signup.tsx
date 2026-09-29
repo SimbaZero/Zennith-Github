@@ -93,7 +93,11 @@ function ClinicSignup() {
       toast.error(
         isQuotaError(err)
           ? QUOTA_MESSAGE
-          : "Something went wrong submitting your application. Please try again.",
+          : `Something went wrong submitting your application. Please try again.${
+              err instanceof Object && "code" in err
+                ? ` (${String((err as { code: unknown }).code)})`
+                : ""
+            }`,
       );
     } finally {
       setSubmitting(false);
