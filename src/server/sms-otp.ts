@@ -15,7 +15,8 @@
 //                                    account has proved it receives texts on
 //   smsPhoneLimits/{number}          sends to a number from accounts that haven't
 //                                    verified it
-//   smsVerifiedPhoneLimits/{number}  sends to a number from accounts that have
+//   smsVerifiedPhoneLimits/{number}  sends to a number from the account that most
+//                                    recently verified it (the "holder")
 //   smsGlobalLimits/daily            all unverified sends, app-wide
 import type { SendSmsCodeResult, SmsCodeFailure, VerifySmsCodeResult } from "../lib/sms-otp";
 import { isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile } from "../lib/smsportal";
@@ -42,17 +43,20 @@ const MAX_ATTEMPTS_PER_ATTEMPT_WINDOW = 20;
 
 // Numbers entered at self-signup aren't verified, so sends from an account
 // that hasn't proved it receives texts on its number count against that number
-// and against an app-wide daily budget. Sends from accounts that have verified
-// the number count against a separate per-number limit that unverified
-// accounts can't use up, so nobody can lock a patient out, and extra accounts
-// on one number can't multiply the texts it gets.
+// and against an app-wide daily budget. The account that most recently
+// verified a number (its "holder") instead gets a separate per-number
+// allowance that no other account can use up, so nobody can lock the patient
+// who holds a number out; other accounts on the number stay on the shared
+// limits, so extra accounts can't multiply the texts it gets.
 const MAX_UNVERIFIED_SENDS_PER_PHONE = 10;
 const MAX_VERIFIED_SENDS_PER_PHONE = 10;
+// Far above normal sign-in use, but bounds what one verified number costs.
+const MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY = 30;
 const DAILY_WINDOW_MS = 24 * 60 * 60_000;
 const DEFAULT_UNVERIFIED_SENDS_PER_DAY = 200;
-// Reservations pinned to shared counters can lose a race; retry before
-// telling the patient "busy".
-const MAX_RESERVE_TRIES = 3;
+// Reservations pinned to shared counters can lose a race; retry, with a
+// short random wait so simultaneous requests spread out, before saying "busy".
+const MAX_RESERVE_TRIES = 5;
 
 /** SMS_OTP_UNVERIFIED_DAILY_LIMIT as a whole number (0 = none), else the default. */
 function unverifiedDailyLimit(env: unknown): number {
@@ -163,6 +167,7 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
     const outcome = await reserveSend(fs, patient.uid, phone, { codeHash, salt }, env);
     if ("reserved" in outcome) reserved = outcome.reserved;
     else if (outcome.result.ok || outcome.result.reason !== "busy" || tries >= MAX_RESERVE_TRIES) return outcome.result;
+    else await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40 * tries));
   }
 
   // Plain ASCII keeps this to a single 160-character SMS segment.
@@ -186,10 +191,8 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
         { mask: ["sentAt", "codeHash", "salt", "expiresAt"], precondition: { updateTime: reserved.challengeVersion } },
       )
       .catch(() => {});
-    if (reserved.global) {
-      await fs
-        .write("smsGlobalLimits", "daily", reserved.global.before, { precondition: { updateTime: reserved.global.version } })
-        .catch(() => {});
+    if (reserved.globalWindowStart !== undefined) {
+      await giveBackGlobalSlot(fs, reserved.globalWindowStart).catch(() => {});
     }
     return { ok: false, reason: "send-failed" };
   }
@@ -204,8 +207,27 @@ interface Reserved {
   sentAt: number;
   previousSentAt: number;
   challengeVersion: string;
-  /** The app-wide counter before this send, to give the slot back if the text fails. */
-  global?: { version: string; before: { windowStart: number; sends: number } };
+  /** Set when this send used an app-wide slot, to give it back if the text fails. */
+  globalWindowStart?: number;
+}
+
+/**
+ * Takes one send back off the app-wide counter, as long as it's still the
+ * same daily window. Other sends may have changed the counter since, so this
+ * re-reads and retries rather than restoring an old value.
+ */
+async function giveBackGlobalSlot(fs: FirestoreAdmin, windowStart: number) {
+  for (let tries = 0; tries < 3; tries++) {
+    const doc = await fs.get("smsGlobalLimits", "daily");
+    const sends = Number(doc?.data.sends ?? 0);
+    if (!doc?.updateTime || Number(doc.data.windowStart) !== windowStart || sends <= 0) return;
+    try {
+      await fs.write("smsGlobalLimits", "daily", { windowStart, sends: sends - 1 }, { precondition: { updateTime: doc.updateTime } });
+      return;
+    } catch (error) {
+      if (!(error instanceof WriteConflict)) throw error;
+    }
+  }
 }
 
 /** Checks every limit against fresh reads and, if all allow it, reserves the send. */
@@ -240,18 +262,23 @@ async function reserveSend(
 
   const writes: FirestoreWrite[] = [];
   const phoneKey = phone.slice(1);
-  let globalIndex = -1;
-  let globalBefore: { windowStart: number; sends: number } | undefined;
-  if (prev.verifiedPhone === phone) {
-    const doc = await fs.get("smsVerifiedPhoneLimits", phoneKey);
-    const perPhone = windowCount(doc, SEND_WINDOW_MS, now);
+  let globalWindowStart: number | undefined;
+  const verifiedDoc = prev.verifiedPhone === phone ? await fs.get("smsVerifiedPhoneLimits", phoneKey) : null;
+  if (verifiedDoc?.data.holder === uid) {
+    const perPhone = windowCount(verifiedDoc, SEND_WINDOW_MS, now);
     if (perPhone.sends >= MAX_VERIFIED_SENDS_PER_PHONE) {
       return { result: { ok: false, reason: "rate-limited", retryAt: perPhone.windowStart + SEND_WINDOW_MS } };
     }
+    const dayOpen = now - Number(verifiedDoc.data.dayStart ?? 0) < DAILY_WINDOW_MS;
+    const dayStart = dayOpen ? Number(verifiedDoc.data.dayStart) : now;
+    const daySends = dayOpen ? Number(verifiedDoc.data.daySends ?? 0) : 0;
+    if (daySends >= MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY) {
+      return { result: { ok: false, reason: "rate-limited", retryAt: dayStart + DAILY_WINDOW_MS } };
+    }
     writes.push({
       set: ["smsVerifiedPhoneLimits", phoneKey],
-      data: { ...perPhone, sends: perPhone.sends + 1 },
-      precondition: pinnedTo(doc),
+      data: { holder: uid, ...perPhone, sends: perPhone.sends + 1, dayStart, daySends: daySends + 1 },
+      precondition: pinnedTo(verifiedDoc),
     });
   } else {
     const phoneDoc = await fs.get("smsPhoneLimits", phoneKey);
@@ -271,8 +298,7 @@ async function reserveSend(
       data: { ...perPhone, sends: perPhone.sends + 1 },
       precondition: pinnedTo(phoneDoc),
     });
-    globalIndex = writes.length;
-    globalBefore = global;
+    globalWindowStart = global.windowStart;
     writes.push({
       set: ["smsGlobalLimits", "daily"],
       data: { ...global, sends: global.sends + 1 },
@@ -306,7 +332,7 @@ async function reserveSend(
         sentAt: now,
         previousSentAt,
         challengeVersion: versions.at(-1) ?? "",
-        global: globalBefore ? { version: versions[globalIndex] ?? "", before: globalBefore } : undefined,
+        globalWindowStart,
       },
     };
   } catch (error) {
@@ -382,6 +408,15 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
   } catch (error) {
     if (error instanceof WriteConflict) return { ok: false, reason: "busy" };
     throw error;
+  }
+
+  // This account now holds the number: only the latest account to verify a
+  // number gets its verified allowance, so accounts that verified it in the
+  // past (an earlier owner, a borrowed phone) can't use it up.
+  if (verifiedPhone) {
+    await fs
+      .write("smsVerifiedPhoneLimits", verifiedPhone.slice(1), { holder: patient.uid }, { mask: ["holder"] })
+      .catch((error) => console.error("[sms-otp] couldn't record the number's holder:", error));
   }
 
   // The first verified code turns text-message sign-in on for this account.

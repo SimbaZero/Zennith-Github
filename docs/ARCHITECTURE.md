@@ -37,11 +37,11 @@ flowchart LR
      the number on `users/{legacyUserId}.contactNum`, and keeps only a salted
      hash in `smsChallenges/{uid}` (5-minute expiry, 5 attempts per code and
      20 wrong codes per day, 1 send a minute and 5 an hour per account).
-     Until an account has verified its number, its sends also count against
-     10 an hour per number and an app-wide daily cap; after that, against a
-     separate 10 an hour per number that unverified accounts can't use up. The
-     first verified code records the number server-side and sets
-     `profiles/{uid}.twoFactorMethod = "sms"`.
+     Sends also count against 10 an hour per number and an app-wide daily
+     cap, except for the account that most recently verified the number (its
+     holder): it gets a separate 10 an hour and 30 a day per number that no
+     other account can use up. A verified code records the number and its
+     holder server-side and sets `profiles/{uid}.twoFactorMethod = "sms"`.
    Users can't reset their own 2FA; an admin clears `totpSecret` and
    `twoFactorMethod` in the console.
 4. **Session** — after 2FA, `setAuth(role, username, facilityId)` caches the role in
