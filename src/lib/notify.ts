@@ -6,6 +6,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -71,22 +72,62 @@ export function useNotifications(userId?: number | null): AppNotification[] {
   return items;
 }
 
+/**
+ * Turns a dedupe key into a usable Firestore document id. Ids can't contain
+ * "/" and are capped in length, so anything outside [A-Za-z0-9_-] collapses to
+ * a dash. The mapping is deterministic, which is the whole point: the same key
+ * always addresses the same document.
+ */
+function dedupeDocId(key: string): string {
+  return `dk-${key.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 400)}`;
+}
+
+/**
+ * The one place a notification document is written.
+ *
+ * Without a dedupeKey this is addDoc, as before — every call is a new
+ * notification. With one, the key decides the document id and the write is a
+ * setDoc, so a repeat call for the same key overwrites instead of adding a
+ * second copy. That is what makes "once a day" hold when the same page is open
+ * in three tabs on two devices: they all compute the same id and land on the
+ * same document, with no read-before-write and no race to lose.
+ */
+async function writeNotification(
+  payload: Record<string, unknown>,
+  dedupeKey?: string,
+): Promise<void> {
+  if (dedupeKey) {
+    await setDoc(doc(db, "notifications", dedupeDocId(dedupeKey)), payload);
+    return;
+  }
+  await addDoc(collection(db, "notifications"), payload);
+}
+
 /** Send to one user by numeric userId. */
 export async function notifyUser(input: {
   userId: number;
   title: string;
   message: string;
   link?: string;
+  /**
+   * Send this notification at most once per key. The key must identify the
+   * recipient as well as the occasion — a per-clinic-per-day key with no
+   * recipient in it would have each user overwriting the others' copy.
+   */
+  dedupeKey?: string;
 }): Promise<void> {
-  await addDoc(collection(db, "notifications"), {
-    notifId: Date.now(),
-    userId: input.userId,
-    title: input.title,
-    message: input.message,
-    isRead: false,
-    timeSent: new Date().toISOString(),
-    ...(input.link ? { link: input.link } : {}),
-  });
+  await writeNotification(
+    {
+      notifId: Date.now(),
+      userId: input.userId,
+      title: input.title,
+      message: input.message,
+      isRead: false,
+      timeSent: new Date().toISOString(),
+      ...(input.link ? { link: input.link } : {}),
+    },
+    input.dedupeKey,
+  );
 }
 
 /**
@@ -185,6 +226,12 @@ export async function notifyClinicAdmins(input: {
   title: string;
   message: string;
   link?: string;
+  /**
+   * Send at most once per key per admin. The caller gives one key for the
+   * occasion and each admin's profile id is appended here, so every admin
+   * gets their own copy and a repeat call overwrites it rather than piling up.
+   */
+  dedupeKey?: string;
 }): Promise<void> {
   try {
     const snap = await getDocs(
@@ -196,17 +243,20 @@ export async function notifyClinicAdmins(input: {
     );
     await Promise.all(
       snap.docs.map((d) =>
-        addDoc(collection(db, "notifications"), {
-          notifId: Date.now(),
-          // Admins are addressed by their profile document id, since they
-          // have no numeric users.userId.
-          profileId: d.id,
-          title: input.title,
-          message: input.message,
-          isRead: false,
-          timeSent: new Date().toISOString(),
-          ...(input.link ? { link: input.link } : {}),
-        }),
+        writeNotification(
+          {
+            notifId: Date.now(),
+            // Admins are addressed by their profile document id, since they
+            // have no numeric users.userId.
+            profileId: d.id,
+            title: input.title,
+            message: input.message,
+            isRead: false,
+            timeSent: new Date().toISOString(),
+            ...(input.link ? { link: input.link } : {}),
+          },
+          input.dedupeKey ? `${input.dedupeKey}-${d.id}` : undefined,
+        ),
       ),
     );
   } catch (err) {

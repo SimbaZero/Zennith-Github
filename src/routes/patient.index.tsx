@@ -10,6 +10,7 @@ import {
   usePatientNotifications,
 } from "@/lib/patient-service";
 import { MedicationReminders } from "@/components/MedicationReminders";
+import { PatientCalledCard } from "@/components/PatientCalledCard";
 import {
   FileText,
   Calendar,
@@ -111,6 +112,11 @@ function PatientDashboard() {
           <p className="text-2xl font-mono font-semibold">{timeStr}</p>
         </div>
       </div>
+
+      {/* Nothing on this page matters more than "go in now", so it sits
+          directly under the greeting. Renders nothing unless this patient has
+          actually been called. */}
+      <PatientCalledCard patientId={patient?.patientId} />
 
       <div className="bg-white rounded-xl border p-5 mb-6">
         <div className="flex items-center gap-2 mb-2">

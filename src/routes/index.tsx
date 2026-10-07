@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Github } from "lucide-react";
 import { ZennithStar } from "@/components/ZennithStar";
@@ -618,7 +618,7 @@ function TeamAvatar({ name, base }: { name: string; base: string }) {
   if (!src) {
     return (
       <div
-        className="w-24 h-24 rounded-full bg-[oklch(0.22_0.07_262)] flex items-center justify-center font-serif text-xl"
+        className="w-36 h-36 sm:w-40 sm:h-40 rounded-full bg-[oklch(0.22_0.07_262)] flex items-center justify-center font-serif text-4xl"
         style={{ color: GOLD }}
       >
         {initials}
@@ -629,7 +629,7 @@ function TeamAvatar({ name, base }: { name: string; base: string }) {
     <img
       src={src}
       alt={name}
-      className="w-24 h-24 rounded-full object-cover bg-[oklch(0.22_0.07_262)]"
+      className="w-36 h-36 sm:w-40 sm:h-40 rounded-full object-cover bg-[oklch(0.22_0.07_262)]"
     />
   );
 }
@@ -639,12 +639,73 @@ function TeamAvatar({ name, base }: { name: string; base: string }) {
  *  until it's found, rather than a broken image. */
 function TeamPortrait() {
   const src = usePhotoSrc("/team/group-photo");
+  // The thank-you arrives as the panel does, once — it's the last thing on the
+  // page, so animating it on mount would mean nobody ever sees it happen.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [arrived, setArrived] = useState(false);
+
+  useEffect(() => {
+    if (arrived) return;
+    const el = panelRef.current;
+    if (!el) return;
+    // No observer (older browser, or the server-rendered pass) — show the
+    // finished state rather than leaving the caption hidden.
+    if (typeof IntersectionObserver === "undefined") {
+      setArrived(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setArrived(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.3 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+    // `src` is a dependency because the panel element is replaced when the
+    // photo resolves — the observer has to move to the new one.
+  }, [src, arrived]);
+
+  // Every hidden and transition class is motion-safe:, so a device asking for
+  // reduced motion renders the final state with nothing moving or fading.
+  const rise = arrived
+    ? "motion-safe:opacity-100 motion-safe:translate-y-0"
+    : "motion-safe:opacity-0 motion-safe:translate-y-4";
+
   const caption = (
     <div className="absolute inset-x-0 bottom-0 p-6 sm:p-8">
-      <p className="font-serif text-2xl sm:text-3xl text-white">
-        Thank you for visiting Zennith
+      {/* The observer is what reveals the caption, so without scripting it
+          would never arrive. Show it outright in that case. */}
+      <noscript>
+        <style>{`.thank-you-line { opacity: 1 !important; translate: none !important; }`}</style>
+      </noscript>
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute inset-x-0 bottom-0 h-48 motion-safe:transition-opacity motion-safe:duration-[1600ms] ${
+          arrived ? "opacity-100" : "motion-safe:opacity-0"
+        }`}
+        style={{
+          background:
+            "radial-gradient(55% 120% at 18% 100%, oklch(0.84 0.13 85 / 0.22), transparent 70%)",
+        }}
+      />
+      <p
+        className={`thank-you-line relative font-serif text-2xl sm:text-3xl text-white motion-safe:transition-all motion-safe:duration-700 motion-safe:ease-out ${rise}`}
+      >
+        <span
+          className="text-3xl sm:text-4xl align-baseline"
+          style={{ color: GOLD }}
+        >
+          Thank you
+        </span>{" "}
+        for visiting Zennith
       </p>
-      <p className="mt-1 text-white/70 text-sm">
+      <p
+        className={`thank-you-line relative mt-1 text-white/70 text-sm motion-safe:transition-all motion-safe:duration-700 motion-safe:ease-out motion-safe:delay-300 ${rise}`}
+      >
         From all eight of us — we hope it makes a clinic's day a little easier.
       </p>
     </div>
@@ -652,13 +713,19 @@ function TeamPortrait() {
 
   if (!src) {
     return (
-      <div className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7] bg-gradient-to-br from-[oklch(0.22_0.1_255)] to-[oklch(0.16_0.07_265)]">
+      <div
+        ref={panelRef}
+        className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7] bg-gradient-to-br from-[oklch(0.22_0.1_255)] to-[oklch(0.16_0.07_265)]"
+      >
         {caption}
       </div>
     );
   }
   return (
-    <div className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7]">
+    <div
+      ref={panelRef}
+      className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7]"
+    >
       <img
         src={src}
         alt="The Zennith team"
@@ -693,36 +760,52 @@ function Team() {
           Johannesburg.
         </p>
 
-        <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-7">
           {TEAM_MEMBERS.map((m) => {
             const accent = ACCENTS[m.accent];
             return (
               <div
                 key={m.name}
-                className="flex flex-col rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 text-center transition-transform duration-200 hover:-translate-y-1 hover:bg-white/[0.07]"
+                className="group relative flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-7 text-center transition-all duration-300 ease-out hover:-translate-y-1.5 hover:bg-white/[0.08] hover:border-white/20 hover:shadow-2xl hover:shadow-black/30"
               >
-                <div
-                  className="mx-auto w-fit rounded-full p-[2px]"
+                {/* A thread of the member's own accent along the top edge, so
+                    the four cards read as a set without any of them changing
+                    size or weight. */}
+                <span
+                  aria-hidden
+                  className="absolute inset-x-0 top-0 h-[2px]"
                   style={{
-                    background: `linear-gradient(135deg, ${GOLD}, ${accent.fg})`,
+                    background: `linear-gradient(90deg, transparent, ${accent.fg}, transparent)`,
                   }}
-                >
-                  <TeamAvatar name={m.name} base={m.photo} />
+                />
+                <div className="relative mx-auto w-fit">
+                  {/* Soft glow in the accent colour, behind the portrait —
+                      brightens on hover rather than moving anything. */}
+                  <span
+                    aria-hidden
+                    className="absolute -inset-3 rounded-full blur-2xl opacity-30 transition-opacity duration-300 group-hover:opacity-55"
+                    style={{ background: accent.fg }}
+                  />
+                  <div
+                    className="relative rounded-full p-[3px]"
+                    style={{
+                      background: `linear-gradient(135deg, ${GOLD}, ${accent.fg})`,
+                    }}
+                  >
+                    <TeamAvatar name={m.name} base={m.photo} />
+                  </div>
                 </div>
                 <p
-                  className="mt-4 text-lg font-medium"
+                  className="mt-5 text-xl font-medium"
                   style={{ color: NAME_COLOR }}
                 >
                   {m.name}
                 </p>
-                <p
-                  className="mt-0.5 text-[13px] font-medium"
-                  style={{ color: GOLD }}
-                >
+                <p className="mt-1 text-sm font-medium" style={{ color: GOLD }}>
                   {m.role}
                 </p>
                 <p
-                  className="mt-3 text-[13px] leading-relaxed"
+                  className="mt-3 text-sm leading-relaxed"
                   style={{ color: BIO_COLOR }}
                 >
                   {m.bio}
@@ -731,7 +814,7 @@ function Team() {
                   {m.tags.map((tag) => (
                     <li
                       key={tag}
-                      className="rounded-full border px-2 py-0.5 text-[11px]"
+                      className="rounded-full border px-2.5 py-1 text-xs"
                       style={{
                         color: accent.fg,
                         backgroundColor: accent.tint,
@@ -743,16 +826,16 @@ function Team() {
                   ))}
                 </ul>
                 {m.github && (
-                  <div className="mt-auto pt-4">
+                  <div className="mt-auto pt-5">
                     <a
                       href={m.github}
                       target="_blank"
                       rel="noopener noreferrer"
                       aria-label={`${m.name} on GitHub`}
-                      className="inline-flex items-center gap-1.5 text-[13px] hover:underline"
+                      className="inline-flex items-center gap-1.5 text-sm hover:underline"
                       style={{ color: LINK_COLOR }}
                     >
-                      <Github size={14} /> GitHub
+                      <Github size={15} /> GitHub
                     </a>
                   </div>
                 )}

@@ -6,6 +6,7 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
 } from "@/lib/patient-service";
+import { PatientCalledCard } from "@/components/PatientCalledCard";
 import { useOnline } from "@/lib/offline";
 import { Wifi, WifiOff } from "lucide-react";
 import { toast } from "sonner";
@@ -47,6 +48,10 @@ function Alerts() {
           {online ? "Online" : "Offline — changes will sync"}
         </span>
       </div>
+
+      {/* The "You're being called" notification lands in the list below, so
+          the thing to do about it belongs on this page too. */}
+      <PatientCalledCard patientId={patient?.patientId} />
 
       <div className="bg-white rounded-xl border overflow-hidden">
         <div className="p-5 border-b flex items-center justify-between">

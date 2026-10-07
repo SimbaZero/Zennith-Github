@@ -4,9 +4,14 @@ import {
   MessageCircle,
   Plus,
   ArrowRight,
+  ArrowRightLeft,
+  Check,
   CheckCircle,
   ClipboardList,
+  Megaphone,
+  Stethoscope,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -66,8 +71,40 @@ const TRIAGE_MAX_WAIT_MINUTES: Record<TriageLevel, number> = {
   green: 60,
 };
 
-const BTN_SECONDARY =
-  "text-xs font-medium border px-3 py-1.5 rounded-md hover:bg-secondary";
+// The coloured left edge of a queue row, so urgency registers before any of
+// the text is read. Same four triage colours as the pills.
+const TRIAGE_EDGE: Record<TriageLevel, string> = {
+  red: "bg-red-600",
+  orange: "bg-orange-500",
+  yellow: "bg-yellow-400",
+  green: "bg-green-500",
+};
+
+// Only the two levels that need acting on now get a tint — tinting all four
+// would make the list a block of colour and tell reception nothing.
+const TRIAGE_ROW_TINT: Record<TriageLevel, string> = {
+  red: "bg-red-50",
+  orange: "bg-orange-50/60",
+  yellow: "bg-white",
+  green: "bg-white",
+};
+
+// Icon shown in place of a queue position for the statuses that don't have
+// one — a patient already in a room isn't "4th in line", and a dash said
+// nothing about where they actually are.
+const STATUS_ICON: Record<string, LucideIcon> = {
+  called: Megaphone,
+  "in-room": Stethoscope,
+  handoff: ArrowRightLeft,
+};
+
+// Touch targets. These rows are worked on a tablet, so every action is at
+// least 40px tall and nothing in them is under 12px.
+const BTN_BASE =
+  "min-h-[40px] px-4 text-sm font-medium rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors";
+// One solid button per row — the next step for that patient. Signal blue.
+const BTN_PRIMARY = `${BTN_BASE} bg-[oklch(0.55_0.18_245)] text-white hover:bg-[oklch(0.49_0.18_245)] disabled:opacity-50`;
+const BTN_OUTLINE = `${BTN_BASE} border bg-white hover:bg-secondary`;
 
 // How long a called patient can stay "called" before reception is prompted.
 // Someone called but never marked as arrived stalls the queue silently —
@@ -602,7 +639,7 @@ function QueuePage() {
               <span
                 className={`w-2.5 h-2.5 rounded-full ${TRIAGE_COLORS[t].split(" ")[0]}`}
               />
-              <span className="text-[10px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {TRIAGE_LABELS[t]}
               </span>
             </span>
@@ -761,117 +798,175 @@ function QueuePage() {
                   ? active.filter((o, i) => o.status === "waiting" && i <= idx)
                       .length
                   : null;
+              // Patients with no queue position are somewhere specific —
+              // called, in a room, or being handed over — so say which.
+              const StatusIcon =
+                position == null ? (STATUS_ICON[q.status] ?? ArrowRight) : null;
 
               return (
                 <li
                   key={q.id}
-                  className="flex items-start gap-3 p-3 rounded-lg border bg-white hover:bg-secondary/30"
+                  className={`relative overflow-hidden rounded-xl border transition-shadow hover:shadow-sm ${TRIAGE_ROW_TINT[q.triage]}`}
                 >
-                  <div className="w-9 shrink-0 text-center pt-0.5">
-                    {position != null ? (
-                      <>
-                        <p className="text-xl font-bold leading-none">
-                          {position}
-                        </p>
-                        <p className="text-[9px] text-muted-foreground mt-0.5">
-                          in queue
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-lg leading-none pt-1">—</p>
-                    )}
-                  </div>
+                  {/* Urgency before the text: a 5px edge in the triage
+                      colour, with a faint matching tint on red and orange. */}
+                  <span
+                    aria-hidden
+                    className={`absolute left-0 top-0 bottom-0 w-[5px] ${TRIAGE_EDGE[q.triage]}`}
+                  />
 
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-semibold text-sm">{q.patientName}</p>
-                      <span
-                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${TRIAGE_COLORS[q.triage]}`}
-                      >
-                        {TRIAGE_SHORT[q.triage]}
-                      </span>
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded-full border ${STATUS_STYLE[q.status] ?? ""}`}
-                      >
-                        {STATUS_TEXT[q.status] ?? q.status}
-                      </span>
+                  <div className="flex flex-col sm:flex-row sm:items-start gap-3 p-3 pl-5">
+                    <div className="flex items-center gap-3 shrink-0 sm:w-14 sm:flex-col sm:gap-1">
+                      {position != null ? (
+                        <>
+                          <span className="w-10 h-10 shrink-0 rounded-full bg-[oklch(0.16_0.07_265)] text-white text-base font-bold flex items-center justify-center">
+                            {position}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            in queue
+                          </span>
+                        </>
+                      ) : (
+                        <span
+                          title={STATUS_TEXT[q.status] ?? q.status}
+                          className="w-10 h-10 shrink-0 rounded-full border bg-white text-muted-foreground flex items-center justify-center"
+                        >
+                          {StatusIcon ? <StatusIcon size={18} /> : null}
+                        </span>
+                      )}
                     </div>
 
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      {[q.patientId, q.reason].filter(Boolean).join(" · ")}
-                    </p>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-base font-semibold">
+                          {q.patientName}
+                        </p>
+                        <span
+                          className={`text-xs font-semibold px-2.5 py-1 rounded-full ${TRIAGE_COLORS[q.triage]}`}
+                        >
+                          {TRIAGE_SHORT[q.triage]}
+                        </span>
+                        <span
+                          className={`text-xs px-2.5 py-1 rounded-full border ${STATUS_STYLE[q.status] ?? ""}`}
+                        >
+                          {STATUS_TEXT[q.status] ?? q.status}
+                        </span>
+                        {/* The patient tapped "I'm on my way". Informational
+                            only — it says the call was heard, not that anyone
+                            has arrived, so no button reads it and the no-show
+                            prompt below still applies. */}
+                        {q.patientAcknowledgedAt && (
+                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                            <Check size={14} /> Confirmed coming
+                          </span>
+                        )}
+                      </div>
 
-                    {/* Called but never arrived. Without this the entry just
-                        sits as "Called" indefinitely and nobody notices. */}
-                    {q.status === "called" &&
-                      q.calledAt &&
-                      (now.getTime() - new Date(q.calledAt).getTime()) / 60000 >
-                        NO_SHOW_AFTER_MIN && (
-                        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
-                          <p className="text-xs text-amber-900">
-                            Called{" "}
-                            {Math.round(
-                              (now.getTime() - new Date(q.calledAt).getTime()) /
-                                60000,
-                            )}{" "}
-                            min ago but hasn't arrived.
-                          </p>
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={() =>
-                                handleSetQueueStatus(q.id, "waiting")
-                              }
-                              className="text-xs font-medium border bg-white px-3 py-1.5 rounded-md hover:bg-secondary"
-                            >
-                              Put back in queue
-                            </button>
-                            <button
-                              onClick={() => handleRemoveFromQueue(q.id)}
-                              className="text-xs font-medium border bg-white px-3 py-1.5 rounded-md hover:bg-secondary"
-                            >
-                              Mark as no-show
-                            </button>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {[q.patientId, q.reason].filter(Boolean).join(" · ")}
+                      </p>
+
+                      {/* Called but never arrived. Without this the entry just
+                          sits as "Called" indefinitely and nobody notices. */}
+                      {q.status === "called" &&
+                        q.calledAt &&
+                        (now.getTime() - new Date(q.calledAt).getTime()) /
+                          60000 >
+                          NO_SHOW_AFTER_MIN && (
+                          <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+                            <p className="text-xs text-amber-900">
+                              Called{" "}
+                              {Math.round(
+                                (now.getTime() -
+                                  new Date(q.calledAt).getTime()) /
+                                  60000,
+                              )}{" "}
+                              min ago but hasn't arrived.
+                            </p>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <button
+                                onClick={() =>
+                                  handleSetQueueStatus(q.id, "waiting")
+                                }
+                                className={BTN_OUTLINE}
+                              >
+                                Put back in queue
+                              </button>
+                              <button
+                                onClick={() => handleRemoveFromQueue(q.id)}
+                                className={BTN_OUTLINE}
+                              >
+                                Mark as no-show
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
 
-                    {/* Wait time. Over-target is a quiet amber marker, not a
-                        red shout — reception can't speed up a clinician, but
-                        they DO need to see when to escalate to a nurse. */}
-                    <p className="text-xs mt-1.5 text-muted-foreground">
-                      Waiting {waitMin} min
-                      {target > 0 ? ` · target ${target} min` : " · immediate"}
-                      {overdue && (
-                        <span className="ml-2 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
-                          over target
+                      {/* Wait time stays plain text. The numbers in
+                          TRIAGE_MAX_WAIT_MINUTES are the SATS guideline for
+                          the level, not a wait this clinic is promising — a
+                          filling bar reads as exactly that promise, down to
+                          the minute, which no clinic can make. Past the
+                          guideline is an amber note, not a red one: reception
+                          can't speed up a clinician, they just need to know
+                          when to escalate to a nurse. */}
+                      <p className="mt-2 text-sm">
+                        <span
+                          className={
+                            overdue
+                              ? "font-medium text-amber-700"
+                              : "text-muted-foreground"
+                          }
+                        >
+                          Waiting {waitMin} min
                         </span>
-                      )}
-                    </p>
+                        {target === 0 ? (
+                          <span
+                            className={
+                              overdue
+                                ? "text-amber-700"
+                                : "text-muted-foreground"
+                            }
+                          >
+                            {" "}
+                            · should be seen immediately
+                          </span>
+                        ) : (
+                          overdue && (
+                            <span className="text-amber-700">
+                              {" "}
+                              — past the usual SATS guideline for this level
+                            </span>
+                          )
+                        )}
+                      </p>
 
-                    <p className="text-xs mt-0.5">
-                      {q.handedOffTo ? (
-                        <span className="text-purple-700">
-                          Being handed to <strong>{q.handedOffTo}</strong>
-                        </span>
-                      ) : q.clinician ? (
-                        <span className="text-slate-700">
-                          Seeing <strong>{q.clinician}</strong>
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground italic">
-                          No clinician assigned yet
-                        </span>
-                      )}
-                    </p>
-                  </div>
+                      <p className="text-xs mt-1.5">
+                        {q.handedOffTo ? (
+                          <span className="text-purple-700">
+                            Being handed to <strong>{q.handedOffTo}</strong>
+                          </span>
+                        ) : q.clinician ? (
+                          <span className="text-slate-700">
+                            Seeing <strong>{q.clinician}</strong>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground italic">
+                            No clinician assigned yet
+                          </span>
+                        )}
+                      </p>
+                    </div>
 
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <div className="flex gap-1 items-center">
+                    {/* One solid button per row — the next step for this
+                        patient. Everything else is outlined so there is never
+                        a question of what to press. */}
+                    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:shrink-0">
                       {q.status === "waiting" && (
                         <>
                           <button
                             onClick={() => handleSetQueueStatus(q.id, "called")}
-                            className="text-xs font-medium bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700"
+                            className={BTN_PRIMARY}
                           >
                             Call
                           </button>
@@ -879,7 +974,7 @@ function QueuePage() {
                             onClick={() =>
                               handleSetQueueStatus(q.id, "in-room")
                             }
-                            className={BTN_SECONDARY}
+                            className={BTN_OUTLINE}
                           >
                             Skip call
                           </button>
@@ -888,7 +983,7 @@ function QueuePage() {
                       {q.status === "called" && (
                         <button
                           onClick={() => handleSetQueueStatus(q.id, "in-room")}
-                          className={BTN_SECONDARY}
+                          className={BTN_PRIMARY}
                         >
                           In room
                         </button>
@@ -899,7 +994,7 @@ function QueuePage() {
                             <input
                               autoFocus
                               placeholder="To clinician"
-                              className="w-28 text-xs border rounded-md px-2 py-1.5"
+                              className="w-full sm:w-36 min-h-[40px] text-sm border rounded-lg px-3"
                               onKeyDown={(e) => {
                                 if (e.key === "Enter")
                                   handleHandoff(q.id, e.currentTarget.value);
@@ -909,18 +1004,18 @@ function QueuePage() {
                           ) : (
                             <>
                               <button
-                                onClick={() => setHandoffTarget(q.id)}
-                                className="text-xs font-medium flex items-center gap-1 bg-purple-600 text-white px-3 py-1.5 rounded-md hover:bg-purple-700"
-                              >
-                                <ArrowRight size={12} /> Handoff
-                              </button>
-                              <button
                                 onClick={() =>
                                   handleSetQueueStatus(q.id, "done")
                                 }
-                                className={BTN_SECONDARY}
+                                className={BTN_PRIMARY}
                               >
                                 Done
+                              </button>
+                              <button
+                                onClick={() => setHandoffTarget(q.id)}
+                                className={BTN_OUTLINE}
+                              >
+                                <ArrowRight size={14} /> Handoff
                               </button>
                             </>
                           )}
@@ -933,15 +1028,15 @@ function QueuePage() {
                               handleAcceptHandoff(q.id, q.handedOffTo || "")
                             }
                             disabled={!q.handedOffTo}
-                            className="text-xs font-medium flex items-center gap-1 bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 disabled:opacity-50"
+                            className={BTN_PRIMARY}
                           >
-                            <CheckCircle size={12} /> Accept
+                            <CheckCircle size={14} /> Accept
                           </button>
                           <button
                             onClick={() =>
                               handleSetQueueStatus(q.id, "in-room")
                             }
-                            className={BTN_SECONDARY}
+                            className={BTN_OUTLINE}
                           >
                             Cancel
                           </button>
@@ -950,7 +1045,7 @@ function QueuePage() {
                       <button
                         onClick={() => handleRemoveFromQueue(q.id)}
                         title="Remove from queue"
-                        className="text-sm w-8 h-8 flex items-center justify-center rounded-md border text-muted-foreground hover:text-destructive hover:border-destructive"
+                        className="ml-auto w-10 h-10 shrink-0 flex items-center justify-center rounded-lg text-lg text-muted-foreground/70 hover:bg-secondary hover:text-destructive"
                       >
                         ×
                       </button>

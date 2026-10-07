@@ -197,6 +197,13 @@ export interface QueueEntry {
   handedOffBy: string | null;
   inRoomAt: string | null;
   doneAt: string | null;
+  /**
+   * When the patient tapped "I'm on my way" after being called. The only
+   * field on a queue entry a patient is allowed to write — see the
+   * queue rule in firestore.rules. Informational: it tells reception the
+   * call landed, and never drives status.
+   */
+  patientAcknowledgedAt: string | null;
 }
 
 const TRIAGE_ORDER: Record<TriageLevel, number> = {
@@ -245,7 +252,22 @@ const toQueueEntry = (id: string, x: DocumentData): QueueEntry => ({
   handedOffBy: x.handedOffBy ?? null,
   inRoomAt: x.inRoomAt ?? null,
   doneAt: x.doneAt ?? null,
+  patientAcknowledgedAt: timestampToIso(x.patientAcknowledgedAt),
 });
+
+/**
+ * Queue timestamps are ISO strings, but patientAcknowledgedAt is written with
+ * serverTimestamp() so the clinic's record of it doesn't depend on a patient
+ * phone's clock. That arrives as a Timestamp — and, in the snapshot raised
+ * locally before the server confirms the write, as null. Both become null/ISO
+ * here so callers never see a Timestamp.
+ */
+function timestampToIso(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  const asDate = (value as Partial<Timestamp>).toDate?.();
+  return asDate ? asDate.toISOString() : null;
+}
 
 function sortQueue(rows: QueueEntry[]): QueueEntry[] {
   const rank = {
@@ -279,6 +301,32 @@ export function subscribeQueue(
     q,
     (snap) =>
       onChange(sortQueue(snap.docs.map((d) => toQueueEntry(d.id, d.data())))),
+    (err) => onError?.(err),
+  );
+}
+
+/**
+ * One patient's own live queue entry — the active one, if they have it.
+ *
+ * Same onSnapshot shape as subscribeQueue above, scoped by patientId instead
+ * of facilityId, so a patient's page watches only their own row. Done entries
+ * are dropped; if somehow more than one is active, sortQueue's ordering means
+ * the most urgent comes first.
+ */
+export function subscribePatientQueueEntry(
+  patientId: string,
+  onChange: (entry: QueueEntry | null) => void,
+  onError?: (e: unknown) => void,
+): () => void {
+  const q = query(collection(db, "queue"), where("patientId", "==", patientId));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const active = sortQueue(
+        snap.docs.map((d) => toQueueEntry(d.id, d.data())),
+      ).filter((entry) => entry.status !== "done");
+      onChange(active[0] ?? null);
+    },
     (err) => onError?.(err),
   );
 }
@@ -352,6 +400,9 @@ export async function addToQueue(input: {
     handedOffBy: null,
     inRoomAt: null,
     doneAt: null,
+    // Set by the patient alone, via acknowledgeCalled, once they've been
+    // called. Initialised here so the document shape is the same either way.
+    patientAcknowledgedAt: null,
   });
 
   // Audit log
@@ -404,6 +455,26 @@ export async function callPatient(
     by: auth.currentUser?.uid ?? "system",
     details: `Called by ${entry.clinician || "reception"}`,
     facilityId: entry.facilityId,
+  });
+}
+
+/**
+ * The patient's "I'm on my way" after being called.
+ *
+ * This is the one and only queue write a patient is allowed to make, and it
+ * touches one field: patientAcknowledgedAt. Status stays staff-only — a
+ * patient cannot put themselves in a room, and the firestore.rules queue rule
+ * enforces that with hasOnly(["patientAcknowledgedAt"]) rather than trusting
+ * this function to be the only caller.
+ *
+ * serverTimestamp() because the clinic's record of when the call was answered
+ * should not depend on how a patient's phone clock is set. Single field, so no
+ * transaction — there is nothing here to read first and nothing to race with.
+ */
+export async function acknowledgeCalled(entryId: string): Promise<void> {
+  assertOnline();
+  await updateDoc(doc(db, "queue", entryId), {
+    patientAcknowledgedAt: serverTimestamp(),
   });
 }
 
@@ -1650,7 +1721,9 @@ export async function signUpPatient(
       // fallen behind the data made every signup fail with "permission-denied".
       for (let i = 0; i < 200; i++) {
         const u = await tx.get(doc(fdb, "users", String(next.userNo)));
-        const m = await tx.get(doc(fdb, "medicalRecords", String(next.recordNo)));
+        const m = await tx.get(
+          doc(fdb, "medicalRecords", String(next.recordNo)),
+        );
         if (!u.exists() && !m.exists()) break;
         next = {
           patientNo: next.patientNo + 1,
@@ -1674,53 +1747,65 @@ export async function signUpPatient(
         throw e;
       });
     await Promise.all([
-      tag("users", setDoc(doc(fdb, "users", String(ids.userNo)), {
-        userId: ids.userNo,
-        names,
-        surname,
-        role: "Patient",
-        idNumber,
-        ...(input.idType ? { idType: input.idType } : {}),
-        contactNum: input.phone.trim(),
-        city: "",
-        suburb: "",
-        email,
-        DOB: input.dob || null,
-        Age: ageFromDob(input.dob),
-      })),
-      tag("medicalRecords", setDoc(doc(fdb, "medicalRecords", String(ids.recordNo)), {
-        medicalRecordNo: ids.recordNo,
-        insurancePolicyNumber: null,
-        lastVisit: null,
-        allergies: null,
-        bloodType: null,
-        prescription: null,
-      })),
-      tag("patients", setDoc(doc(fdb, "patients", patientId), {
-        patientId,
-        userId: ids.userNo,
-        medicalRecordNo: ids.recordNo,
-        chronicCondition: "Not yet assessed",
-        emergencyContactName: "",
-        emergencyContactNo: "",
-        // Duplicates of the medicalRecords fields — see PatientUpdateInput.
-        insurancePolicyNumber: null,
-        lastVisit: null,
-        clinicId: input.clinicId,
-      })),
-      tag("profiles", setDoc(doc(fdb, "profiles", cred.user.uid), {
-        username: email,
-        role: "patient",
-        fullName: input.fullName.trim(),
-        email,
-        legacyUserId: ids.userNo,
-        // Stored directly so Firestore security rules can check "is this
-        // patient reading their own record?" without following a chain of
-        // lookups a rule can't perform.
-        patientId,
-        builtin: false,
-        createdAt: new Date().toISOString(),
-      })),
+      tag(
+        "users",
+        setDoc(doc(fdb, "users", String(ids.userNo)), {
+          userId: ids.userNo,
+          names,
+          surname,
+          role: "Patient",
+          idNumber,
+          ...(input.idType ? { idType: input.idType } : {}),
+          contactNum: input.phone.trim(),
+          city: "",
+          suburb: "",
+          email,
+          DOB: input.dob || null,
+          Age: ageFromDob(input.dob),
+        }),
+      ),
+      tag(
+        "medicalRecords",
+        setDoc(doc(fdb, "medicalRecords", String(ids.recordNo)), {
+          medicalRecordNo: ids.recordNo,
+          insurancePolicyNumber: null,
+          lastVisit: null,
+          allergies: null,
+          bloodType: null,
+          prescription: null,
+        }),
+      ),
+      tag(
+        "patients",
+        setDoc(doc(fdb, "patients", patientId), {
+          patientId,
+          userId: ids.userNo,
+          medicalRecordNo: ids.recordNo,
+          chronicCondition: "Not yet assessed",
+          emergencyContactName: "",
+          emergencyContactNo: "",
+          // Duplicates of the medicalRecords fields — see PatientUpdateInput.
+          insurancePolicyNumber: null,
+          lastVisit: null,
+          clinicId: input.clinicId,
+        }),
+      ),
+      tag(
+        "profiles",
+        setDoc(doc(fdb, "profiles", cred.user.uid), {
+          username: email,
+          role: "patient",
+          fullName: input.fullName.trim(),
+          email,
+          legacyUserId: ids.userNo,
+          // Stored directly so Firestore security rules can check "is this
+          // patient reading their own record?" without following a chain of
+          // lookups a rule can't perform.
+          patientId,
+          builtin: false,
+          createdAt: new Date().toISOString(),
+        }),
+      ),
     ]);
 
     return { ok: true, patientId };
@@ -1949,7 +2034,8 @@ export async function listClinics(): Promise<ClinicRecord[]> {
         clinicId: Number(data.clinicId),
         clinicName: data.clinicName ?? `Clinic ${data.clinicId}`,
         type: (data.type === "private" ? "private" : "public") as
-          "public" | "private",
+          | "public"
+          | "private",
         address: data.Coordinates,
         // Existing pre-loaded clinics have no status field at all — treat
         // those as already active rather than newly pending.

@@ -40,6 +40,20 @@ service cloud.firestore {
     match /queue/{entryId} {
       allow read: if true;
       allow write: if isStaff();
+
+      // A patient may answer their own call ("I'm on my way") and do nothing
+      // else to the entry. Status, triage, clinician and the rest stay
+      // staff-only exactly as before: this grants `update`, not `write`, so
+      // a patient still cannot create or delete an entry either.
+      //
+      // hasOnly() is the whole safeguard, and it is deliberately a whitelist
+      // of one. A write that sets patientAcknowledgedAt AND status fails,
+      // because affectedKeys() then has two entries — so there is no way to
+      // ride a status change in alongside the acknowledgment.
+      allow update: if role() == "patient"
+                    && resource.data.patientId == myPatientId()
+                    && request.resource.data.diff(resource.data)
+                       .affectedKeys().hasOnly(["patientAcknowledgedAt"]);
     }
 
     // Patient signup reserves ID numbers from here BEFORE the account

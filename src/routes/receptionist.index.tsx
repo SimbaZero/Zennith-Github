@@ -6,7 +6,7 @@ import {
   AlertTriangle,
   ArrowRight,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNow } from "@/lib/store";
 import type {
@@ -39,6 +39,20 @@ let clinicData: typeof import("@/lib/clinic-data") | null = null;
 async function getClinicData() {
   if (!clinicData) clinicData = await import("@/lib/clinic-data");
   return clinicData;
+}
+
+/**
+ * Today's date as YYYY-MM-DD in the user's own timezone.
+ *
+ * Deliberately not new Date().toISOString().slice(0, 10): that is UTC, which
+ * in South Africa (UTC+2) is still yesterday until 02:00. A summary sent at
+ * 00:30 would be filed under the previous day and then suppressed when the
+ * real morning arrived.
+ */
+function localDateKey(d: Date): string {
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
 }
 
 function ReceptionDashboard() {
@@ -95,6 +109,93 @@ function ReceptionDashboard() {
 
   const getWaitTime = (joinedAt: string) =>
     Math.floor((now.getTime() - new Date(joinedAt).getTime()) / 60000);
+
+  // Daily summary of red-triage activity.
+  //
+  // This app has no scheduler or cron — nothing runs unless a page is open —
+  // so the summary fires the first time the reception dashboard is opened on a
+  // given calendar day, which in practice is the start of a shift. It reads the
+  // queue this dashboard already subscribes to, so it costs no extra query.
+  //
+  // Once per day per recipient is enforced by the dedupeKey, not by this ref:
+  // the ref only stops it repeating within one mount. The key carries the local
+  // date and the recipient, so a second tab, a reload, or a different device
+  // all write to the same document and overwrite it instead of adding another.
+  const summarySent = useRef(false);
+  useEffect(() => {
+    if (!clinicReady || summarySent.current) return;
+    // An empty queue array is also the state before the first snapshot lands —
+    // without this, a quiet morning and a not-yet-loaded queue are the same
+    // thing, and the ref would burn on the latter.
+    if (queue.length === 0) return;
+    const clinicId = receptionist?.clinicId;
+    if (clinicId == null) return;
+
+    const redWaiting = queue.filter(
+      (q) =>
+        q.triage === "red" && (q.status === "waiting" || q.status === "called"),
+    );
+    const today = localDateKey(new Date());
+    const redSeenToday = queue.filter((q) => {
+      if (q.triage !== "red") return false;
+      // Past waiting — they have actually been taken in, not just queued.
+      const seenAt = q.inRoomAt ?? q.calledAt ?? q.doneAt;
+      return seenAt != null && localDateKey(new Date(seenAt)) === today;
+    }).length;
+
+    if (redWaiting.length === 0 && redSeenToday === 0) return;
+    summarySent.current = true;
+
+    const longestWait = redWaiting.reduce(
+      (max, q) =>
+        Math.max(
+          max,
+          Math.floor((Date.now() - new Date(q.joinedAt).getTime()) / 60000),
+        ),
+      0,
+    );
+    const parts: string[] = [];
+    if (redWaiting.length > 0) {
+      parts.push(
+        `${redWaiting.length} critical patient${redWaiting.length === 1 ? "" : "s"} waiting now, longest wait ${longestWait} min.`,
+      );
+    }
+    if (redSeenToday > 0) {
+      parts.push(
+        `${redSeenToday} critical patient${redSeenToday === 1 ? "" : "s"} seen today.`,
+      );
+    }
+    const title = "Critical patients today";
+    const message = parts.join(" ");
+    const userId = receptionist?.userId;
+
+    void (async () => {
+      try {
+        const { notifyUser, notifyClinicAdmins } = await import("@/lib/notify");
+        await Promise.all([
+          userId != null
+            ? notifyUser({
+                userId,
+                title,
+                message,
+                link: "/receptionist/queue",
+                dedupeKey: `red-summary-${clinicId}-${today}-user-${userId}`,
+              })
+            : Promise.resolve(),
+          notifyClinicAdmins({
+            clinicId,
+            title,
+            message,
+            link: "/admin/audit",
+            dedupeKey: `red-summary-${clinicId}-${today}-admin`,
+          }),
+        ]);
+      } catch (err) {
+        // A missed summary must never take the dashboard down with it.
+        console.error("Daily critical summary failed:", err);
+      }
+    })();
+  }, [clinicReady, queue, receptionist?.clinicId, receptionist?.userId]);
 
   return (
     <AppShell
