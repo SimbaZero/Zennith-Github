@@ -1,398 +1,418 @@
 <div align="center">
 
-<img src="./src/assets/zennith-logo.png" alt="Zennith logo" width="220"/>
+<img src="./src/assets/zennith-logo.png" alt="Zennith logo" width="200"/>
 
 # Zennith
 
-**A real-time healthcare operations and supply chain platform connecting patients, healthcare workers, and clinics across South African public healthcare.**
-
-[![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![TanStack Start](https://img.shields.io/badge/TanStack-Start_%2B_Router-FF4154?logo=react-query&logoColor=white)](https://tanstack.com/start)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![shadcn/ui](https://img.shields.io/badge/UI-shadcn%2Fui-000000?logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
-[![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
-[![Cloudflare Workers](https://img.shields.io/badge/Deploy-Cloudflare_Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
-[![License](https://img.shields.io/badge/License-Open_Source-brightgreen)]()
+**Clinic management for South African public clinics — one system for patients, nurses, doctors, pharmacists, receptionists, clinic admins and a platform super-admin.**
 
 </div>
 
 ---
 
-## 📖 Table of Contents
+## What Zennith is
 
-- [Introduction](#-introduction)
-- [The Problem](#-the-problem)
-- [Why Chronic Medication First](#-why-chronic-medication-first)
-- [How It Works](#-how-it-works)
-- [Roles & Features](#-roles--features)
-- [Tech Stack](#-tech-stack)
-- [Architecture](#-architecture)
-- [Repository Structure](#-repository-structure)
-- [Getting Started](#-getting-started)
-- [Current Status & Roadmap](#-current-status--roadmap)
-- [Known Issues & Decisions](#-known-issues--decisions)
-- [Contributing](#-contributing)
+Zennith is a clinic management system built for South African public health clinics. It
+puts the people who run a clinic — reception, nursing, pharmacy, doctors, admin — and the
+patients they see on one live system, so the queue, the medication stock and the patient
+record are the same thing to everyone looking at them.
+
+It is a final-year Information Systems project at the University of Johannesburg, built
+by a team of eight and piloted against Hillbrow Community Health Centre.
 
 ---
 
-## 🩺 Introduction
+## What it does
 
-**Zennith** is a healthcare operations and supply chain management platform designed to improve how South African public health clinics manage medication, patient flow, and clinical operations.
+**Live acute queue with guided triage.** Reception answers observable yes/no questions —
+"heavy bleeding that won't stop", "can't speak in full sentences" — and the system
+computes the triage level from them, using the discriminators from the real South African
+Triage Scale. Reception staff aren't clinically trained, so they are never asked to judge
+how sick someone is. They can escalate a level on instinct; they can't lower one.
 
-Zennith doesn't replace the systems clinics already use — it acts as a **communication and coordination layer** connecting everyone involved in delivering care: patients, receptionists, nurses, pharmacists, doctors, and clinic administrators.
+**Pharmacy delivery workflow where stock exists in exactly one place.** Stock is deducted
+from the pharmacy the moment a delivery is sent, and only added to the clinic once a nurse
+confirms what physically arrived. A mismatch between what was sent and what landed
+requires a written explanation before it can be accepted, so a short delivery leaves a
+record instead of a quiet discrepancy.
 
-> **The goal:** Ensure the right medication reaches the right patient, at the right clinic, at the right time.
+**Inventory forecasting from real dispensing history.** Days of stock remaining, reorder
+points and suggested order quantities, calculated from what has actually been handed to
+patients over the last 30 days — not from invented demand figures. When a
+pharmacist-set threshold is crossed, a reorder notification is raised automatically.
 
-This project is **open source** — early-stage and actively being built. Expect rough edges; see [Known Issues & Decisions](#-known-issues--decisions) for a running, honest list of what's real, what's a placeholder, and what's still a decision waiting to be made.
+**Fast Lane.** A nurse or doctor can mark a stable chronic patient as able to collect
+their repeat medication straight from the pharmacist, without queuing through a nurse
+first. This is the clinician's own judgement and nothing else: the patient's dose-taking
+history is shown as evidence to weigh, the way a blood-pressure reading is evidence. No
+score decides it, and nothing sets the flag automatically.
 
-## 🧩 The Problem
+**Notifications for every role, not just patients.** Overdue triage alerts to reception,
+stock and reorder alerts to pharmacy and clinic admins, appointment reminders to patients
+(by SMS, on a scheduled job). When a patient is called, they get an **"I'm on my way"**
+button — an acknowledgement, kept strictly separate from "in room" status, which only
+staff can set. A patient can never move themselves through the queue.
 
-Research into public clinic operations found that most patient-facing problems weren't caused by medication shortages alone — they were caused by **poor communication and poor visibility**.
+**POPIA-aligned privacy.** Patients choose which of their personal fields staff can see,
+and staff pages honour those choices field by field. A patient can request account
+deactivation, which goes to an admin for review rather than deleting anything
+automatically — clinics are legally required to retain medical records for a defined
+period, so "delete my account" cannot mean "destroy the record".
 
-Healthcare workers often don't know:
+**Real South African ID validation.** Luhn checksum over the first twelve digits,
+date-of-birth decode with a real-date check, and a citizenship digit that accepts `0`
+(citizen), `1` (permanent resident) **and `2` (refugee)**. Rejecting `2` would turn away
+refugee patients, so it is accepted deliberately — see the comment in
+`src/lib/sa-id.ts` before "tidying" it.
 
-- 📉 What medication is running low
-- 🧍 Which patients are waiting
-- 📦 Which nurse received which stock
-- 🔁 Whether a reorder has already been placed
-- 🏥 Which clinics still have available medication
+**Offline-tolerant, not offline-first.** A service worker keeps the app itself usable
+without a connection: records, schedules and stock you have already loaded stay on
+screen, and refreshing doesn't break the page. Writes that are safe to queue do queue and
+sync on reconnect. Actions that genuinely need the server — dispensing medication,
+booking an appointment, creating an account — **refuse clearly instead of appearing to
+work**, because only the server can confirm real stock or issue a real patient ID.
 
-Patients, in turn, often don't know whether medication is available, how long they'll wait, or whether it's ready for collection.
+**A public live queue, no login.** The landing page shows how busy each clinic is right
+now, so someone can decide whether to travel. Read-only, counts only, never names.
 
-These gaps create delays, duplicate work, stockouts, and unnecessary paper administration — for staff and patients alike. Zennith exists to close them, by connecting every role to one real-time source of truth, where each user only ever sees the information relevant to them.
+---
 
-## 🎯 Why Chronic Medication First
+## Tech stack
 
-Zennith is **not** only for chronic patients — chronic medication is simply the starting point.
+| Layer | Choice |
+|---|---|
+| UI | React 19 + TypeScript |
+| App framework | TanStack Start (SSR) |
+| Routing | TanStack Router — file-based, `src/routes/` |
+| Server state | TanStack Query |
+| Styling | Tailwind CSS v4 |
+| Components | shadcn/ui on Radix primitives |
+| Forms | React Hook Form + Zod |
+| Charts | Recharts |
+| PDF | jsPDF (client-side, selectable text) |
+| Auth | Firebase Auth (email/password) + RFC 6238 TOTP |
+| Database | Cloud Firestore, with IndexedDB persistence for offline |
+| Build | Vite 7 |
+| Package manager | Bun |
+| Deploy target | Cloudflare Workers, via Nitro |
 
-Chronic medication represents one of the largest and most consistent medication workflows in South African public healthcare, which makes it the ideal proving ground. This follows an **Agile approach**: solve one well-defined problem thoroughly, gather real technical and operational feedback, then expand.
+### ⚠️ Do not add plugins to `vite.config.ts`
 
-The long-term vision extends to acute medication, maternal healthcare, child immunisation, TB treatment, HIV programmes, emergency medication, hospital inventory, and medical consumables — eventually forming a unified national healthcare coordination platform.
+The build config is `@lovable.dev/vite-tanstack-config`, which already bundles
+`tanstackStart`, `viteReact`, `tailwindcss`, `tsConfigPaths`, the Cloudflare plugin, env
+injection, the `@` path alias and React/TanStack dedupe. **Adding any of those manually
+breaks the build with duplicate plugins.** If you need extra Vite config, pass it through
+`defineConfig({ vite: { ... } })`. Nitro-level plugins go in `nitro.config.ts`, not
+`vite.config.ts`.
 
-## ⚙️ How It Works
+This is also why the service worker is hand-written in `public/sw.js` rather than
+generated by a plugin — files in `public/` are served untouched and change nothing about
+how the app builds.
 
-Think of Zennith as the **digital nervous system** of a clinic. Every role has different responsibilities, but instead of everyone working independently on paper, Zennith connects them through one platform where information flows between departments in real time — filtered to what each role needs to see.
+---
 
-| Role                | Responsibility                                                                     |
-| ------------------- | ---------------------------------------------------------------------------------- |
-| 🧑‍💼 **Receptionist** | Patient registration and queue allocation                                          |
-| 👩‍⚕️ **Nurse**        | Consultations, digitising patient files (OCR), dispensing medication, appointments |
-| 💊 **Pharmacist**   | Inventory management, distribution, shortage monitoring, demand forecasting        |
-| 🩺 **Doctor**       | Reviewing patient records and prescribing treatment                                |
-| 🧑 **Patient**      | Checking appointments, medication availability, and receiving notifications        |
-| 🏢 **Clinic Admin** | Visibility over operations, inventory, and performance                             |
-
-## 🚀 Roles & Features
-
-Zennith combines several operational functions that are usually handled by separate, disconnected systems:
-
-- 🧾 Queue management
-- 📦 Medication stock visibility & inventory tracking
-- 🚚 Medication distribution between pharmacy and nursing teams
-- 💉 Direct nurse-to-patient medication dispensing, with real-time stock deduction
-- 📷 OCR digitisation of paper patient files (camera capture or upload)
-- 📄 Real, downloadable PDF medical records
-- 💬 Patient communication & notifications
-- 🗂️ Digital patient records, editable by clinical staff with locked identity fields
-- 📊 Predictive analytics for demand forecasting
-- 🔁 Automated reorder support
-
-Each role gets a dedicated, purpose-built interface, all reading from and writing to the same underlying data.
-
-## 🛠️ Tech Stack
-
-| Layer                               | Technology                                                                                   |
-| ----------------------------------- | -------------------------------------------------------------------------------------------- |
-| **UI Framework**                    | React 19 + TypeScript                                                                        |
-| **App Framework**                   | [TanStack Start](https://tanstack.com/start) (full-stack, SSR)                               |
-| **Routing**                         | [TanStack Router](https://tanstack.com/router) — file-based routes in `src/routes/`          |
-| **Data Fetching / State**           | [TanStack Query](https://tanstack.com/query)                                                 |
-| **Styling**                         | Tailwind CSS v4                                                                              |
-| **Component Library**               | shadcn/ui + Radix UI primitives                                                              |
-| **Forms & Validation**              | React Hook Form + Zod                                                                        |
-| **Charts**                          | Recharts                                                                                     |
-| **OCR (patient file digitisation)** | Gemini Vision API — **prototype, see [Known Issues & Decisions](#-known-issues--decisions)** |
-| **PDF generation**                  | jsPDF — real, selectable-text PDFs, generated client-side, no paid API                       |
-| **Build Tool**                      | Vite 7                                                                                       |
-| **Package Manager**                 | Bun                                                                                          |
-| **Deployment Target**               | Cloudflare Workers (via `wrangler`)                                                          |
-
-## 🏗️ Architecture
-
-Zennith is currently a **single, role-aware web application** rather than separate apps per role. Every role is expressed as its own route namespace via TanStack Router's file-based convention:
-
-```
-role.page.tsx        →  /role/page
-pharmacist.stock.tsx  →  /pharmacist/stock
-doctor.patients.tsx   →  /doctor/patients
-```
-
-A shared `AppShell` component provides the authenticated layout, and role-based access is enforced at the route/auth layer so each user is only ever routed to their own section of the app.
-
-**Current state of the data layer:** the backend is **live on Firebase**. Authentication is Firebase Auth (email/password) with real authenticator-app 2FA, and roles are read from a Firestore `profiles` collection. The Pharmacist, Doctor, Nurse, Receptionist, and Admin modules, patient files, and medical records all read and write **Cloud Firestore**.
-
-**Nurse module (most recently completed):** fully live — real-time appointments (Sunday–Saturday week view with a calendar picker), clinic-scoped patient lists and search, an editable Patient Record (clinical fields only — identity/registration fields stay locked), append-only clinical notes, real in-browser camera + Gemini-based OCR digitisation, real inventory-backed medication dispensing, and real downloadable PDF medical records.
-
-The seeded in-memory store (`src/lib/data.ts`, `src/lib/store.ts`) still backs a small number of local-only features (offline queue, some legacy adherence handling) — most pages have migrated off it.
-
-> **Two `clinic` modules — check which you need:** `src/lib/clinic.ts` is the **multi-facility selector** (`CLINICS`, `useActiveClinic()`, `ClinicId`, `splitByClinic()`, localStorage-backed — drives the clinic switcher and login picker). `src/lib/clinic-data.ts` is the **Firestore data-access layer** shared by Doctor/Nurse/Receptionist/Patient data. Pharmacy has its own service in `src/lib/pharmacist-service.ts`, and Nurse-specific logic (digitize, dispense, handover, adherence) lives in `src/lib/nurse-service.ts`.
-
-```mermaid
-flowchart LR
-    subgraph Clients["Role-based UI"]
-        Rec[Receptionist]
-        Nur[Nurse]
-        Phm[Pharmacist]
-        Doc[Doctor]
-        Pat[Patient]
-        Adm[Admin]
-    end
-
-    Rec --> Shell[AppShell + Router]
-    Nur --> Shell
-    Phm --> Shell
-    Doc --> Shell
-    Pat --> Shell
-    Adm --> Shell
-
-    Shell --> Data[(Cloud Firestore)]
-    Nur -.OCR photo/upload.-> Gemini[Gemini Vision API]
-    Gemini -.extracted fields.-> Shell
-```
-
-## 📁 Repository Structure
-
-```
-Zennith/
-├── src/
-│   ├── routes/                             ← File-based routes (TanStack Router)
-│   │   ├── pharmacist.tsx                  ← Pharmacist layout
-│   │   ├── pharmacist.index.tsx            ← Pharmacist dashboard
-│   │   ├── pharmacist.stock.tsx            ← Inventory / stock levels
-│   │   ├── pharmacist.distribution.tsx     ← Distribution to clinics/nurses
-│   │   ├── pharmacist.analytics.tsx        ← Demand forecasting & analytics
-│   │   ├── pharmacist.diagnostics.tsx      ← Diagnostics view
-│   │   ├── doctor.*.tsx                    ← Doctor routes
-│   │   ├── nurse.index.tsx                 ← Nurse dashboard
-│   │   ├── nurse.appointments.tsx          ← Week view + calendar picker
-│   │   ├── nurse.digitize.tsx              ← Camera/upload OCR digitisation
-│   │   ├── nurse.patients.tsx              ← Clinic-scoped patient list + search
-│   │   ├── nurse.patient-record.$pid.tsx   ← Patient record route wrapper
-│   │   ├── patient.*.tsx                   ← Patient routes
-│   │   ├── receptionist.*.tsx              ← Receptionist routes
-│   │   ├── admin.*.tsx / super-admin.*.tsx ← Admin routes
-│   │   └── login.tsx / signup.tsx / two-factor.tsx
-│   ├── components/
-│   │   ├── AppShell.tsx                    ← Authenticated app layout/shell
-│   │   ├── AuthBackground.tsx
-│   │   ├── PatientRecordView.tsx           ← Shared Nurse/Doctor record view — edit, dispense, PDF, print
-│   │   └── ui/                             ← shadcn/ui component primitives
-│   ├── firebase.ts                         ← Firebase init from .env (auth + Firestore)
-│   ├── context/AuthContext.tsx             ← Firebase session/role provider
-│   ├── lib/
-│   │   ├── auth.ts                         ← Firebase Auth + Firestore roles, facility scoping, 2FA secrets
-│   │   ├── clinic-data.ts                  ← Firestore data layer (doctor/nurse/reception/patients)
-│   │   ├── doctor-service.ts               ← Shared clinical hooks (appointments, patient directory/record — reused by Nurse)
-│   │   ├── nurse-service.ts                ← Nurse-specific: digitize, handover, adherence, dispense
-│   │   ├── pharmacist-service.ts           ← Firestore data layer (pharmacy: stock, distribution, trends)
-│   │   ├── gemini-ocr.ts                   ← Gemini Vision OCR — prototype, see Known Issues
-│   │   ├── pdf-export.ts                   ← Real client-side PDF generation (jsPDF)
-│   │   ├── patient-service.ts              ← Patient-portal data layer
-│   │   ├── totp.ts                         ← RFC 6238 TOTP (two-factor auth)
-│   │   ├── welcome-email.ts                ← Patient signup confirmation email (Resend, server-side)
-│   │   ├── store.ts / data.ts              ← Legacy in-memory store (small number of pages still use this)
-│   │   ├── clinic.ts                       ← Multi-clinic/facility selector
-│   │   ├── facilities.ts / handover.ts / notifications.ts / notifications-queue.ts / audit.ts
-│   │   └── offline.ts / adherence.ts / search-index.ts / utils.ts
-│   ├── router.tsx                          ← Router + QueryClient setup
-│   ├── server.ts                           ← SSR server entry (Cloudflare Worker)
-│   └── styles.css
-├── scripts/                                ← Firestore seeding & data management (Node)
-│   ├── reset-to-demo.mjs                   ← DESTRUCTIVE — resets to a clean 10-account demo set
-│   ├── generate-demo-data.mjs              ← Additive — tops every collection to ~10 rows
-│   ├── generate-nurse-demo-data.mjs        ← Additive — 2 dense demo clinics (30 patients each) for Nurse-module demos
-│   ├── create-superadmin.mjs               ← Creates/repairs the superadmin account
-│   ├── seed-users.mjs / migrate-logins.mjs ← Auth account setup/migration helpers
-├── docs/
-│   ├── db-issues.md                        ← Running log of schema issues, gaps, and decisions — read before assuming a field exists
-│   ├── FIREBASE.md                         ← Console setup, security rules, operational runbook
-│   └── ARCHITECTURE.md                     ← Data model detail
-├── public/                                 ← Static assets
-├── vite.config.ts
-├── wrangler.jsonc                          ← Cloudflare Workers deployment config
-├── tsconfig.json
-└── package.json
-```
-
-## 🏁 Getting Started
-
-> ⚠️ **Every command below must be run from inside the project folder** (`cd Zennith` first). Running `bun`/`node`/`git` commands from anywhere else, or from a terminal not opened inside the repo, is the single most common reason "nothing works" — the app isn't broken, the terminal just isn't pointed at it.
+## Getting started
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) installed
-- Node.js (for tooling compatibility — the seeding scripts in `scripts/` run under Node, not Bun)
+- [Bun](https://bun.sh/) — `curl -fsSL https://bun.sh/install | bash`, then restart your
+  terminal and check `bun --version`
+- Node.js — the scripts in `scripts/` run under Node, not Bun
 
-**Installing Bun** (if `bun --version` doesn't work yet):
-
-| OS                                | Command                                                                                                                |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **macOS**                         | `curl -fsSL https://bun.sh/install \| bash` then restart your terminal (or run `source ~/.zshrc` / `source ~/.bashrc`) |
-| **Linux / Ubuntu (WSL included)** | `curl -fsSL https://bun.sh/install \| bash` then restart your terminal (or run `source ~/.bashrc`)                     |
-| **Windows**                       | `powershell -c "irm bun.sh/install.ps1 \| iex"` (run in PowerShell)                                                    |
-
-VERY CRITICAL: PLEASE KILL TERMINAL AND CLOSE VS CODE AFTER SUCCESSFULLY RUNNING THE COMMAND, then reopen the project fresh.
-
-Verify it worked:
+### Install
 
 ```bash
-bun --version
-```
-
-### Installation
-
-> ⚠️ **Run this once** — the first time you set up the project on a machine. You do **not** need to re-run this every time you pull changes or edit a file; it only needs to run again if `package.json` changes (e.g. a new dependency was added).
-
-```bash
-# Clone the repository
 git clone <repo-url>
-cd Zennith
-
-# Install dependencies (one-time setup — creates node_modules/)
+cd Zennith-Github
 bun install
 ```
 
-**If you pull changes that add a new dependency** (check `package.json` for anything you don't recognise, or just watch for an import-not-found error), run `bun install` again — or install the specific package directly, e.g.:
+Run `bun install` again only when `package.json` changes.
+
+### Environment variables
+
+Copy `.env.example` to `.env` and fill it in. `.env.example` is the authoritative list
+and carries a comment per variable explaining what reads it.
 
 ```bash
-bun add jspdf
+cp .env.example .env
 ```
 
-### Environment variables (required — the app talks to Firebase, and optionally Gemini)
-
-Copy `.env.example` to `.env` and fill in the values. **Plain `KEY=value`
-lines only** — pasting the JavaScript config object from the Firebase console breaks
-every value and produces a misleading `PERMISSION_DENIED` error.
+The browser-side Firebase keys are the only ones required to run the app:
 
 ```
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=zennith-d6faa.firebaseapp.com
-VITE_FIREBASE_PROJECT_ID=zennith-d6faa
-VITE_FIREBASE_STORAGE_BUCKET=zennith-d6faa.firebasestorage.app
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
-
-# optional: patient-signup confirmation email (server-side only, no VITE_ prefix)
-RESEND_API_KEY=
-
-# optional: Nurse Digitize OCR — PROTOTYPE, see docs/db-issues.md #19 before
-# using with any real patient data. Get a free key at https://aistudio.google.com/apikey
-VITE_GEMINI_API_KEY=
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
 ```
 
-> ⚠️ **After editing `.env`, restart the dev server** — Vite only reads `.env` on startup, a browser refresh alone won't pick up a new value.
+Everything else in `.env.example` is optional and switches a feature on: `RESEND_API_KEY`
+for patient signup emails, `SMSPORTAL_*` and `FIREBASE_SERVICE_ACCOUNT` for SMS
+appointment reminders, `VITE_GEMINI_API_KEY` for OCR on the Digitize Files page. The
+server-side ones have no `VITE_` prefix on purpose — that prefix would publish them in
+the browser bundle. In production set them with `wrangler secret put NAME`.
 
-Full console setup, security rules and operational runbook:
-[docs/FIREBASE.md](docs/FIREBASE.md). Architecture and data model:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Known schema gaps, bugs, and open decisions — **read this before assuming a field exists or a behaviour is finished:**
+Two things that cost people an afternoon:
+
+- **Plain `KEY=value` lines only.** Pasting the JavaScript config object out of the
+  Firebase console corrupts every value and surfaces later as a misleading
+  `PERMISSION_DENIED`.
+- **Restart the dev server after editing `.env`.** Vite reads it at startup; a browser
+  refresh won't pick up a new value.
+
+Firebase console setup and security rules: [docs/FIREBASE.md](docs/FIREBASE.md).
+Data model: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**Known schema gaps and open decisions — read before assuming a field exists:**
 [docs/db-issues.md](docs/db-issues.md).
-
-### Seeding the database
-
-```bash
-node scripts/reset-to-demo.mjs           # clean 10-account demo set (DESTRUCTIVE)
-node scripts/generate-demo-data.mjs      # top every collection up to ~10 records
-node scripts/generate-nurse-demo-data.mjs # 2 dense demo clinics, 30 patients each — for Nurse-module demos/presentations
-node scripts/create-superadmin.mjs       # create/repair the superadmin account (additive)
-```
-
-Run them in that order on a fresh setup. The last three are additive and safe to re-run at any time; only `reset-to-demo.mjs` is destructive.
-
-### Everyday Workflow
-
-Once set up, your day-to-day loop is just:
-
-```bash
-git pull        # pull the latest changes from the team
-bun run dev     # start the local dev server
-```
-
-Then open the URL shown in your terminal (Vite's default is `http://localhost:5173`, though this project commonly runs on `http://localhost:8080` depending on config). Edits you save to any file will hot-reload in the browser automatically — no restart or reinstall needed, **except** after editing `.env` (see above) or after `bun install`/`bun add` (restart the dev server).
-
-### Other available scripts
-
-| Command           | Description                          |
-| ----------------- | ------------------------------------ |
-| `bun run dev`     | Start the local development server   |
-| `bun run build`   | Build for production                 |
-| `bun run preview` | Preview the production build locally |
-| `bun run lint`    | Run ESLint                           |
-| `bun run format`  | Format code with Prettier            |
-
-### 🔑 Test Login Credentials (real Firebase Auth)
-
-Auth is **real Firebase Authentication**. Usernames without an `@` map to
-`<username>@zennith.test` behind the scenes. Log in with the **role name as the
-username** and `password` as the password:
-
-| Role             | Username       | Password   | Notes                                                             |
-| ---------------- | -------------- | ---------- | ----------------------------------------------------------------- |
-| Doctor           | `doctor`       | `password` | Hillbrow CHC                                                      |
-| Doctor (2nd)     | `doctor2`      | `password` |                                                                   |
-| Nurse            | `nurse`        | `password` | Hillbrow CHC — 30 demo patients after seeding                     |
-| Nurse (2nd)      | `nurse2`       | `password` | **Berea CHC** — a genuinely separate clinic, own 30 demo patients |
-| Patient          | `patient`      | `password` |                                                                   |
-| Patient (2nd)    | `patient2`     | `password` |                                                                   |
-| Pharmacist       | `pharmacist`   | `password` |                                                                   |
-| Pharmacist (2nd) | `pharmacist2`  | `password` |                                                                   |
-| Receptionist     | `receptionist` | `password` |                                                                   |
-| Admin            | `admin`        | `password` |                                                                   |
-| Super Admin      | `superadmin`   | `password` | Sees every facility, not scoped to one                            |
-
-> ⚠️ Usernames must match exactly (e.g. `pharmacist`, not `Pharmacist` or a made-up name). Run `node scripts/generate-nurse-demo-data.mjs` first if you want `nurse`/`nurse2` to show two richly-populated, genuinely different clinics for a demo or presentation, rather than the thin/scattered default set.
-
-> 🔐 **Two-factor authentication is real.** After the password step, the first login
-> for each account shows a **QR code** — scan it with Google Authenticator / Authy /
-> Microsoft Authenticator, then enter the 6-digit code to activate 2FA. Every later
-> login requires the current rotating code. Random digits no longer work. To reset an
-> account's 2FA, delete the `totpSecret` field from its document in the Firestore
-> `profiles` collection.
-
-## 🧭 Current Status & Roadmap
-
-Zennith has moved from prototype to a **Firebase-backed application** — every role has a working interface, and authentication plus clinical and pharmacy data are live in Firestore.
-
-- [x] Role-based UI for all 7 roles (patient, receptionist, nurse, pharmacist, doctor, admin, super admin)
-- [x] Multi-clinic / multi-facility support + facility-scoped audit log
-- [x] Real authentication & session management (Firebase Auth + TOTP two-factor)
-- [x] Persistent database (Cloud Firestore) + seeding/management scripts, including dense two-clinic demo data
-- [x] Pharmacist backend: stock, distribution, dispense trends
-- [x] Doctor / Receptionist / Admin modules on live Firestore
-- [x] **Nurse module: fully live** — appointments (real week view + calendar), clinic-scoped patients, editable records, dispense-to-patient with real inventory deduction, camera + Gemini OCR digitisation, real PDF export
-- [x] Patient self-signup with confirmation email (Resend)
-- [ ] Pharmacist inventory scoped per-clinic (schema now supports it — `useInventory()` doesn't filter by clinic yet, see docs/db-issues.md #2)
-- [ ] Gemini OCR moved off free tier and/or behind a real backend before any real patient data goes through it (docs/db-issues.md #19)
-- [ ] Per-role Firestore security rules (currently authenticated-users-only — see docs/FIREBASE.md and docs/db-issues.md)
-- [ ] Real-time sync on a couple of remaining Nurse write paths (edit/dispense currently need a manual refresh to reflect on the Patients list — docs/db-issues.md #18)
-- [ ] Expansion beyond chronic medication
-
-## 📋 Known Issues & Decisions
-
-Every schema gap, workaround, bug, and open design decision found while building this is tracked in one place, kept current, and meant to actually be read — not a graveyard file:
-
-➡️ **[docs/db-issues.md](docs/db-issues.md)**
-
-If you're about to assume a field exists, that a placeholder is production-ready, or that a "we'll fix it later" note has been forgotten — check there first.
-
-## 🤝 Contributing
-
-This project is **open source** and currently in active early-stage development — expect things to move fast and break. If you're on the core team, please coordinate feature work through the project board/issues before starting, and open a PR against the relevant branch for review. External contributions and issue reports are welcome once the project has stabilised past its current sprint pace.
 
 ---
 
-<div align="center">
+## Running it
 
-**Zennith** — improving visibility, communication, and access to essential healthcare across South African public clinics.
+There are two run paths, and which one you need depends on whether you care about
+offline behaviour.
 
-</div>
+### Development
+
+```bash
+bun run dev
+```
+
+Hot reload, source maps, fast. **The service worker is not registered in dev** — the
+registration in `src/routes/__root.tsx` is behind `import.meta.env.PROD`, so the whole
+block is stripped from the dev bundle. That is deliberate: Vite serves modules fresh on
+every edit, and a worker caching `/assets/*` would serve yesterday's code back while
+looking like your changes simply stopped applying.
+
+So **you cannot test offline behaviour in dev mode.** There is nothing to turn on; the
+code isn't there.
+
+### Production build, and testing offline
+
+```bash
+bun run build
+bun run preview
+```
+
+`preview` serves the real production build with the service worker active. To test
+offline: load a few pages first so they get cached, then switch the browser to offline
+(DevTools → Network → Offline, or turn off Wi-Fi) and keep using it. Pages you visited
+should still render, Firestore should serve what it cached, and the actions that need the
+server should tell you plainly that they can't run rather than hanging or silently
+failing.
+
+`bun run build:dev` builds with development mode settings — useful when you need a build
+artifact without production optimisations.
+
+### Type checking
+
+There is **no `typecheck` script** in `package.json`. Run the compiler directly:
+
+```bash
+npx tsc --noEmit -p tsconfig.json
+```
+
+### Every script that exists in `package.json`
+
+| Command | What it does |
+|---|---|
+| `bun run dev` | Dev server, no service worker |
+| `bun run build` | Production build |
+| `bun run build:dev` | Build in development mode |
+| `bun run preview` | Serve the production build locally — use this for offline testing |
+| `bun run lint` | ESLint |
+| `bun run format` | Prettier, writes in place |
+
+That is the complete list. There is no `test` script (the project has no test suite yet)
+and no `deploy` script — deployment goes through Nitro's Cloudflare output, which
+`bun run build` prints the command for.
+
+---
+
+## Test logins
+
+Auth is real Firebase Authentication. A username without an `@` is mapped to
+`<username>@zennith.test` by `toEmail()` in `src/lib/auth.ts`. Every seeded account uses
+the password **`password`**.
+
+| Role | Username |
+|---|---|
+| Doctor | `doctor` |
+| Nurse | `nurse` |
+| Receptionist | `receptionist` |
+| Patient | `patient` |
+| Pharmacist | `pharmacist` |
+| Clinic admin | `admin` |
+| Super admin | `superadmin` |
+
+Usernames must match exactly — lowercase, no variations. `reset-to-demo.mjs` also creates
+second accounts for several roles (`doctor2`, `nurse2`, `patient2`, `pharmacist2`), which
+is what you want for testing anything cross-clinic.
+
+> ### 🔐 Two-factor authentication is real
+>
+> After the password step, the **first** login for each account shows a QR code. Scan it
+> with Google Authenticator, Authy or Microsoft Authenticator and enter the 6-digit code
+> to enrol. Every login after that needs the current rotating code — typing random digits
+> does not work.
+>
+> To reset an account's 2FA, delete the `totpSecret` field from its document in the
+> Firestore `profiles` collection. There is also a reset button on the two-factor screen,
+> which is a **development-only bypass** and must be removed before any real deployment
+> (see Known limitations).
+
+---
+
+## Demo data
+
+All of these run under Node, from the project root, and read `.env` directly:
+
+```bash
+node scripts/<name>.mjs
+```
+
+### Fresh setup, in this order
+
+```bash
+node scripts/seed-users.mjs                 # 6 role logins (doctor, nurse, patient, pharmacist, receptionist, admin)
+node scripts/create-superadmin.mjs          # the superadmin account, which seed-users does not create
+node scripts/setup-clinic-id-counter.mjs    # ID counters, so new clinics/staff get non-colliding numeric IDs
+node scripts/setup-staff-id-counters.mjs
+node scripts/link-patient-profiles.mjs      # writes patientId onto patient profiles — security rules need it
+node scripts/generate-demo-data.mjs         # tops every collection up to ~10 rows
+node scripts/generate-dispensing-history.mjs # 30 days of dispensing, so forecasting has a usage rate
+```
+
+Then add whichever module you're demoing:
+
+```bash
+node scripts/generate-nurse-demo-data.mjs        # 2 dense clinics, ~30 patients each
+node scripts/generate-doctor-demo-data.mjs       # a full week of appointments for both doctors
+node scripts/generate-receptionist-demo-data.mjs # a busy walk-in queue, including completed visits
+```
+
+All of the above are additive and idempotent — they use fixed IDs, so re-running
+overwrites the rows they created rather than piling up duplicates.
+
+`generate-nurse-demo-data.mjs` is the one to run before a presentation. The default
+`generate-demo-data.mjs` spreads records thinly across up to 10 clinics, so no single
+clinic looks busy.
+
+### Starting over
+
+```bash
+node scripts/reset-to-demo.mjs   # DESTRUCTIVE
+```
+
+Wipes most collections and rebuilds a clean 11-account demo set (the seven roles above
+plus `doctor2`, `nurse2`, `patient2`, `pharmacist2`). It keeps the pharmacy inventory and
+one clinic. Every account re-enrols 2FA on next login. This is the only destructive
+script in the directory.
+
+### Everything else in `scripts/`
+
+Grouped by what they are, because the directory is 26 files and not all of them touch the
+database:
+
+- **Read-only audits** — safe any time, write nothing: `audit-clinic-ids.mjs`,
+  `audit-clinic-mappings.mjs`, `list-admins.mjs`, `find-duplicate-inventory.mjs`
+- **One-time migrations**, all safe to re-run: `migrate-logins.mjs`,
+  `migrate-staff-clinicids.mjs`, `fix-doctors-missing-clinicid.mjs`,
+  `fix-admin-clinicid.mjs`, `fix-inventory-number-types.mjs`
+- **Targeted repairs** — these act on a hardcoded list rather than matching a pattern,
+  and `cleanup-orphan-accounts.mjs` makes you type `YES` first:
+  `cleanup-orphan-accounts.mjs`, `merge-duplicate-inventory.mjs`
+- **Test-data helpers**: `create-patient3.mjs`,
+  `fix-pharmacist-multiclinic-testdata.mjs`
+- **Codemods, not database scripts** — these rewrite files under `src/`, so run them on a
+  clean tree and read the diff: `add-listener-error-handlers.mjs`,
+  `use-offline-transactions.mjs`
+
+Each script's header comment explains what it does and why; read it before running
+anything that writes.
+
+---
+
+## Project structure
+
+```
+src/
+├── routes/      file-based routes — the filename is the URL
+├── lib/         all data access and domain logic, one service per role
+├── components/  shared UI, including the authenticated shell
+├── server/      Cloudflare Worker code: SMS reminders, API routes, Firestore admin
+├── firebase.ts  Firebase init, with IndexedDB persistence for offline
+└── styles.css   Tailwind entry and the app's animations
+```
+
+**`src/routes/`** — TanStack Router's file-based convention, where dots become path
+segments: `pharmacist.stock.tsx` serves `/pharmacist/stock`, `doctor.patients.tsx` serves
+`/doctor/patients`, and `$pid` in a filename is a route parameter. Each role has a layout
+route (`nurse.tsx`) plus its pages. Pages hold presentation and user interaction; the
+data comes from `src/lib/`.
+
+**`src/lib/`** — one service module per role (`patient-service.ts`, `nurse-service.ts`,
+`doctor-service.ts`, `pharmacist-service.ts`, `super-admin-service.ts`), plus
+`clinic-data.ts`, which is the shared Firestore layer for queue, patients, appointments
+and registration. Cross-cutting concerns live in their own small modules: `auth.ts`,
+`notify.ts`, `audit.ts`, `offline.ts`, `sa-id.ts`, `reminders.ts`, `fast-lane.ts`,
+`clinic-time.ts`. **`clinic-data.ts` is 2,600 lines and `pharmacist-service.ts` 1,800 —
+grep before adding a function, the one you want often already exists.**
+
+**`src/components/`** — `AppShell.tsx` is the authenticated layout (sidebar, header,
+notification bell, offline indicator) used by every signed-in page.
+`PatientRecordView.tsx` is the patient record shared by the nurse and doctor modules.
+`ui/` is shadcn/ui's generated primitives — treat those as vendored and change them
+sparingly.
+
+`docs/` carries the written history: [db-issues.md](docs/db-issues.md) (schema gaps and
+open decisions), [FIREBASE.md](docs/FIREBASE.md), [ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[ADDING-DATA.md](docs/ADDING-DATA.md) and [audit-findings.md](docs/audit-findings.md).
+
+---
+
+## Known limitations
+
+These are real and deliberate, documented here rather than discovered later. None of them
+should survive a production deployment.
+
+**Clinic scoping is enforced in the app's queries, not in the security rules.** Every
+list query filters by the signed-in user's `clinicId`, so the app shows the right data.
+But Firestore evaluates a *list* rule with no document to inspect, so a rule cannot
+filter a collection by document contents — it can only allow or deny the whole query.
+A determined staff member could therefore query across clinics outside the app. The real
+fix is restructuring data under per-clinic paths (`clinics/{id}/patients/...`), which is
+a schema change, not a rule change.
+
+**The `users` collection is publicly readable.** Signup has to check whether an ID number
+is already registered *before* a session exists, and with no backend there is nowhere
+else to answer that. It exposes names and ID numbers. The proper fix is a server function
+that answers "is this ID taken?" without returning the data.
+
+**Anonymous Auth is still enabled** on the Firebase project, from local testing. Disable
+it before any real deployment.
+
+**The 2FA reset button is a development bypass.** It clears `totpSecret` for the current
+account with no verification. Remove or gate it before deployment.
+
+**The Gemini OCR key is exposed client-side.** The Digitize Files feature reads
+`VITE_GEMINI_API_KEY`, and the `VITE_` prefix means it ships in the browser bundle.
+Separately, Gemini's free tier permits Google to use submitted content to improve their
+products, so it has only ever been tested with synthetic patients. Both problems are
+solved by the same fix: move the call behind a backend. Do not put real patient
+photographs through it as it stands.
+
+A fuller running log — including schema gaps, fields that don't exist yet and decisions
+still open — is in [docs/db-issues.md](docs/db-issues.md), with a page-by-page audit in
+[docs/audit-findings.md](docs/audit-findings.md).
+
+---
+
+## Team
+
+Zennith is a final-year Information Systems capstone project at the **University of
+Johannesburg**, built by a team of eight students and piloted against **Hillbrow
+Community Health Centre**. The team is credited on the landing page of the running app.
