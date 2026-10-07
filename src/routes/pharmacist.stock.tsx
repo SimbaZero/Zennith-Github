@@ -1,13 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   useClinicForecasts,
   useCurrentPharmacist,
+  saveReorderThreshold,
   FORECAST_STATUS_STYLE,
   FORECAST_STATUS_TEXT,
   type MedForecast,
 } from "@/lib/pharmacist-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/pharmacist/stock")({ component: Stock });
 
@@ -68,9 +71,12 @@ function Stock() {
               ? 0
               : Math.min(100, (f.daysRemaining / FULL_BAR_DAYS) * 100);
           return (
-            <button
+            // A <div>, not a <button>: the reorder-level input below has to be
+            // clickable and typeable, and a form control inside a button is
+            // invalid HTML — every click would navigate away mid-edit. The
+            // "Manage in Deliveries" link at the foot keeps the navigation.
+            <div
               key={f.name}
-              onClick={() => navigate({ to: "/pharmacist/deliveries" })}
               className="text-left bg-white rounded-xl border p-5 hover:border-[oklch(0.55_0.18_245)] hover:shadow-md transition"
             >
               <div className="flex items-start justify-between gap-2">
@@ -107,13 +113,104 @@ function Stock() {
                   About {f.daysRemaining} days left
                 </p>
               )}
-              <p className="text-[11px] text-[oklch(0.55_0.18_245)] mt-3">
+              <ReorderLevelField forecast={f} />
+              <button
+                onClick={() => navigate({ to: "/pharmacist/deliveries" })}
+                className="text-[11px] text-[oklch(0.55_0.18_245)] mt-3 hover:underline"
+              >
                 Manage in Deliveries →
-              </p>
-            </button>
+              </button>
+            </div>
           );
         })}
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * The level at which this medication raises an automatic reorder request.
+ *
+ * Defaults to the COMPUTED reorder point when nobody has set one, so the box
+ * opens on a figure derived from real usage rather than 0 — which would read
+ * as "never reorder this" and quietly switch the whole feature off for every
+ * medication at a new clinic.
+ *
+ * Saves on blur rather than behind a per-row Save button: there is one value
+ * per card, and a button per card would put twelve of them on screen to no
+ * purpose. Nothing is written unless the number actually changed.
+ */
+function ReorderLevelField({ forecast }: { forecast: MedForecast }) {
+  const configured = forecast.reorderThreshold;
+  const fallback = forecast.reorderPoint;
+  // What is currently persisted (or the computed suggestion when nothing is).
+  const savedValue = configured ?? fallback;
+
+  // `null` means "not being edited" — the box then shows savedValue live.
+  //
+  // This is NOT seeded into useState from savedValue, which would be a real
+  // bug: the computed reorder point starts at 0 and rises once usage history
+  // loads, so a seeded box would still read 0 afterwards, and blurring it
+  // would save 0 — silently switching auto-reorder off for that medication.
+  // Holding the draft separately means the field tracks the live figure until
+  // somebody actually types in it.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const shown = draft ?? String(savedValue);
+
+  const commit = async () => {
+    if (!forecast.docId || draft === null) return;
+    const next = Number(draft);
+    if (!Number.isFinite(next) || next < 0) {
+      setDraft(null); // put the box back rather than saving junk
+      return;
+    }
+    const rounded = Math.floor(next);
+    if (rounded === savedValue) {
+      setDraft(null);
+      return;
+    }
+    setSaving(true);
+    try {
+      await saveReorderThreshold(forecast.docId, rounded);
+      toast.success(`${forecast.name}: reorder level set to ${rounded} units`);
+      // Back to tracking the saved value, which the live inventory
+      // subscription is about to deliver.
+      setDraft(null);
+    } catch (err) {
+      setDraft(null);
+      toast.error(
+        err instanceof Error ? err.message : "Could not save the reorder level",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!forecast.docId) return null;
+
+  return (
+    <div className="mt-3 pt-3 border-t">
+      <label className="text-[10px] tracking-wider text-muted-foreground block mb-1">
+        REORDER LEVEL
+      </label>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={0}
+          value={shown}
+          disabled={saving}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          className="w-24 border rounded px-2 py-1 text-sm disabled:opacity-50"
+        />
+        <span className="text-[11px] text-muted-foreground">
+          {configured == null ? "suggested — not set yet" : "units"}
+        </span>
+      </div>
+      <p className="text-[11px] text-muted-foreground mt-1">
+        Raises a reorder request when stock falls to this.
+      </p>
+    </div>
   );
 }

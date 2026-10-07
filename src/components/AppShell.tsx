@@ -87,7 +87,9 @@ const navByRole: Record<Role, NavItem[]> = {
     { to: "/pharmacist/stock", label: "Stock Levels", icon: Boxes },
     {
       to: "/pharmacist/diagnostics",
-      label: "Prescription Lookup",
+      // Covers both halves of the page: looking a Fast Lane patient's
+      // prescription up, and handing the medication to them directly.
+      label: "Fast Lane Handover",
       icon: Search,
     },
 

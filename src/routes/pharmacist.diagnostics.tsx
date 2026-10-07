@@ -26,10 +26,10 @@ import {
 } from "lucide-react";
 
 export const Route = createFileRoute("/pharmacist/diagnostics")({
-  component: PrescriptionLookup,
+  component: FastLaneHandover,
 });
 
-function PrescriptionLookup() {
+function FastLaneHandover() {
   const { patients, loading } = usePatientDirectory();
   const { pharmacist } = useCurrentPharmacist();
   const [q, setQ] = useState("");
@@ -68,7 +68,7 @@ function PrescriptionLookup() {
   };
 
   return (
-    <AppShell role="pharmacist" title="Prescription Lookup">
+    <AppShell role="pharmacist" title="Fast Lane Handover">
       <div className="max-w-2xl mx-auto">
         <div className="bg-white rounded-xl border p-6">
           <div className="flex items-center gap-2 mb-1">
@@ -77,7 +77,7 @@ function PrescriptionLookup() {
           </div>
           <p className="text-sm text-muted-foreground mb-4">
             Search by patient name or ID. Clinical history is not displayed —
-            only the current prescription needed to dispense.
+            only the current prescription needed to hand medication over.
           </p>
 
           {loading && (
@@ -172,7 +172,7 @@ function PrescriptionLookup() {
                 </div>
 
                 <p className="text-[11px] tracking-wider text-muted-foreground">
-                  PRESCRIPTION TO DISPENSE
+                  MEDICATION TO HAND OVER
                 </p>
                 <p className="text-lg font-semibold mt-1">
                   {prescriptionLoading
@@ -190,10 +190,10 @@ function PrescriptionLookup() {
                   </p>
                 ) : handedOver ? (
                   <p className="text-sm text-green-800 mt-3">
-                    Dispensed to {selected.patientId}. Pharmacy stock updated.
+                    Handed over to {selected.patientId}. Pharmacy stock updated.
                   </p>
                 ) : (
-                  <DispensePanel
+                  <HandoverPanel
                     patient={selected}
                     prescription={prescription}
                     onDone={() => setHandedOver(true)}
@@ -217,7 +217,7 @@ function looseName(n: string): string {
     .replace(/[^a-z]/g, "");
 }
 
-function DispensePanel({
+function HandoverPanel({
   patient,
   prescription,
   onDone,
@@ -264,7 +264,7 @@ function DispensePanel({
     return (
       <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-3">
         "{prescription}" isn't in the pharmacy's stock list, so it can't be
-        dispensed here.
+        handed over here.
       </p>
     );
   }
@@ -290,12 +290,14 @@ function DispensePanel({
         description: `${handoverLogText(patient.patientId, res.medName, actor)} Quantity: ${n}.`,
       });
       toast.success(
-        `${n} × ${res.medName} dispensed to ${patient.patientId} — ${res.remaining} left in pharmacy`,
+        `${n} × ${res.medName} handed over to ${patient.patientId} — ${res.remaining} left in pharmacy`,
       );
       onDone();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Could not dispense. Nothing was changed.",
+        err instanceof Error
+          ? err.message
+          : "Could not complete the handover. Nothing was changed.",
       );
     } finally {
       setBusy(false);
@@ -327,7 +329,7 @@ function DispensePanel({
       )}
       <div>
         <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
-          QUANTITY TO DISPENSE
+          QUANTITY TO HAND OVER
         </label>
         <input
           type="number"
@@ -358,7 +360,7 @@ function DispensePanel({
         className="w-full inline-flex items-center justify-center gap-2 bg-[oklch(0.18_0.06_260)] text-white text-sm py-2 rounded-md hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
       >
         <PackageCheck size={15} />
-        {busy ? "Dispensing…" : "Confirm dispensing"}
+        {busy ? "Handing over…" : "Confirm handover"}
       </button>
     </div>
   );

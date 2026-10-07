@@ -5,10 +5,15 @@ import {
   useClinicForecasts,
   summariseForecasts,
   useCurrentPharmacist,
+  usePendingReorders,
+  confirmReorder,
+  dismissReorder,
   FORECAST_STATUS_STYLE as STATUS_STYLE,
   FORECAST_STATUS_TEXT as STATUS_TEXT,
+  type ReorderRequest,
 } from "@/lib/pharmacist-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
+import { toast } from "sonner";
 import {
   LineChart,
   Line,
@@ -20,7 +25,15 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { TrendingDown, AlertTriangle, Package, Search } from "lucide-react";
+import {
+  TrendingDown,
+  AlertTriangle,
+  Package,
+  Search,
+  BellRing,
+  Check,
+  X,
+} from "lucide-react";
 
 export const Route = createFileRoute("/pharmacist/analytics")({
   component: MedicationOverview,
@@ -99,6 +112,14 @@ function MedicationOverview() {
           sub="Total units"
         />
       </div>
+
+      {/* Threshold-triggered reorder requests. Kept ABOVE and separate from
+          "Order these now" lower down: that panel is the live computed
+          forecast and changes as the numbers do, while these are recorded
+          events awaiting a decision. Collapsing the two would lose the
+          distinction between "the maths says order this" and "stock crossed
+          the line on this date and nobody has acted on it yet". */}
+      <ReorderRequestsPanel clinicId={realClinic.activeClinicId} />
 
       {/* Overall consumption */}
       <div className="bg-white rounded-xl border p-5 mb-6">
@@ -378,5 +399,130 @@ function Summary({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Pending reorder requests raised automatically when stock crossed its
+ * reorder level. Each one is either ordered (recorded, nothing added to
+ * stock) or dismissed.
+ */
+function ReorderRequestsPanel({ clinicId }: { clinicId: number | undefined }) {
+  const { reorders, loading } = usePendingReorders(clinicId);
+
+  // Nothing pending is the normal, healthy state — an empty panel every day
+  // would train people to ignore the space it sits in.
+  if (loading || reorders.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-xl border border-amber-300 p-5 mb-6">
+      <div className="flex items-center gap-2 mb-1">
+        <BellRing size={16} className="text-amber-600" />
+        <h3 className="font-semibold">Reorder requests</h3>
+        <span className="text-xs text-muted-foreground ml-auto">
+          {reorders.length} awaiting a decision
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">
+        Raised automatically when stock fell to its reorder level. Confirming
+        records that you placed the order — it does not add stock. Stock goes up
+        when it arrives, through Receive stock on the Deliveries page.
+      </p>
+      <ul className="divide-y">
+        {reorders.map((r) => (
+          <ReorderRow key={r.docId} reorder={r} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ReorderRow({ reorder }: { reorder: ReorderRequest }) {
+  const { pharmacist } = useCurrentPharmacist();
+  // Editable before confirming — the suggested figure is a calculation, and
+  // the pharmacist may know the supplier only sells in boxes of 50, or that
+  // another order is already in transit. Same inline-number pattern as the
+  // delivery confirmation flow.
+  const [qty, setQty] = useState(String(reorder.suggestedQty));
+  const [busy, setBusy] = useState(false);
+
+  const actor =
+    pharmacist?.fullName || pharmacist?.pharmacistId || "pharmacist";
+  const n = Number(qty);
+  const valid = Number.isInteger(n) && n > 0;
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await confirmReorder(reorder.docId, n, actor);
+      toast.success(`Recorded: ${n} × ${reorder.medName} ordered`);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not record the order",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancel = async () => {
+    setBusy(true);
+    try {
+      await dismissReorder(reorder.docId, actor);
+      toast.success(`${reorder.medName} reorder dismissed`);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not dismiss the request",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <li className="py-3 flex flex-wrap items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{reorder.medName}</p>
+        <p className="text-xs text-muted-foreground">
+          {reorder.currentUnits} unit{reorder.currentUnits === 1 ? "" : "s"}{" "}
+          left
+          {reorder.triggeredAt
+            ? ` · flagged ${new Date(reorder.triggeredAt).toLocaleDateString(
+                "en-ZA",
+                { day: "numeric", month: "short" },
+              )}`
+            : ""}
+        </p>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <label className="text-[11px] text-muted-foreground">Order</label>
+        <input
+          type="number"
+          min={1}
+          value={qty}
+          disabled={busy}
+          onChange={(e) => setQty(e.target.value)}
+          className={`w-20 border rounded px-2 py-1 text-sm disabled:opacity-50 ${
+            !valid ? "border-red-400 bg-red-50" : ""
+          }`}
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={confirm}
+          disabled={busy || !valid}
+          className="inline-flex items-center gap-1.5 bg-[oklch(0.18_0.06_260)] text-white text-xs px-3 py-1.5 rounded-md hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
+        >
+          <Check size={13} /> Confirm
+        </button>
+        <button
+          onClick={cancel}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 border text-xs px-3 py-1.5 rounded-md hover:bg-secondary disabled:opacity-50"
+        >
+          <X size={13} /> Cancel
+        </button>
+      </div>
+    </li>
   );
 }

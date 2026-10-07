@@ -37,6 +37,15 @@ export interface StockItem {
   category?: string;
   lastUpdated?: string;
   clinicId?: number; // NEW — which clinic this stock belongs to (mock/fallback items won't have one)
+  // The level at which an automatic reorder request is raised. SEPARATE from
+  // `threshold` above on purpose: `threshold` drives the Low/OK badge and the
+  // Deliveries sort order, and changing what it means would move both. This
+  // one is the pharmacist's own "order more when it gets this low" figure.
+  //
+  // `undefined` means nobody has ever set it — which is NOT the same as 0
+  // (a deliberate "never auto-reorder"), so it is left undefined rather than
+  // coerced to a number.
+  reorderThreshold?: number;
   // No usage figure here on purpose. There used to be an `avgDay` faked as
   // threshold/5, which is why the Stock page and Medication Overview showed
   // different daily usage for the same medication. Real usage comes only
@@ -47,6 +56,7 @@ interface RawInventoryDoc {
   medName?: string;
   quantity?: number | string; // TODO(db): sometimes a string in Firestore — see db-issues.md #1
   threshold?: number | string;
+  reorderThreshold?: number | string; // same string-vs-number caveat as quantity
   inventId?: number;
   category?: string;
   lastUpdated?: string;
@@ -65,6 +75,14 @@ function mapInventoryDoc(id: string, data: RawInventoryDoc): StockItem {
     name: data.medName ?? "Unknown medication",
     units: toNumber(data.quantity),
     threshold: toNumber(data.threshold),
+    // Not toNumber(): that maps a missing field to 0, which would read as
+    // "auto-reorder is switched off" for every medication nobody has
+    // configured yet. Undefined has to survive so the UI can fall back to
+    // the computed reorder point instead.
+    reorderThreshold:
+      data.reorderThreshold == null
+        ? undefined
+        : toNumber(data.reorderThreshold),
     inventId: data.inventId,
     category: data.category,
     lastUpdated: data.lastUpdated,
@@ -147,6 +165,19 @@ export async function addInventoryStock(
   await updateDoc(ref, {
     quantity: newQuantity, // always written as a real number, fixing the bad data as we go
     lastUpdated: new Date().toISOString(),
+  });
+
+  // This is the decrement path for sending stock to a clinic
+  // (sendStockDelivery passes a negative amount), so a reorder has to be
+  // considered here too — stock leaving for a clinic depletes the pharmacy
+  // exactly as handing it to a patient does. Receiving stock passes a
+  // positive amount, which maybeRaiseReorder ignores.
+  await maybeRaiseReorder({
+    inventoryDocId: docId,
+    clinicId: snap.data().clinicId,
+    medName: String(snap.data().medName ?? "medication"),
+    previousUnits: current,
+    newUnits: newQuantity,
   });
 }
 
@@ -972,6 +1003,11 @@ export async function recordExternalStock(input: {
 export interface MedForecast {
   name: string;
   category?: string;
+  // Carried through from the StockItem this forecast was built from, so a
+  // page showing forecasts can also write back to the inventory doc without
+  // re-joining forecasts to stock by name.
+  docId?: string;
+  reorderThreshold?: number;
   onHand: number;
   avgDailyUse: number;
   daysRemaining: number | null; // null = no usage history yet
@@ -984,6 +1020,24 @@ export interface MedForecast {
 const LEAD_TIME_DAYS = 3; // typical supplier turnaround
 const SAFETY_DAYS = 4; // buffer against demand spikes
 const COVER_DAYS = 30; // how long an order should last
+
+/**
+ * How much to order: enough to cover the review period plus the wait for
+ * delivery, minus what's already on the shelf.
+ *
+ * Extracted so the threshold-triggered reorder flow and the computed
+ * forecast table can't disagree about the quantity. Two copies of this
+ * arithmetic would eventually drift, and a pharmacist comparing the two
+ * panels would have no way to tell which number was right.
+ */
+export function suggestedOrderQty(
+  avgDailyUse: number,
+  unitsOnHand: number,
+): number {
+  if (!(avgDailyUse > 0)) return 0;
+  const targetLevel = Math.ceil(avgDailyUse * (COVER_DAYS + LEAD_TIME_DAYS));
+  return Math.max(0, targetLevel - unitsOnHand);
+}
 
 /**
  * Real usage history per medication over `days`, from the patientDispensing
@@ -1137,6 +1191,8 @@ export function buildForecasts(
         return {
           name: s.name,
           category: s.category,
+          docId: s.docId,
+          reorderThreshold: s.reorderThreshold,
           onHand: s.units,
           avgDailyUse: 0,
           daysRemaining: null,
@@ -1151,10 +1207,7 @@ export function buildForecasts(
       const reorderPoint = Math.ceil(
         avgDailyUse * LEAD_TIME_DAYS + avgDailyUse * SAFETY_DAYS,
       );
-      const targetLevel = Math.ceil(
-        avgDailyUse * (COVER_DAYS + LEAD_TIME_DAYS),
-      );
-      const suggestedOrder = Math.max(0, targetLevel - s.units);
+      const suggestedOrder = suggestedOrderQty(avgDailyUse, s.units);
 
       const status =
         daysRemaining <= LEAD_TIME_DAYS
@@ -1166,6 +1219,8 @@ export function buildForecasts(
       return {
         name: s.name,
         category: s.category,
+        docId: s.docId,
+        reorderThreshold: s.reorderThreshold,
         onHand: s.units,
         avgDailyUse: Math.round(avgDailyUse * 10) / 10,
         daysRemaining: Math.round(daysRemaining * 10) / 10,
@@ -1384,17 +1439,25 @@ export async function dispenseFromPharmacy(input: {
     ? Number(patientSnap.data().userId)
     : null;
 
-  return runTransactionOnline(db, async (tx) => {
+  // Captured inside the transaction and read again after it commits, so the
+  // reorder check compares the real before/after figures rather than a value
+  // re-read later that another dispense may already have moved.
+  let unitsBefore = 0;
+  let dispensedMedName = "medication";
+
+  const result = await runTransactionOnline(db, async (tx) => {
     const snap = await tx.get(invRef);
     if (!snap.exists()) throw new Error("Medication not found in inventory.");
     const data = snap.data();
     const current = toNumber(data.quantity);
+    unitsBefore = current;
     if (current < input.unitsGiven) {
       throw new Error(
         `Not enough stock — only ${current} unit${current === 1 ? "" : "s"} left.`,
       );
     }
     const medName = String(data.medName ?? "medication");
+    dispensedMedName = medName;
 
     tx.update(invRef, {
       quantity: current - input.unitsGiven,
@@ -1435,5 +1498,302 @@ export async function dispenseFromPharmacy(input: {
       });
     }
     return { medName, remaining: current - input.unitsGiven };
+  });
+
+  // After the handover has committed, not inside the transaction: a reorder
+  // write must never be part of the atomic stock deduction, or a failure to
+  // raise a notification would roll back medication the patient has already
+  // been handed.
+  await maybeRaiseReorder({
+    inventoryDocId: input.inventoryDocId,
+    clinicId: input.clinicId,
+    medName: dispensedMedName,
+    previousUnits: unitsBefore,
+    newUnits: unitsBefore - input.unitsGiven,
+  });
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Automated reorder requests.
+//
+// `inventory.threshold` drove nothing but a colour badge: stock could fall
+// past it and sit there, and the only person who would notice was whoever
+// happened to open the Stock page. This closes that loop — crossing the
+// threshold raises a real record and tells the pharmacists at that clinic.
+//
+// Two things are deliberately kept apart:
+//   - the forecast panel ("Order these now") is COMPUTED from usage history,
+//     and recomputes every time the numbers move;
+//   - a reorder request is an EVENT. It happened at a moment, to a quantity,
+//     and somebody either ordered it or decided not to. That has to persist,
+//     because "did anyone actually order this?" is not answerable from a
+//     recomputed forecast.
+// ---------------------------------------------------------------------------
+
+export type ReorderStatus = "pending" | "ordered" | "dismissed";
+
+export interface ReorderRequest {
+  docId: string;
+  clinicId: number;
+  inventoryDocId: string;
+  medName: string;
+  currentUnits: number;
+  suggestedQty: number;
+  status: ReorderStatus;
+  triggeredAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  orderedQty?: number;
+}
+
+/**
+ * Average daily use of one medication at one clinic, over the same window
+ * the forecasts use.
+ *
+ * The forecast path gets this from a live `useMedicationUsage` subscription,
+ * but a reorder fires inside a write path where no hook is available — so
+ * this is the one-shot read of the same data. It shares USAGE_WINDOW_DAYS
+ * and the same `patientDispensing` collection, so a reorder's suggested
+ * quantity matches what the Medication Overview would show.
+ */
+async function avgDailyUseFor(
+  clinicId: number,
+  medName: string,
+): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - USAGE_WINDOW_DAYS);
+
+  const snap = await getDocs(
+    query(
+      collection(db, "patientDispensing"),
+      where("clinicId", "==", clinicId),
+      where("medName", "==", medName),
+    ),
+  );
+
+  let total = 0;
+  snap.docs.forEach((d) => {
+    const data = d.data();
+    // Same createdAt handling as useMedicationUsage: a write made offline
+    // carries no server timestamp yet, so fall back to a string date rather
+    // than dropping the row.
+    const raw = data.createdAt;
+    const when = raw?.toDate
+      ? raw.toDate()
+      : typeof raw === "string"
+        ? new Date(raw)
+        : null;
+    if (!when || Number.isNaN(when.getTime())) return;
+    if (when < cutoff) return;
+    total += toNumber(data.unitsGiven);
+  });
+
+  return total / USAGE_WINDOW_DAYS;
+}
+
+/**
+ * Raise a reorder request if this write just took stock across its reorder
+ * threshold. Call AFTER the stock write has committed.
+ *
+ * Fires only on the CROSSING — `previousUnits` above the threshold and
+ * `newUnits` at or below it. That is what stops a request being raised again
+ * on every subsequent dispense while stock is already low, and it is also
+ * what makes "Cancel" stick: once dismissed, every later dispense has
+ * `previousUnits` already at or below the line, so nothing re-fires until
+ * stock is restocked above it and crosses down again.
+ *
+ * Never throws. A reorder request is a helpful extra, not part of the
+ * dispense — a pharmacist handing medication to a patient must not see their
+ * handover fail because a notification couldn't be written.
+ */
+export async function maybeRaiseReorder(input: {
+  inventoryDocId: string;
+  clinicId: number | undefined;
+  medName: string;
+  previousUnits: number;
+  newUnits: number;
+}): Promise<void> {
+  try {
+    if (input.clinicId == null) return;
+    if (input.newUnits >= input.previousUnits) return; // not a decrease
+
+    const invSnap = await getDoc(doc(db, "inventory", input.inventoryDocId));
+    if (!invSnap.exists()) return;
+
+    const raw = invSnap.data().reorderThreshold;
+    // Never configured — stay silent rather than guessing a threshold and
+    // alerting on a number the pharmacist never chose.
+    if (raw == null) return;
+    const threshold = toNumber(raw);
+
+    const crossed =
+      input.newUnits <= threshold && input.previousUnits > threshold;
+    if (!crossed) return;
+
+    // An open request already covers this medication — a second one would
+    // just be noise for the same shortage.
+    //
+    // Deliberately a single equality filter with the status checked in JS:
+    // combining `where(status, "in", [...])` with another equality filter can
+    // require a composite index that has to be created by hand first, and the
+    // query would fail until someone did. There are only ever a handful of
+    // reorder docs per medication, so filtering here costs nothing.
+    const existing = await getDocs(
+      query(
+        collection(db, "reorders"),
+        where("inventoryDocId", "==", input.inventoryDocId),
+      ),
+    );
+    const hasOpen = existing.docs.some((d) => {
+      const status = d.data().status;
+      return status === "pending" || status === "ordered";
+    });
+    if (hasOpen) return;
+
+    const avgDaily = await avgDailyUseFor(input.clinicId, input.medName);
+    const suggestedQty = suggestedOrderQty(avgDaily, input.newUnits);
+
+    await addDoc(collection(db, "reorders"), {
+      clinicId: input.clinicId,
+      inventoryDocId: input.inventoryDocId,
+      medName: input.medName,
+      currentUnits: input.newUnits,
+      suggestedQty,
+      status: "pending" satisfies ReorderStatus,
+      triggeredAt: new Date().toISOString(),
+    });
+
+    notifyRoleAtClinic({
+      role: "pharmacists",
+      clinicId: input.clinicId,
+      title: "Stock below reorder level",
+      message: `${input.medName} is down to ${input.newUnits} unit${
+        input.newUnits === 1 ? "" : "s"
+      }, at or below its reorder level of ${threshold}.${
+        suggestedQty > 0 ? ` Suggested order: ${suggestedQty}.` : ""
+      }`,
+      link: "/pharmacist/analytics",
+    });
+  } catch (err) {
+    // Swallowed on purpose — see the note above about not failing a dispense.
+    console.error("Could not raise a reorder request:", err);
+  }
+}
+
+/** Live pending reorder requests for one clinic. */
+export function usePendingReorders(clinicId: number | undefined): {
+  reorders: ReorderRequest[];
+  loading: boolean;
+} {
+  const [reorders, setReorders] = useState<ReorderRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (clinicId == null) {
+      setReorders([]);
+      setLoading(false);
+      return;
+    }
+    // Two equality filters only, sorted below in JS: adding orderBy here
+    // would require a composite index to be created by hand before the page
+    // worked at all, which is a poor trade for a list this short.
+    const unsub = onSnapshot(
+      query(
+        collection(db, "reorders"),
+        where("clinicId", "==", clinicId),
+        where("status", "==", "pending"),
+      ),
+      (snap) => {
+        setReorders(
+          snap.docs
+            .map((d) => {
+              const x = d.data();
+              return {
+                docId: d.id,
+                clinicId: toNumber(x.clinicId),
+                inventoryDocId: String(x.inventoryDocId ?? ""),
+                medName: String(x.medName ?? "Unknown medication"),
+                currentUnits: toNumber(x.currentUnits),
+                suggestedQty: toNumber(x.suggestedQty),
+                status: (x.status ?? "pending") as ReorderStatus,
+                triggeredAt: String(x.triggeredAt ?? ""),
+                resolvedAt: x.resolvedAt,
+                resolvedBy: x.resolvedBy,
+                orderedQty:
+                  x.orderedQty == null ? undefined : toNumber(x.orderedQty),
+              };
+            })
+            .sort((a, b) => b.triggeredAt.localeCompare(a.triggeredAt)),
+        );
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Reorder requests subscription failed:", err);
+        setReorders([]);
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [clinicId]);
+
+  return { reorders, loading };
+}
+
+/**
+ * Record that an order was actually placed with the supplier.
+ *
+ * Deliberately does NOT add the stock. Nothing has arrived yet — the stock
+ * goes up when it physically does, through "Receive stock into the pharmacy"
+ * on the Deliveries page. Crediting it here would show units on the shelf
+ * that nobody can hand to a patient.
+ */
+export async function confirmReorder(
+  docId: string,
+  orderedQty: number,
+  by: string,
+): Promise<void> {
+  // Other pharmacists at the clinic read this list to decide whether to
+  // order. "Ordered" that only exists on one laptop would cause a double
+  // order, so this needs the server.
+  assertOnline();
+  if (!Number.isInteger(orderedQty) || orderedQty <= 0) {
+    throw new Error("Enter a whole number of units greater than 0.");
+  }
+  await updateDoc(doc(db, "reorders", docId), {
+    status: "ordered" satisfies ReorderStatus,
+    orderedQty,
+    resolvedAt: new Date().toISOString(),
+    resolvedBy: by,
+  });
+}
+
+/** Dismiss a request without ordering. */
+export async function dismissReorder(docId: string, by: string): Promise<void> {
+  assertOnline();
+  await updateDoc(doc(db, "reorders", docId), {
+    status: "dismissed" satisfies ReorderStatus,
+    resolvedAt: new Date().toISOString(),
+    resolvedBy: by,
+  });
+}
+
+/**
+ * Set the level at which this medication raises an automatic reorder.
+ * Writes `reorderThreshold` only — `threshold` is a different field driving
+ * the Low/OK badge, and must not be touched from here.
+ */
+export async function saveReorderThreshold(
+  inventoryDocId: string,
+  value: number,
+): Promise<void> {
+  assertOnline();
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("Enter a reorder level of 0 or more.");
+  }
+  await updateDoc(doc(db, "inventory", inventoryDocId), {
+    reorderThreshold: Math.floor(value),
+    lastUpdated: new Date().toISOString(),
   });
 }

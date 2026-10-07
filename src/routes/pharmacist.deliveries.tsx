@@ -583,8 +583,7 @@ function PharmacyStockTiles({
         <div>
           <h3 className="font-semibold">In your pharmacy right now</h3>
           <p className="text-xs text-muted-foreground">
-            What you can dispense or send. Red and amber need ordering from
-            your supplier.
+            What you can send. Red and amber need ordering from your supplier.
           </p>
         </div>
         <span className="text-xs text-muted-foreground">

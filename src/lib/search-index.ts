@@ -97,10 +97,22 @@ const pharmacistIndex: SearchEntry[] = [
     keywords: ["medications", "inventory", "units"],
   },
   {
-    label: "Diagnostics",
+    label: "Fast Lane Handover",
     section: "Pharmacy",
     path: "/pharmacist/diagnostics",
-    keywords: ["patients", "vitals", "labs"],
+    // "prescription" and "dispense" kept deliberately: the page was called
+    // Prescription Lookup, and the action it performs was called dispensing,
+    // so anyone who learnt either name still finds it. "vitals"/"labs" are
+    // gone — the page never showed either.
+    keywords: [
+      "prescription",
+      "dispense",
+      "handover",
+      "hand over",
+      "fast lane",
+      "collect",
+      "patients",
+    ],
   },
   {
     label: "Deliveries",

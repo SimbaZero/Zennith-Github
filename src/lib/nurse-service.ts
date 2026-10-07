@@ -23,6 +23,10 @@ import {
 } from "@/lib/offline";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
+// The reorder check lives beside the forecast formula it shares, in
+// pharmacist-service.ts. Imported rather than reimplemented so a nurse
+// dispense and a pharmacist handover raise reorders on identical rules.
+import { maybeRaiseReorder } from "@/lib/pharmacist-service";
 
 // Reused, not duplicated — these were previously private to doctor-service.ts.
 // See doctor-service.ts for what each one actually does; the comments there
@@ -874,10 +878,16 @@ export async function dispenseMedication(input: DispenseInput): Promise<void> {
     ? Number(patientSnap.data().userId)
     : null;
 
+  // Captured inside the transaction so the reorder check below compares the
+  // genuine before/after figures, not a value re-read afterwards that another
+  // nurse's dispense may already have moved.
+  let unitsBefore = 0;
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(invDocRef);
     if (!snap.exists()) throw new Error("Medication not found in inventory");
     const current = Number(snap.data().quantity) || 0;
+    unitsBefore = current;
     if (current < input.unitsGiven) {
       throw new Error(
         `Not enough stock — only ${current} unit${current === 1 ? "" : "s"} left`,
@@ -925,5 +935,16 @@ export async function dispenseMedication(input: DispenseInput): Promise<void> {
         timeSent: new Date().toISOString(),
       });
     }
+  });
+
+  // After the dispense has committed, never inside it: failing to raise a
+  // reorder must not roll back medication a patient has already been given.
+  // maybeRaiseReorder swallows its own errors for the same reason.
+  await maybeRaiseReorder({
+    inventoryDocId: invDocRef.id,
+    clinicId: input.clinicId,
+    medName: input.medName,
+    previousUnits: unitsBefore,
+    newUnits: unitsBefore - input.unitsGiven,
   });
 }
