@@ -44,7 +44,9 @@ flowchart LR
      sends come out of its own 15 a day, which no other account can use up,
      so family members sharing a phone can't be locked out by someone else
      signing up with their number. Up to 5 accounts per number get this,
-     the ones that verified it most recently, for 90 days after they last did.
+     the ones that verified it most recently, for 90 days after they last did,
+     and together they get at most 75 a day, so cycling new accounts through
+     one SIM can't multiply the texts. Daily counts reset at 00:00 UTC.
    Users can't reset their own 2FA; an admin clears `totpSecret` and
    `twoFactorMethod` in the console.
 4. **Session** — after 2FA, `setAuth(role, username, facilityId)` caches the role in
