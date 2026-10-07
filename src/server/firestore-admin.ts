@@ -45,7 +45,16 @@ export type FirestoreWrite =
   | { update: [collection: string, id: string]; data: FirestoreData; appendToArrays?: Record<string, unknown[]> }
   | { create: string; data: FirestoreData }
   /** Replaces the whole document, optionally only if it's still at a known version. */
-  | { set: [collection: string, id: string]; data: FirestoreData; precondition?: WriteOptions["precondition"] };
+  | { set: [collection: string, id: string]; data: FirestoreData; precondition?: WriteOptions["precondition"] }
+  /** Adds to number fields atomically, creating the document if needed; never conflicts. */
+  | { increment: [collection: string, id: string]; by: Record<string, number> };
+
+export interface CommitResult {
+  /** The document's new version. */
+  updateTime: string;
+  /** For an `increment`, each field's value after it was applied, in order. */
+  transformResults: unknown[];
+}
 
 type RestValue = Record<string, unknown>;
 
@@ -147,14 +156,15 @@ export class FirestoreAdmin {
 
   /**
    * Applies several writes atomically in one request and returns each
-   * document's new version. `update` sets only the given fields on an
-   * existing document; `appendToArrays` adds values to array fields the way
-   * arrayUnion does, so concurrent runs can't drop each other's entries.
-   * `create` makes a new document with an auto ID. `set` replaces a document,
-   * optionally pinned to a version. If any precondition fails, nothing is
-   * written and WriteConflict is thrown.
+   * document's new version, plus the new values of any increments. `update`
+   * sets only the given fields on an existing document; `appendToArrays` adds
+   * values to array fields the way arrayUnion does, so concurrent runs can't
+   * drop each other's entries. `create` makes a new document with an auto ID.
+   * `set` replaces a document, optionally pinned to a version. `increment`
+   * adds to counters server-side, like the SDK's increment(). If any
+   * precondition fails, nothing is written and WriteConflict is thrown.
    */
-  async commit(writes: FirestoreWrite[]): Promise<string[]> {
+  async commit(writes: FirestoreWrite[]): Promise<CommitResult[]> {
     const res = await this.request(
       `${this.documentsUrl}:commit`,
       { method: "POST", body: JSON.stringify({ writes: writes.map((write) => this.toRestWrite(write)) }) },
@@ -167,8 +177,13 @@ export class FirestoreAdmin {
       }
       throw new Error(`Firestore POST ${res.status}: ${detail.slice(0, 300)}`);
     }
-    const body = (await res.json()) as { writeResults?: Array<{ updateTime?: string }> };
-    return (body.writeResults ?? []).map((result) => result.updateTime ?? "");
+    const body = (await res.json()) as {
+      writeResults?: Array<{ updateTime?: string; transformResults?: RestValue[] }>;
+    };
+    return (body.writeResults ?? []).map((result) => ({
+      updateTime: result.updateTime ?? "",
+      transformResults: (result.transformResults ?? []).map(decodeValue),
+    }));
   }
 
   /**
@@ -204,6 +219,20 @@ export class FirestoreAdmin {
   }
 
   private toRestWrite(write: FirestoreWrite) {
+    if ("increment" in write) {
+      // What the SDK sends for setDoc(ref, { n: increment(1) }, { merge: true }):
+      // an empty masked update, so other fields are kept, and a missing
+      // document or field starts from 0.
+      const [collection, id] = write.increment;
+      return {
+        update: { name: this.docName(collection, id), fields: {} },
+        updateMask: { fieldPaths: [] },
+        updateTransforms: Object.entries(write.by).map(([field, by]) => ({
+          fieldPath: quoteFieldPath(field),
+          increment: encodeValue(by),
+        })),
+      };
+    }
     const data = Object.fromEntries(Object.entries(write.data).filter(([, v]) => v !== undefined));
     if ("create" in write) {
       return {

@@ -10,19 +10,20 @@
 //
 // State lives in collections firestore.rules deny to every client; this code
 // reaches them as the service account:
-//   smsChallenges/{uid}              the current code (hashed), attempt and send
-//                                    counters, and verifiedPhone: the number this
-//                                    account has proved it receives texts on
-//   smsPhoneLimits/{number}          sends to a number from accounts that haven't
-//                                    verified it
-//   smsVerifiedPhoneLimits/{number}  sends to a number from the account that most
-//                                    recently verified it (the "holder")
-//   smsGlobalLimits/daily            all unverified sends, app-wide
+//   smsChallenges/{uid}         the current code (hashed), attempt and send
+//                               counters, and verifiedPhone: the number this
+//                               account has proved it receives texts on
+//   smsVerifiedPhones/{number}  the accounts that have proved they receive
+//                               texts on the number, with when each last did
+//   smsPhoneLimits/{number}     sends to a number from accounts that haven't
+//                               verified it
+//   smsGlobalLimits/{day}       all such unverified sends, app-wide, per UTC day
 import type { SendSmsCodeResult, SmsCodeFailure, VerifySmsCodeResult } from "../lib/sms-otp";
 import { isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile } from "../lib/smsportal";
 import { readEnv } from "./env";
 import { verifyIdToken } from "./firebase-auth";
 import {
+  type CommitResult,
   FirestoreConfigError,
   firestoreAdminFromEnv,
   type FirestoreAdmin,
@@ -43,20 +44,21 @@ const MAX_ATTEMPTS_PER_ATTEMPT_WINDOW = 20;
 
 // Numbers entered at self-signup aren't verified, so sends from an account
 // that hasn't proved it receives texts on its number count against that number
-// and against an app-wide daily budget. The account that most recently
-// verified a number (its "holder") instead gets a separate per-number
-// allowance that no other account can use up, so nobody can lock the patient
-// who holds a number out; other accounts on the number stay on the shared
-// limits, so extra accounts can't multiply the texts it gets.
+// and against an app-wide daily budget, which anyone can use up. Once an
+// account has verified its number, its sends come out of its own daily
+// allowance instead, which no other account can touch: an outsider signing up
+// with a family's number can't lock any of the family out. Only the accounts
+// that verified a number most recently get this, and only for a while after
+// they last did, so piling up accounts can't multiply the texts it gets.
 const MAX_UNVERIFIED_SENDS_PER_PHONE = 10;
-const MAX_VERIFIED_SENDS_PER_PHONE = 10;
-// Far above normal sign-in use, but bounds what one verified number costs.
-const MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY = 30;
+const MAX_VERIFIED_SENDS_PER_DAY = 15;
+const MAX_VERIFIED_ACCOUNTS_PER_PHONE = 5;
+const VERIFIED_FOR_MS = 90 * 24 * 60 * 60_000;
 const DAILY_WINDOW_MS = 24 * 60 * 60_000;
 const DEFAULT_UNVERIFIED_SENDS_PER_DAY = 200;
-// Reservations pinned to shared counters can lose a race; retry, with a
-// short random wait so simultaneous requests spread out, before saying "busy".
-const MAX_RESERVE_TRIES = 5;
+// Writes pinned to what was read can lose a race; retry, with a short random
+// wait so simultaneous requests spread out, before saying "busy".
+const MAX_WRITE_TRIES = 5;
 
 /** SMS_OTP_UNVERIFIED_DAILY_LIMIT as a whole number (0 = none), else the default. */
 function unverifiedDailyLimit(env: unknown): number {
@@ -106,15 +108,36 @@ function adminOrNull(env: unknown): FirestoreAdmin | null {
   }
 }
 
-/** A rolling counter stored as { windowStart, sends }: the count still in the window. */
-function windowCount(doc: FirestoreDoc | null, windowMs: number, now: number) {
-  const open = now - Number(doc?.data.windowStart ?? 0) < windowMs;
-  return { windowStart: open ? Number(doc?.data.windowStart) : now, sends: open ? Number(doc?.data.sends ?? 0) : 0 };
+/** A rolling counter: when its window opened, and the count still inside it. */
+function rolling(start: unknown, count: unknown, windowMs: number, now: number) {
+  const open = now - Number(start ?? 0) < windowMs;
+  return { start: open ? Number(start) : now, count: open ? Number(count ?? 0) : 0 };
+}
+
+/** The app-wide counter's document for the UTC day `now` is in, and when that day ends. */
+function globalDay(now: number) {
+  const id = new Date(now).toISOString().slice(0, 10);
+  return { id, endsAt: Date.parse(id) + DAILY_WINDOW_MS };
+}
+
+/** The accounts on a smsVerifiedPhones doc that still count as verified, with when each last verified. */
+function verifiedAccounts(doc: FirestoreDoc | null, now: number): Map<string, number> {
+  const recorded = doc?.data.accounts;
+  const found = new Map<string, number>();
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) return found;
+  for (const [uid, at] of Object.entries(recorded)) {
+    if (typeof at === "number" && now - at < VERIFIED_FOR_MS) found.set(uid, at);
+  }
+  return found;
 }
 
 /** Pin a write to the version read, or to "still doesn't exist". */
 function pinnedTo(doc: FirestoreDoc | null) {
   return doc?.updateTime ? { updateTime: doc.updateTime } : { exists: false };
+}
+
+function waitBeforeRetry(tries: number) {
+  return new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40 * tries));
 }
 
 /**
@@ -166,8 +189,8 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
   for (let tries = 1; !reserved; tries++) {
     const outcome = await reserveSend(fs, patient.uid, phone, { codeHash, salt }, env);
     if ("reserved" in outcome) reserved = outcome.reserved;
-    else if (outcome.result.ok || outcome.result.reason !== "busy" || tries >= MAX_RESERVE_TRIES) return outcome.result;
-    else await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40 * tries));
+    else if (outcome.result.ok || outcome.result.reason !== "busy" || tries >= MAX_WRITE_TRIES) return outcome.result;
+    else await waitBeforeRetry(tries);
   }
 
   // Plain ASCII keeps this to a single 160-character SMS segment.
@@ -180,20 +203,9 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
   });
   if (!sent.ok || (sent.dryRun && !testMode)) {
     // Nothing was delivered: drop the code and the cooldown so the patient can
-    // retry straight away, and give back the app-wide slot (failed texts aren't
-    // billed). The per-account and per-number counts stay, which bounds retries.
-    // Both are best effort, pinned so they never undo someone else's write.
-    await fs
-      .write(
-        "smsChallenges",
-        patient.uid,
-        { sentAt: reserved.previousSentAt },
-        { mask: ["sentAt", "codeHash", "salt", "expiresAt"], precondition: { updateTime: reserved.challengeVersion } },
-      )
-      .catch(() => {});
-    if (reserved.globalWindowStart !== undefined) {
-      await giveBackGlobalSlot(fs, reserved.globalWindowStart).catch(() => {});
-    }
+    // retry straight away, and give back the daily slot the send used
+    // (failed texts aren't billed). The hourly counts stay, which bounds retries.
+    await undoReservation(fs, patient.uid, reserved);
     return { ok: false, reason: "send-failed" };
   }
   // Test mode sends nothing, so the code is only in the server log. Never
@@ -207,26 +219,33 @@ interface Reserved {
   sentAt: number;
   previousSentAt: number;
   challengeVersion: string;
-  /** Set when this send used an app-wide slot, to give it back if the text fails. */
-  globalWindowStart?: number;
+  /** A verified account's daily count before this send, to restore if the text fails. */
+  previousVerifiedDay?: { verifiedDayStart: unknown; verifiedDaySends: unknown };
+  /** The app-wide counter this send was added to, to take it off again if the text fails. */
+  globalDay?: string;
 }
 
 /**
- * Takes one send back off the app-wide counter, as long as it's still the
- * same daily window. Other sends may have changed the counter since, so this
- * re-reads and retries rather than restoring an old value.
+ * Takes back a send that was reserved but not delivered. Best effort: the
+ * challenge is only restored if nothing has changed it since, and the
+ * app-wide count goes down by exactly one however many sends happened in
+ * between.
  */
-async function giveBackGlobalSlot(fs: FirestoreAdmin, windowStart: number) {
-  for (let tries = 0; tries < 3; tries++) {
-    const doc = await fs.get("smsGlobalLimits", "daily");
-    const sends = Number(doc?.data.sends ?? 0);
-    if (!doc?.updateTime || Number(doc.data.windowStart) !== windowStart || sends <= 0) return;
-    try {
-      await fs.write("smsGlobalLimits", "daily", { windowStart, sends: sends - 1 }, { precondition: { updateTime: doc.updateTime } });
-      return;
-    } catch (error) {
-      if (!(error instanceof WriteConflict)) throw error;
-    }
+async function undoReservation(fs: FirestoreAdmin, uid: string, reserved: Reserved) {
+  const day = reserved.previousVerifiedDay;
+  await fs
+    .write(
+      "smsChallenges",
+      uid,
+      { sentAt: reserved.previousSentAt, ...day },
+      {
+        mask: ["sentAt", "codeHash", "salt", "expiresAt", ...(day ? ["verifiedDayStart", "verifiedDaySends"] : [])],
+        precondition: { updateTime: reserved.challengeVersion },
+      },
+    )
+    .catch(() => {});
+  if (reserved.globalDay) {
+    await fs.commit([{ increment: ["smsGlobalLimits", reserved.globalDay], by: { sends: -1 } }]).catch(() => {});
   }
 }
 
@@ -255,55 +274,48 @@ async function reserveSend(
       result: { ok: false, reason: "cooldown", retryAt: previousSentAt + RESEND_COOLDOWN_MS, phoneLast4: phone.slice(-4) },
     };
   }
-  const own = windowCount(challenge, SEND_WINDOW_MS, now);
-  if (own.sends >= MAX_SENDS_PER_WINDOW) {
-    return { result: { ok: false, reason: "rate-limited", retryAt: own.windowStart + SEND_WINDOW_MS } };
+  const own = rolling(prev.windowStart, prev.sends, SEND_WINDOW_MS, now);
+  if (own.count >= MAX_SENDS_PER_WINDOW) {
+    return { result: { ok: false, reason: "rate-limited", retryAt: own.start + SEND_WINDOW_MS } };
   }
 
   const writes: FirestoreWrite[] = [];
   const phoneKey = phone.slice(1);
-  let globalWindowStart: number | undefined;
-  const verifiedDoc = prev.verifiedPhone === phone ? await fs.get("smsVerifiedPhoneLimits", phoneKey) : null;
-  if (verifiedDoc?.data.holder === uid) {
-    const perPhone = windowCount(verifiedDoc, SEND_WINDOW_MS, now);
-    if (perPhone.sends >= MAX_VERIFIED_SENDS_PER_PHONE) {
-      return { result: { ok: false, reason: "rate-limited", retryAt: perPhone.windowStart + SEND_WINDOW_MS } };
+  const verified =
+    prev.verifiedPhone === phone && verifiedAccounts(await fs.get("smsVerifiedPhones", phoneKey), now).has(uid);
+
+  // A verified account's daily count lives on its own challenge, so no other
+  // account's sends can use it up.
+  const ownDay = verified ? rolling(prev.verifiedDayStart, prev.verifiedDaySends, DAILY_WINDOW_MS, now) : undefined;
+  let day: ReturnType<typeof globalDay> | undefined;
+  let dailyLimit = 0;
+  let globalWrite = -1;
+  if (ownDay) {
+    if (ownDay.count >= MAX_VERIFIED_SENDS_PER_DAY) {
+      return { result: { ok: false, reason: "rate-limited", retryAt: ownDay.start + DAILY_WINDOW_MS } };
     }
-    const dayOpen = now - Number(verifiedDoc.data.dayStart ?? 0) < DAILY_WINDOW_MS;
-    const dayStart = dayOpen ? Number(verifiedDoc.data.dayStart) : now;
-    const daySends = dayOpen ? Number(verifiedDoc.data.daySends ?? 0) : 0;
-    if (daySends >= MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY) {
-      return { result: { ok: false, reason: "rate-limited", retryAt: dayStart + DAILY_WINDOW_MS } };
-    }
-    writes.push({
-      set: ["smsVerifiedPhoneLimits", phoneKey],
-      data: { holder: uid, ...perPhone, sends: perPhone.sends + 1, dayStart, daySends: daySends + 1 },
-      precondition: pinnedTo(verifiedDoc),
-    });
   } else {
     const phoneDoc = await fs.get("smsPhoneLimits", phoneKey);
-    const perPhone = windowCount(phoneDoc, SEND_WINDOW_MS, now);
-    if (perPhone.sends >= MAX_UNVERIFIED_SENDS_PER_PHONE) {
-      return { result: { ok: false, reason: "rate-limited", retryAt: perPhone.windowStart + SEND_WINDOW_MS } };
+    const perPhone = rolling(phoneDoc?.data.windowStart, phoneDoc?.data.sends, SEND_WINDOW_MS, now);
+    if (perPhone.count >= MAX_UNVERIFIED_SENDS_PER_PHONE) {
+      return { result: { ok: false, reason: "rate-limited", retryAt: perPhone.start + SEND_WINDOW_MS } };
     }
-    const globalDoc = await fs.get("smsGlobalLimits", "daily");
-    const global = windowCount(globalDoc, DAILY_WINDOW_MS, now);
-    const dailyLimit = unverifiedDailyLimit(env);
-    if (global.sends >= dailyLimit) {
+    day = globalDay(now);
+    dailyLimit = unverifiedDailyLimit(env);
+    const globalDoc = await fs.get("smsGlobalLimits", day.id);
+    if (Number(globalDoc?.data.sends ?? 0) >= dailyLimit) {
       console.warn(`[sms-otp] app-wide daily limit of ${dailyLimit} unverified sends reached`);
-      return { result: { ok: false, reason: "rate-limited", retryAt: global.windowStart + DAILY_WINDOW_MS } };
+      return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
     }
     writes.push({
       set: ["smsPhoneLimits", phoneKey],
-      data: { ...perPhone, sends: perPhone.sends + 1 },
+      data: { windowStart: perPhone.start, sends: perPhone.count + 1 },
       precondition: pinnedTo(phoneDoc),
     });
-    globalWindowStart = global.windowStart;
-    writes.push({
-      set: ["smsGlobalLimits", "daily"],
-      data: { ...global, sends: global.sends + 1 },
-      precondition: pinnedTo(globalDoc),
-    });
+    // Incremented rather than pinned, so sends from different accounts never
+    // conflict over it; the count it returns is checked below.
+    globalWrite = writes.length;
+    writes.push({ increment: ["smsGlobalLimits", day.id], by: { sends: 1 } });
   }
 
   writes.push({
@@ -315,30 +327,43 @@ async function reserveSend(
       attempts: 0,
       phone,
       sentAt: now,
-      windowStart: own.windowStart,
-      sends: own.sends + 1,
+      windowStart: own.start,
+      sends: own.count + 1,
       // Carried over: these outlive any one code.
       verifiedPhone: typeof prev.verifiedPhone === "string" ? prev.verifiedPhone : undefined,
+      verifiedDayStart: ownDay ? ownDay.start : prev.verifiedDayStart,
+      verifiedDaySends: ownDay ? ownDay.count + 1 : prev.verifiedDaySends,
       attemptWindowStart: attemptWindowOpen ? Number(prev.attemptWindowStart) : undefined,
       attemptsInWindow: attemptWindowOpen ? Number(prev.attemptsInWindow ?? 0) : undefined,
     },
     precondition: pinnedTo(challenge),
   });
 
+  let results: CommitResult[];
   try {
-    const versions = await fs.commit(writes);
-    return {
-      reserved: {
-        sentAt: now,
-        previousSentAt,
-        challengeVersion: versions.at(-1) ?? "",
-        globalWindowStart,
-      },
-    };
+    results = await fs.commit(writes);
   } catch (error) {
     if (error instanceof WriteConflict) return { result: { ok: false, reason: "busy" } };
     throw error;
   }
+  const reserved: Reserved = {
+    sentAt: now,
+    previousSentAt,
+    challengeVersion: results.at(-1)?.updateTime ?? "",
+    previousVerifiedDay: ownDay
+      ? { verifiedDayStart: prev.verifiedDayStart, verifiedDaySends: prev.verifiedDaySends }
+      : undefined,
+    globalDay: day?.id,
+  };
+
+  // Sends that read the app-wide count at the same moment can all get this
+  // far; the count after this one's increment says whether it fits.
+  if (day && !(Number(results[globalWrite]?.transformResults[0]) <= dailyLimit)) {
+    console.warn(`[sms-otp] app-wide daily limit of ${dailyLimit} unverified sends reached`);
+    await undoReservation(fs, uid, reserved);
+    return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
+  }
+  return { reserved };
 }
 
 /* ---------------- verify ---------------- */
@@ -410,13 +435,13 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
     throw error;
   }
 
-  // This account now holds the number: only the latest account to verify a
-  // number gets its verified allowance, so accounts that verified it in the
-  // past (an earlier owner, a borrowed phone) can't use it up.
+  // From now on this account's sends come out of its own allowance. If this
+  // can't be recorded the sign-in still succeeds; the account just stays on
+  // the shared limits until it next verifies.
   if (verifiedPhone) {
-    await fs
-      .write("smsVerifiedPhoneLimits", verifiedPhone.slice(1), { holder: patient.uid }, { mask: ["holder"] })
-      .catch((error) => console.error("[sms-otp] couldn't record the number's holder:", error));
+    await recordVerifiedAccount(fs, verifiedPhone.slice(1), patient.uid, now).catch((error) =>
+      console.error("[sms-otp] couldn't record the verified number:", error),
+    );
   }
 
   // The first verified code turns text-message sign-in on for this account.
@@ -425,4 +450,32 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
     await fs.write("profiles", patient.uid, { twoFactorMethod: "sms" }, { mask: ["twoFactorMethod"], precondition: { exists: true } });
   }
   return { ok: true };
+}
+
+/**
+ * Adds an account to the accounts that have verified a number, or refreshes
+ * it. Only the most recent few are kept: when the list is full, the account
+ * that verified longest ago drops off. Only someone who receives texts on the
+ * number can get onto the list, so nobody else can push a patient off it.
+ */
+async function recordVerifiedAccount(fs: FirestoreAdmin, phoneKey: string, uid: string, now: number) {
+  for (let tries = 1; ; tries++) {
+    const doc = await fs.get("smsVerifiedPhones", phoneKey);
+    const others = [...verifiedAccounts(doc, now)]
+      .filter(([other]) => other !== uid)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_VERIFIED_ACCOUNTS_PER_PHONE - 1);
+    try {
+      await fs.write(
+        "smsVerifiedPhones",
+        phoneKey,
+        { accounts: Object.fromEntries([[uid, now], ...others]) },
+        { precondition: pinnedTo(doc) },
+      );
+      return;
+    } catch (error) {
+      if (!(error instanceof WriteConflict) || tries >= MAX_WRITE_TRIES) throw error;
+      await waitBeforeRetry(tries);
+    }
+  }
 }
