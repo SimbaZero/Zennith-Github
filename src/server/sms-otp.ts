@@ -24,7 +24,7 @@
 //   smsGlobalLimits/{day}              all such unverified sends, app-wide,
 //                                      per UTC day
 import type { SendSmsCodeResult, SmsCodeFailure, VerifySmsCodeResult } from "../lib/sms-otp";
-import { isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile } from "../lib/smsportal";
+import { isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile, withoutPhoneNumbers } from "../lib/smsportal";
 import { readEnv } from "./env";
 import { verifyIdToken } from "./firebase-auth";
 import {
@@ -158,7 +158,7 @@ function waitBeforeRetry(tries: number) {
 
 /** An error for the log, without the phone numbers that name some documents. */
 function forLog(error: unknown): string {
-  return String(error).replace(/\d{9,}/g, "<number>");
+  return withoutPhoneNumbers(String(error));
 }
 
 /**
@@ -271,7 +271,9 @@ async function undoReservation(fs: FirestoreAdmin, uid: string, reserved: Reserv
     }
   }
 
-  // Increments never conflict, so these come back even if the challenge couldn't.
+  // Increments never conflict, so these come back even if the challenge
+  // couldn't. Not retried: a commit whose response was lost may have been
+  // applied, and giving a slot back twice would raise the cap.
   const decrements: FirestoreWrite[] = reserved.counters.map(([collection, id]) => ({
     increment: [collection, id],
     by: { sends: -1 },
@@ -279,13 +281,8 @@ async function undoReservation(fs: FirestoreAdmin, uid: string, reserved: Reserv
   if (refundHourly && reserved.phoneKey) {
     decrements.push({ increment: ["smsPhoneLimits", reserved.phoneKey], by: { sends: -1 } });
   }
-  for (let tries = 1; decrements.length > 0 && tries <= 2; tries++) {
-    try {
-      await fs.commit(decrements);
-      break;
-    } catch (error) {
-      if (tries === 2) console.error("[sms-otp] couldn't give back a send:", forLog(error));
-    }
+  if (decrements.length > 0) {
+    await fs.commit(decrements).catch((error) => console.error("[sms-otp] couldn't give back a send:", forLog(error)));
   }
 }
 
@@ -342,7 +339,12 @@ async function reserveSend(
     if (ownDaySends >= MAX_VERIFIED_SENDS_PER_DAY) {
       return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
     }
-    count(["smsVerifiedPhoneDays", `${phoneKey}_${day.id}`], MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY);
+    const phoneDayId = `${phoneKey}_${day.id}`;
+    const phoneDay = await fs.get("smsVerifiedPhoneDays", phoneDayId);
+    if (Number(phoneDay?.data.sends ?? 0) >= MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY) {
+      return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
+    }
+    count(["smsVerifiedPhoneDays", phoneDayId], MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY);
   } else {
     const phoneDoc = await fs.get("smsPhoneLimits", phoneKey);
     const perPhone = rolling(phoneDoc?.data.windowStart, phoneDoc?.data.sends, SEND_WINDOW_MS, now);

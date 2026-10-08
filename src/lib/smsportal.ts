@@ -30,6 +30,14 @@ export function toSouthAfricanMobile(raw: unknown): string | null {
   return /^27(6\d|7[1-46-9]|8[1-4])\d{7}$/.test(digits) ? `+${digits}` : null;
 }
 
+/**
+ * `text` with South African phone numbers (+27…, 27…, 0…) masked, for logs.
+ * Longer digit runs such as timestamps are left alone.
+ */
+export function withoutPhoneNumbers(text: string): string {
+  return text.replace(/(?<!\d)(?:\+?27|0)\d{9}(?!\d)/g, "<number>");
+}
+
 /** Whether SMSPortal credentials are set, i.e. texts can actually be sent. */
 export function isSmsConfigured(env?: unknown): boolean {
   return !!readEnv(env, "SMSPORTAL_CLIENT_ID") && !!readEnv(env, "SMSPORTAL_API_SECRET");
@@ -97,7 +105,7 @@ export async function sendSms({
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      console.error("[sms] send failed:", res.status, text);
+      console.error("[sms] send failed:", res.status, withoutPhoneNumbers(text));
       return { ok: false, reason: `sms-provider:${res.status}` };
     }
 
@@ -108,7 +116,7 @@ export async function sendSms({
       | null;
     const report = body?.sendResponse ?? body;
     if (typeof report?.messages === "number" && report.messages < 1) {
-      console.error("[sms] message not enqueued:", JSON.stringify(report.errorReport ?? {}));
+      console.error("[sms] message not enqueued:", withoutPhoneNumbers(JSON.stringify(report.errorReport ?? {})));
       return { ok: false, reason: "sms-not-enqueued" };
     }
 
