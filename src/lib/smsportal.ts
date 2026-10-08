@@ -31,11 +31,12 @@ export function toSouthAfricanMobile(raw: unknown): string | null {
 }
 
 /**
- * `text` with South African phone numbers (+27…, 27…, 0…) masked, for logs.
- * Longer digit runs such as timestamps are left alone.
+ * `text` with South African phone numbers (+27…, 0027…, 27…, 0…, with or
+ * without spaces or dashes) masked, for logs. Longer digit runs such as
+ * timestamps are left alone.
  */
 export function withoutPhoneNumbers(text: string): string {
-  return text.replace(/(?<!\d)(?:\+?27|0)\d{9}(?!\d)/g, "<number>");
+  return text.replace(/(?<!\d)(?:\+|00)?(?:27|0)(?:[\s-]?\d){9}(?!\d)/g, "<number>");
 }
 
 /** Whether SMSPortal credentials are set, i.e. texts can actually be sent. */
@@ -86,7 +87,7 @@ export async function sendSms({
   const shouldTest = testMode ?? (readEnv(env, "SMSPORTAL_TEST_MODE") === "true");
 
   if (!clientId || !apiSecret || shouldTest) {
-    console.info(`[sms:test] ${phone} :: ${sensitive ? "(message not logged)" : message}`);
+    console.info(`[sms:test] ${phone.slice(0, 5)}***** :: ${sensitive ? "(message not logged)" : message}`);
     return { ok: true, dryRun: true };
   }
 
