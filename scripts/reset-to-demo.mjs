@@ -1,6 +1,13 @@
 // DESTRUCTIVE: reduces the imported dataset to a clean 10-account demo set whose
 // usernames match their roles. Keeps the pharmacy inventory + one clinic.
 //
+// The fixed demo documents themselves (Pat-1, Pat-2, Doc-1, clinic 1, …) are NOT
+// deleted and re-created: they are rewritten with { merge: true }, so a field
+// added to one by hand in the Firebase console — or by registration, or by app
+// use — since the last seed survives a re-run. Everything else in the wiped
+// collections is still deleted. Accounts' 2FA is the one deliberate exception:
+// it is reset (see Phase C) so every account re-enrols, as documented below.
+//
 //   node scripts/reset-to-demo.mjs
 //
 // After running, every account below logs in with password "password" and
@@ -93,7 +100,23 @@ console.log("Phase B — wiping imported bulk (keeping inventory)…");
 const WIPE = ["users", "userCredentials", "patients", "doctors", "nurses", "pharmacists",
   "receptionists", "appointments", "medicalRecords", "medicalRecordsHistory",
   "distributions", "reorders", "notifications", "adminRecords", "clinics"];
-for (const c of WIPE) await wipe(c);
+// The fixed ids Phase C rewrites below. They survive the wipe — merging into a
+// document Phase B had just deleted would preserve nothing.
+const demoIds = (col) =>
+  new Set(PEOPLE.filter((p) => p.detail?.col === col).map((p) => p.detail.id));
+const KEEP = {
+  users: new Set(PEOPLE.map((p) => String(p.userId))),
+  patients: demoIds("patients"),
+  doctors: demoIds("doctors"),
+  nurses: demoIds("nurses"),
+  pharmacists: demoIds("pharmacists"),
+  receptionists: demoIds("receptionists"),
+  clinics: new Set(["1"]),
+  medicalRecords: new Set(["1", "2"]),
+  medicalRecordsHistory: new Set(["1", "2"]),
+  appointments: new Set(["1", "2", "3", "4", "5", "6"]), // matches APPTS below
+};
+for (const c of WIPE) await wipe(c, KEEP[c] ?? new Set());
 await wipe("profiles", keptUids); // keep the 10 kept accounts' profiles, drop stale migrated ones
 
 // ---- Phase C: rebuild clean linked data -----------------------------------
@@ -104,27 +127,31 @@ for (const p of PEOPLE) {
     userId: p.userId, names: p.names, surname: p.surname, role: cap(p.role),
     email: `${p.username}@zennith.test`, idNumber: `90010${String(p.userId).padStart(2, "0")}5800085`,
     contactNum: `08211100${String(p.userId).padStart(2, "0")}`, city: "City of Johannesburg", suburb: "Hillbrow",
-  });
-  if (p.detail) await setDoc(doc(db, p.detail.col, p.detail.id), { userId: p.userId, ...p.detail.extra });
+  }, { merge: true });
+  if (p.detail) await setDoc(doc(db, p.detail.col, p.detail.id), { userId: p.userId, ...p.detail.extra }, { merge: true });
   const fac = facilityFor(p);
   await setDoc(doc(db, "profiles", p.uid), {
     username: p.username, role: p.role, fullName: `${p.names} ${p.surname}`,
     email: `${p.username}@zennith.test`, legacyUserId: p.userId, builtin: true,
     createdAt: new Date().toISOString(),
+    // Merge would otherwise carry the old authenticator secret across, and the
+    // header/README promise that every account re-enrols 2FA after a reset.
+    // null is what resetTotpSecret() writes.
+    totpSecret: null,
     ...(fac ? { facilityId: fac } : {}),
-  });
+  }, { merge: true });
 }
 
 // one clinic
-await setDoc(doc(db, "clinics", "1"), { clinicId: 1, clinicName: "Hillbrow CHC", Coordinates: "26.1946 S, 28.0473 E" });
+await setDoc(doc(db, "clinics", "1"), { clinicId: 1, clinicName: "Hillbrow CHC", Coordinates: "26.1946 S, 28.0473 E" }, { merge: true });
 
 // medical records for the two patients
-await setDoc(doc(db, "medicalRecords", "1"), { medicalRecordNo: 1, bloodType: "O+", allergies: "Penicillin", bp: "130/85 mmHg", glucose: 8.4, cd4: null, viralLoad: null, prescription: "Metformin 850mg", dosage: 850, insurancePolicyNumber: null, lastVisit: iso(-3, "08:30") });
-await setDoc(doc(db, "medicalRecords", "2"), { medicalRecordNo: 2, bloodType: "A+", allergies: "None recorded", bp: "145/95 mmHg", glucose: 5.6, cd4: null, viralLoad: null, prescription: "Amlodipine 10mg", dosage: 10, insurancePolicyNumber: "GEMS-4471", lastVisit: iso(-1, "09:15") });
+await setDoc(doc(db, "medicalRecords", "1"), { medicalRecordNo: 1, bloodType: "O+", allergies: "Penicillin", bp: "130/85 mmHg", glucose: 8.4, cd4: null, viralLoad: null, prescription: "Metformin 850mg", dosage: 850, insurancePolicyNumber: null, lastVisit: iso(-3, "08:30") }, { merge: true });
+await setDoc(doc(db, "medicalRecords", "2"), { medicalRecordNo: 2, bloodType: "A+", allergies: "None recorded", bp: "145/95 mmHg", glucose: 5.6, cd4: null, viralLoad: null, prescription: "Amlodipine 10mg", dosage: 10, insurancePolicyNumber: "GEMS-4471", lastVisit: iso(-1, "09:15") }, { merge: true });
 
 // clinical notes
-await setDoc(doc(db, "medicalRecordsHistory", "1"), { historyId: 1, medicalRecordNo: 1, patientId: "Pat-1", description: "Diabetes well controlled; continue Metformin and lifestyle plan." });
-await setDoc(doc(db, "medicalRecordsHistory", "2"), { historyId: 2, medicalRecordNo: 2, patientId: "Pat-2", description: "Blood pressure elevated; Amlodipine dose increased, review in 4 weeks." });
+await setDoc(doc(db, "medicalRecordsHistory", "1"), { historyId: 1, medicalRecordNo: 1, patientId: "Pat-1", description: "Diabetes well controlled; continue Metformin and lifestyle plan." }, { merge: true });
+await setDoc(doc(db, "medicalRecordsHistory", "2"), { historyId: 2, medicalRecordNo: 2, patientId: "Pat-2", description: "Blood pressure elevated; Amlodipine dose increased, review in 4 weeks." }, { merge: true });
 
 // a handful of appointments incl. today so dashboards show live data
 const APPTS = [
@@ -135,7 +162,7 @@ const APPTS = [
   { clinician: "Nur-1", patientId: "Pat-1", appointDateTime: iso(-3, "08:30"), appointType: "Blood Pressure Check", status: "Completed" },
   { clinician: "Doc-1", patientId: "Pat-2", appointDateTime: iso(-10, "09:00"), appointType: "Consultation", status: "Completed" },
 ];
-for (let i = 0; i < APPTS.length; i++) await setDoc(doc(db, "appointments", String(i + 1)), { appointmentId: i + 1, ...APPTS[i] });
+for (let i = 0; i < APPTS.length; i++) await setDoc(doc(db, "appointments", String(i + 1)), { appointmentId: i + 1, ...APPTS[i] }, { merge: true });
 
 console.log("\nDone. Clean demo set (password \"password\"):");
 for (const p of PEOPLE) console.log(`  ${p.username.padEnd(13)} ${p.role.padEnd(12)} ${p.names} ${p.surname}`);

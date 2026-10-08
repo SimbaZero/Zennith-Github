@@ -2,7 +2,8 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import { useNow } from "@/lib/store";
-import { useInventory } from "@/lib/pharmacist-service"; // real central stock, shared across roles
+import { useInventory } from "@/lib/pharmacist-service";
+import { sameClinicId } from "@/lib/clinic-id";
 import {
   useCurrentPatient,
   usePatientAppointments,
@@ -52,7 +53,7 @@ function AppointmentStatusBadge({ status }: { status: string }) {
 function PatientDashboard() {
   const navigate = useNavigate();
   const now = useNow(1000);
-  const { stock } = useInventory();
+  const { stock, loading: stockLoading, usingFallback } = useInventory();
 
   const { patient, loading: patientLoading } = useCurrentPatient();
   const { status: medStatus } = useMedicationStatus(
@@ -81,17 +82,27 @@ function PatientDashboard() {
   });
 
   const [q, setQ] = useState("");
+  // Only this patient's own clinic. useInventory reads every clinic's stock, so
+  // without this a patient was told a drug was "In stock" when the only units
+  // were somewhere they couldn't collect it. Compared number/string-tolerantly:
+  // StockItem.clinicId is typed number but is whatever Firestore holds.
+  const clinicStock = useMemo(
+    () => stock.filter((s) => sameClinicId(s.clinicId, patient?.clinicId)),
+    [stock, patient?.clinicId],
+  );
   const results = useMemo(() => {
     const term = q.trim().toLowerCase();
-    if (term.length < 2) return [];
-    return stock
+    // When useInventory has fallen back to demo data the rows are invented and
+    // belong to no clinic — never present them as availability.
+    if (usingFallback || term.length < 2) return [];
+    return clinicStock
       .filter(
         (s) =>
           s.name.toLowerCase().includes(term) ||
           (s.category ?? "").toLowerCase().includes(term),
       )
       .slice(0, 6);
-  }, [q, stock]);
+  }, [q, clinicStock, usingFallback]);
 
   return (
     <AppShell role="patient" title="My Dashboard" showBack={false}>
@@ -124,31 +135,52 @@ function PatientDashboard() {
           <h3 className="font-semibold">Find a medication</h3>
         </div>
         <p className="text-xs text-muted-foreground mb-3">
-          Search current stock across the pharmacy.
+          Search what is in stock at {patient?.clinicName ?? "your clinic"}.
         </p>
+        {usingFallback && (
+          <div
+            role="status"
+            className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          >
+            Live stock is unavailable right now, so search is paused rather than
+            showing demo numbers. Please check with your clinic before
+            travelling.
+          </div>
+        )}
+        {!usingFallback && !patientLoading && patient?.clinicId == null && (
+          <p className="mb-3 text-sm text-muted-foreground">
+            You're not linked to a clinic yet, so there's no stock to search.
+          </p>
+        )}
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
+          disabled={usingFallback || patient?.clinicId == null}
           placeholder='Search by medication name, e.g. "Metformin", "TLD"...'
-          className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
+          className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] disabled:bg-secondary/50 disabled:cursor-not-allowed"
         />
-        {q.trim().length >= 2 && (
+        {!usingFallback && q.trim().length >= 2 && (
           <ul className="mt-3 divide-y border rounded-md">
-            {results.length === 0 && (
+            {(stockLoading || patientLoading) && (
               <li className="p-3 text-sm text-muted-foreground">
-                No match found.
+                Loading stock…
+              </li>
+            )}
+            {!stockLoading && !patientLoading && results.length === 0 && (
+              <li className="p-3 text-sm text-muted-foreground">
+                No match found at {patient?.clinicName ?? "your clinic"}.
               </li>
             )}
             {results.map((s) => {
               const inStock = s.units > 0;
               return (
                 <li
-                  key={s.name}
+                  key={s.docId ?? s.name}
                   className="p-3 flex items-center justify-between"
                 >
                   <div>
                     <p className="text-sm font-medium">{s.name}</p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {s.category}
                     </p>
                   </div>

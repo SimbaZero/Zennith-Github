@@ -688,8 +688,13 @@ export function clearAuth() {
 
 export function displayNameFor(role: Role, username: string): string {
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  // A username containing "@" is an email address typed into the login box
+  // (toEmail() accepts either). It's an identifier, not a name, so it must
+  // never be what the sidebar shows — fall back to the role like any other
+  // generic username.
   const isGeneric =
     !username ||
+    username.includes("@") ||
     username.toLowerCase() === role.toLowerCase() ||
     username.toLowerCase() === "superadmin";
   if (isGeneric) {

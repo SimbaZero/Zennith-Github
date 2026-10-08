@@ -1,5 +1,6 @@
 import type { QueueAuditEvent } from "@/lib/clinic-data";
 import type { SystemLog } from "@/lib/audit";
+import { phraseQueueEvent, phraseStaffLog } from "@/lib/audit-phrasing";
 
 // Turns raw audit history into things worth someone's attention.
 // Every flag below is computed from real recorded events — nothing is
@@ -32,6 +33,58 @@ const ts = (e: QueueAuditEvent) =>
 /** Events older than this aren't actionable — nobody can fix last month. */
 const REVIEW_WINDOW_DAYS = 7;
 
+/** The same person typed as "Admin", "admin " or "ADMIN" is one actor. */
+export function normalizeActor(actorId: string): string {
+  return actorId.trim().toLowerCase();
+}
+
+/** 5 failed sign-ins inside 15 minutes is a pattern, not a typo. */
+const FAILED_LOGIN_COUNT = 5;
+const FAILED_LOGIN_WINDOW_MS = 15 * 60_000;
+
+/**
+ * Bursts of failed sign-ins: every run where an actor has FAILED_LOGIN_COUNT or
+ * more `auth.login_failed` events inside any FAILED_LOGIN_WINDOW_MS window.
+ * Windows that overlap are merged into one burst, so a long run of guesses is
+ * one finding listing all its attempts rather than a flag per window.
+ */
+function failedLoginBursts(
+  staffLogs: SystemLog[],
+): { actor: string; events: SystemLog[] }[] {
+  const byActor = new Map<string, { log: SystemLog; t: number }[]>();
+  for (const log of staffLogs) {
+    if (log.action_type !== "auth.login_failed") continue;
+    const t = new Date(log.timestamp).getTime();
+    if (Number.isNaN(t)) continue;
+    const actor = normalizeActor(log.actor_id);
+    if (!byActor.has(actor)) byActor.set(actor, []);
+    byActor.get(actor)!.push({ log, t });
+  }
+
+  const bursts: { actor: string; events: SystemLog[] }[] = [];
+  for (const [actor, list] of byActor) {
+    list.sort((a, b) => a.t - b.t);
+    const ranges: [number, number][] = [];
+    let j = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (j < i) j = i;
+      while (
+        j + 1 < list.length &&
+        list[j + 1].t - list[i].t <= FAILED_LOGIN_WINDOW_MS
+      )
+        j++;
+      if (j - i + 1 >= FAILED_LOGIN_COUNT) {
+        const last = ranges[ranges.length - 1];
+        if (last && i <= last[1]) last[1] = Math.max(last[1], j);
+        else ranges.push([i, j]);
+      }
+    }
+    for (const [lo, hi] of ranges)
+      bursts.push({ actor, events: list.slice(lo, hi + 1).map((e) => e.log) });
+  }
+  return bursts;
+}
+
 export function buildFlags(
   queueEvents: QueueAuditEvent[],
   staffLogs: SystemLog[],
@@ -55,10 +108,15 @@ export function buildFlags(
     const first = ordered[0];
     if (!first) continue;
 
-    const evidence = ordered.map((e) => ({
-      when: ts(e).toISOString(),
-      text: `${e.action} — ${e.details}${e.by ? ` (by ${e.by})` : ""}`,
-    }));
+    // Same phrasing as the activity lists, so a flag's timeline reads the way
+    // the log itself does instead of as raw action codes.
+    const evidence = ordered.map((e) => {
+      const p = phraseQueueEvent(e);
+      return {
+        when: ts(e).toISOString(),
+        text: p.detail?.length ? `${p.text} (${p.detail.join("; ")})` : p.text,
+      };
+    });
 
     const joined = ts(ordered[0]);
     // Old demo entries that were never resolved would otherwise show
@@ -144,14 +202,36 @@ export function buildFlags(
         title: "Staff account created then removed same day",
         detail: `"${username}" existed for about ${Math.max(1, Math.round(hours))}h. Usually a mistake — worth confirming it was intentional.`,
         evidence: [
-          { when: c.timestamp, text: `${c.description} (by ${c.actor_id})` },
-          {
-            when: gone.timestamp,
-            text: `${gone.description} (by ${gone.actor_id})`,
-          },
+          { when: c.timestamp, text: phraseStaffLog(c).text },
+          { when: gone.timestamp, text: phraseStaffLog(gone).text },
         ],
       });
     }
+  }
+
+  // 5. Repeated failed sign-ins for one account. This is the signal for
+  // someone guessing at an account, but it is also what a person who has
+  // forgotten their password looks like — hence "worth checking", not a verdict.
+  for (const burst of failedLoginBursts(staffLogs)) {
+    const firstAt = new Date(burst.events[0].timestamp).getTime();
+    const lastAt = new Date(
+      burst.events[burst.events.length - 1].timestamp,
+    ).getTime();
+    // Old bursts aren't actionable, the same as every other flag here.
+    if (lastAt < cutoff) continue;
+    const minutes = Math.max(1, Math.ceil((lastAt - firstAt) / 60_000));
+    flags.push({
+      // The first attempt's time is in the id, so dismissing one burst doesn't
+      // quietly hide a later one for the same account.
+      id: `loginfail-${burst.actor}-${burst.events[0].timestamp}`,
+      severity: "critical",
+      title: "Repeated failed logins",
+      detail: `${burst.events.length} failed sign-in attempts for "${burst.actor}" within ${minutes} min. Worth checking whether this was a forgotten password or someone else trying to get in.`,
+      evidence: burst.events.map((e) => ({
+        when: e.timestamp,
+        text: phraseStaffLog(e).text,
+      })),
+    });
   }
 
   const rank: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };
@@ -182,4 +262,67 @@ export function buildStats(queueEvents: QueueAuditEvent[]) {
     busiestHour,
     busiestCount,
   };
+}
+
+export interface LoginHistoryEntry {
+  /** The login name, normalised (trimmed, lower-cased). */
+  actor: string;
+  /** Most recent successful sign-in, ISO, or null if none in the loaded window. */
+  lastSignIn: string | null;
+  /** The role of that sign-in, from its record. */
+  lastRole: string | null;
+  lastFailure: string | null;
+  signIns: number;
+  failed: number;
+  failed24h: number;
+  /** Every sign-in event for this person in the window, newest first. */
+  events: SystemLog[];
+}
+
+/**
+ * Who is signing in, and when: successful and failed sign-ins grouped by
+ * person. Counts cover only the events passed in (the page's latest-N window),
+ * not all time. Most recent activity first.
+ */
+export function buildLoginHistory(
+  logs: SystemLog[],
+  now = Date.now(),
+): LoginHistoryEntry[] {
+  const byActor = new Map<string, SystemLog[]>();
+  for (const l of logs) {
+    if (
+      l.action_type !== "auth.login_success" &&
+      l.action_type !== "auth.login_failed"
+    )
+      continue;
+    const actor = normalizeActor(l.actor_id);
+    if (!byActor.has(actor)) byActor.set(actor, []);
+    byActor.get(actor)!.push(l);
+  }
+
+  const time = (l: SystemLog) => new Date(l.timestamp).getTime();
+  const out: LoginHistoryEntry[] = [];
+  for (const [actor, list] of byActor) {
+    const events = [...list].sort((a, b) => time(b) - time(a));
+    const successes = events.filter(
+      (e) => e.action_type === "auth.login_success",
+    );
+    const failures = events.filter(
+      (e) => e.action_type === "auth.login_failed",
+    );
+    out.push({
+      actor,
+      lastSignIn: successes[0]?.timestamp ?? null,
+      lastRole:
+        /signed in as (\w+)$/.exec(successes[0]?.description ?? "")?.[1] ??
+        null,
+      lastFailure: failures[0]?.timestamp ?? null,
+      signIns: successes.length,
+      failed: failures.length,
+      failed24h: failures.filter((e) => now - time(e) < 86_400_000).length,
+      events,
+    });
+  }
+  const latest = (e: LoginHistoryEntry) => time(e.events[0]);
+  return out.sort((a, b) => latest(b) - latest(a));
 }

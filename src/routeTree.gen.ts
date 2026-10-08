@@ -30,6 +30,7 @@ import { Route as NurseIndexRouteImport } from './routes/nurse.index'
 import { Route as DoctorIndexRouteImport } from './routes/doctor.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as SuperAdminFacilitiesRouteImport } from './routes/super-admin.facilities'
+import { Route as SuperAdminAuditRouteImport } from './routes/super-admin.audit'
 import { Route as SuperAdminApplicationsRouteImport } from './routes/super-admin.applications'
 import { Route as ReceptionistRegistrationRouteImport } from './routes/receptionist.registration'
 import { Route as ReceptionistQueueRouteImport } from './routes/receptionist.queue'
@@ -160,6 +161,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
 const SuperAdminFacilitiesRoute = SuperAdminFacilitiesRouteImport.update({
   id: '/facilities',
   path: '/facilities',
+  getParentRoute: () => SuperAdminRoute,
+} as any)
+const SuperAdminAuditRoute = SuperAdminAuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
   getParentRoute: () => SuperAdminRoute,
 } as any)
 const SuperAdminApplicationsRoute = SuperAdminApplicationsRouteImport.update({
@@ -331,6 +337,7 @@ export interface FileRoutesByFullPath {
   '/receptionist/queue': typeof ReceptionistQueueRoute
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
+  '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
@@ -373,6 +380,7 @@ export interface FileRoutesByTo {
   '/receptionist/queue': typeof ReceptionistQueueRoute
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
+  '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
   '/admin': typeof AdminIndexRoute
   '/doctor': typeof DoctorIndexRoute
@@ -423,6 +431,7 @@ export interface FileRoutesById {
   '/receptionist/queue': typeof ReceptionistQueueRoute
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
+  '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
@@ -474,6 +483,7 @@ export interface FileRouteTypes {
     | '/receptionist/queue'
     | '/receptionist/registration'
     | '/super-admin/applications'
+    | '/super-admin/audit'
     | '/super-admin/facilities'
     | '/admin/'
     | '/doctor/'
@@ -516,6 +526,7 @@ export interface FileRouteTypes {
     | '/receptionist/queue'
     | '/receptionist/registration'
     | '/super-admin/applications'
+    | '/super-admin/audit'
     | '/super-admin/facilities'
     | '/admin'
     | '/doctor'
@@ -565,6 +576,7 @@ export interface FileRouteTypes {
     | '/receptionist/queue'
     | '/receptionist/registration'
     | '/super-admin/applications'
+    | '/super-admin/audit'
     | '/super-admin/facilities'
     | '/admin/'
     | '/doctor/'
@@ -742,6 +754,13 @@ declare module '@tanstack/react-router' {
       path: '/facilities'
       fullPath: '/super-admin/facilities'
       preLoaderRoute: typeof SuperAdminFacilitiesRouteImport
+      parentRoute: typeof SuperAdminRoute
+    }
+    '/super-admin/audit': {
+      id: '/super-admin/audit'
+      path: '/audit'
+      fullPath: '/super-admin/audit'
+      preLoaderRoute: typeof SuperAdminAuditRouteImport
       parentRoute: typeof SuperAdminRoute
     }
     '/super-admin/applications': {
@@ -1047,12 +1066,14 @@ const ReceptionistRouteWithChildren = ReceptionistRoute._addFileChildren(
 
 interface SuperAdminRouteChildren {
   SuperAdminApplicationsRoute: typeof SuperAdminApplicationsRoute
+  SuperAdminAuditRoute: typeof SuperAdminAuditRoute
   SuperAdminFacilitiesRoute: typeof SuperAdminFacilitiesRoute
   SuperAdminIndexRoute: typeof SuperAdminIndexRoute
 }
 
 const SuperAdminRouteChildren: SuperAdminRouteChildren = {
   SuperAdminApplicationsRoute: SuperAdminApplicationsRoute,
+  SuperAdminAuditRoute: SuperAdminAuditRoute,
   SuperAdminFacilitiesRoute: SuperAdminFacilitiesRoute,
   SuperAdminIndexRoute: SuperAdminIndexRoute,
 }

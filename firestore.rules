@@ -166,8 +166,22 @@ service cloud.firestore {
 
     // Patients write here too — a data-deletion request is logged by the
     // patient making it, and must be visible to an admin afterwards.
+    //
+    // Reading is limited to admins and the super admin — the only people with a
+    // page that shows this log. It used to be any signed-in user, which let a
+    // patient read the whole platform's audit trail: every username (sometimes
+    // an email address), every sign-in and who changed what.
+    //
+    // KNOWN LIMITATION: an admin can still query other clinics' rows. A list rule
+    // has no document to inspect, so clinic scoping stays in the app's queries.
+    //
+    // Creating stays signedIn(). That means a FAILED PASSWORD cannot be logged
+    // (nobody is signed in yet), while a failed 2FA code can (the password has
+    // already signed them in). Think before opening this to unauthenticated
+    // writes: with no rate limiting, anyone holding the public API key could
+    // forge failed-login rows against a real username.
     match /systemAudit/{id} {
-      allow read: if signedIn();
+      allow read: if role() == "admin" || isSuperAdmin();
       allow create: if signedIn();
       allow update, delete: if false; // an audit log must not be editable
     }

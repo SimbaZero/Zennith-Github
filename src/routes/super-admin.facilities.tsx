@@ -7,7 +7,7 @@ import {
   deleteClinicIfEmpty,
   type ClinicRecord,
 } from "@/lib/clinic-data";
-import { getUsers, removeUser } from "@/lib/auth";
+import { getUsers, removeUser, useCurrentAdmin } from "@/lib/auth";
 import { assignClinicAdmin } from "@/lib/super-admin-service";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -25,6 +25,7 @@ export const Route = createFileRoute("/super-admin/facilities")({
 
 function SuperFacilities() {
   const queryClient = useQueryClient();
+  const { admin } = useCurrentAdmin();
   const { data: clinics = [], isLoading } = useQuery({
     queryKey: ["clinics"],
     queryFn: listClinics,
@@ -103,7 +104,11 @@ function SuperFacilities() {
   });
 
   return (
-    <AppShell role="super_admin" title="Facilities">
+    <AppShell
+      role="super_admin"
+      title="Facilities"
+      staffNameOverride={admin?.fullName}
+    >
       {pending.length > 0 && (
         <Link
           to="/super-admin/applications"
@@ -169,19 +174,19 @@ function SuperFacilities() {
                         >
                           <span>Admin: {a.fullName ?? a.username}</span>
                           {!a.builtin && (
-                          <button
-                            onClick={() =>
-                              setAdminToRemove({
-                                username: a.username,
-                                label: a.fullName ?? a.username,
-                                clinicName: c.clinicName,
-                              })
-                            }
-                            className="text-destructive hover:bg-destructive/10 p-0.5 rounded"
-                            aria-label={`Remove admin ${a.fullName ?? a.username}`}
-                          >
-                            <Trash2 size={11} />
-                          </button>
+                            <button
+                              onClick={() =>
+                                setAdminToRemove({
+                                  username: a.username,
+                                  label: a.fullName ?? a.username,
+                                  clinicName: c.clinicName,
+                                })
+                              }
+                              className="text-destructive hover:bg-destructive/10 p-0.5 rounded"
+                              aria-label={`Remove admin ${a.fullName ?? a.username}`}
+                            >
+                              <Trash2 size={11} />
+                            </button>
                           )}
                         </div>
                       ))}

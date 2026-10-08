@@ -276,6 +276,21 @@ const superAdminIndex: SearchEntry[] = [
     path: "/super-admin/applications",
     keywords: ["applications", "approve", "review", "clinics", "register"],
   },
+  {
+    label: "Security & Audit",
+    section: "Platform",
+    path: "/super-admin/audit",
+    keywords: [
+      "audit",
+      "logs",
+      "security",
+      "login",
+      "sign in",
+      "failed",
+      "deletion",
+      "activity",
+    ],
+  },
 ];
 
 const map: Record<Role, SearchEntry[]> = {

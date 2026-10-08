@@ -38,6 +38,7 @@ import { auth, db, firebaseConfig } from "@/firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { notifyUser, userIdForStaff } from "@/lib/notify";
 import { logAction } from "@/lib/audit";
+import { clinicIdVariants } from "@/lib/clinic-id";
 import { resolvePrivacy, gate } from "@/lib/privacy";
 import type { PrivacySettings } from "@/lib/patient-service";
 import { getAuth, getUsername } from "@/lib/auth";
@@ -862,21 +863,39 @@ async function toPatientSummary(
 export async function fetchPatientPage(
   clinicId?: number | null,
 ): Promise<PatientSummary[]> {
-  const q =
-    clinicId != null
-      ? query(
+  if (clinicId == null) {
+    const snap = await getDocs(
+      query(collection(db, "patients"), orderBy("userId", "desc"), limit(200)),
+    );
+    return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
+  }
+
+  // Firestore equality is type-strict: a patient whose clinicId was hand-edited
+  // in the console as the string "1" never matches the number 1 every real write
+  // stores, and just vanishes from this list. So ask for each form the id can
+  // take and merge. The same composite index (clinicId + userId) serves both
+  // queries — an index is per field, not per value type.
+  const snaps = await Promise.all(
+    clinicIdVariants(clinicId).map((variant) =>
+      getDocs(
+        query(
           collection(db, "patients"),
-          where("clinicId", "==", clinicId),
+          where("clinicId", "==", variant),
           orderBy("userId", "desc"),
           limit(200),
-        )
-      : query(
-          collection(db, "patients"),
-          orderBy("userId", "desc"),
-          limit(200),
-        );
-  const snap = await getDocs(q);
-  return Promise.all(snap.docs.map((d) => toPatientSummary(d.id, d.data())));
+        ),
+      ),
+    ),
+  );
+
+  // De-duplicate by document id (= patientId), then restore the newest-first
+  // order the single query used to give, since two result sets are now joined.
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const snap of snaps) for (const d of snap.docs) byId.set(d.id, d.data());
+  const docs = [...byId.entries()]
+    .sort(([, a], [, b]) => (Number(b.userId) || 0) - (Number(a.userId) || 0))
+    .slice(0, 200);
+  return Promise.all(docs.map(([id, data]) => toPatientSummary(id, data)));
 }
 
 /** Live clinic patient list for reception's walk-in search (queue page).
@@ -2415,23 +2434,46 @@ export interface DeletionRequest {
   requestedAt: string;
   reason?: string;
   status: "pending" | "actioned" | "declined";
+  /** Which clinic the patient belongs to — used by the platform-wide view. */
+  clinicId?: number;
 }
 
-export function useDeletionRequests(clinicId?: number): {
+export function useDeletionRequests(
+  clinicId?: number,
+  /**
+   * `allClinics` is the super admin's platform-wide view. It is a separate,
+   * explicit switch on purpose: `clinicId` is `undefined` while an admin's
+   * profile is still loading, and that must keep meaning "nothing yet" — not
+   * "everyone's", which would flash other clinics' requests on a clinic admin's
+   * page.
+   */
+  options?: { allClinics?: boolean },
+): {
   requests: DeletionRequest[];
   loading: boolean;
 } {
   const [requests, setRequests] = useState<DeletionRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const allClinics = options?.allClinics === true;
 
   useEffect(() => {
-    if (clinicId == null) {
+    if (!allClinics && clinicId == null) {
       setRequests([]);
       setLoading(false);
       return;
     }
+    // Per clinic, it reads that clinic's patients and picks the pending ones out
+    // below. Platform-wide, it asks Firestore for just the pending ones — far
+    // cheaper than streaming every patient on the platform. Everything after
+    // the query (names, ordering, the row shape) is shared.
+    const source = allClinics
+      ? query(
+          collection(db, "patients"),
+          where("deletionRequest.status", "==", "pending"),
+        )
+      : query(collection(db, "patients"), where("clinicId", "==", clinicId));
     const unsub = onSnapshot(
-      query(collection(db, "patients"), where("clinicId", "==", clinicId)),
+      source,
       async (snap) => {
         const withRequests = snap.docs.filter(
           (d) => d.data().deletionRequest?.status === "pending",
@@ -2454,6 +2496,10 @@ export function useDeletionRequests(clinicId?: number): {
               requestedAt: data.deletionRequest.requestedAt ?? "",
               reason: data.deletionRequest.reason,
               status: "pending" as const,
+              clinicId:
+                data.clinicId != null && Number.isFinite(Number(data.clinicId))
+                  ? Number(data.clinicId)
+                  : undefined,
             };
           }),
         );
@@ -2467,7 +2513,7 @@ export function useDeletionRequests(clinicId?: number): {
       },
     );
     return () => unsub();
-  }, [clinicId]);
+  }, [clinicId, allClinics]);
 
   return { requests, loading };
 }

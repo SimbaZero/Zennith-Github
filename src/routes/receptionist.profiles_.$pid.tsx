@@ -228,7 +228,12 @@ function PatientDetail() {
 
   if (isLoading) {
     return (
-      <AppShell role="receptionist" title="Patient Profile">
+      <AppShell
+        role="receptionist"
+        title="Patient Profile"
+        clinicNameOverride={receptionist?.clinicName}
+        staffNameOverride={receptionist?.name}
+      >
         <div className="flex items-center justify-center h-64">
           <Loader2 className="animate-spin text-muted-foreground" />
         </div>
@@ -238,7 +243,12 @@ function PatientDetail() {
 
   if (isError || !record || !form) {
     return (
-      <AppShell role="receptionist" title="Patient Profile">
+      <AppShell
+        role="receptionist"
+        title="Patient Profile"
+        clinicNameOverride={receptionist?.clinicName}
+        staffNameOverride={receptionist?.name}
+      >
         <div className="p-8 text-center">
           <p className="text-destructive mb-4">
             Failed to load patient record.
@@ -263,7 +273,12 @@ function PatientDetail() {
   );
 
   return (
-    <AppShell role="receptionist" title={`Patient Profile — ${record.name}`}>
+    <AppShell
+      role="receptionist"
+      title={`Patient Profile — ${record.name}`}
+      clinicNameOverride={receptionist?.clinicName}
+      staffNameOverride={receptionist?.name}
+    >
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <button

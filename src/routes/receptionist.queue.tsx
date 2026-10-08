@@ -1,13 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import {
+  StaffSearchSelect,
+  useClinicClinicians,
+} from "@/components/StaffSearchSelect";
+import { AuditEventList, type AuditRow } from "@/components/AuditEventList";
+import { phraseQueueEvent } from "@/lib/audit-phrasing";
+import {
   MessageCircle,
   Plus,
   ArrowRight,
   ArrowRightLeft,
   Check,
   CheckCircle,
+  ChevronDown,
   ClipboardList,
+  Clock,
   Megaphone,
   Stethoscope,
 } from "lucide-react";
@@ -198,7 +206,9 @@ function computeTriage(flags: Set<string>): TriageLevel {
   return level;
 }
 
-type LogEntry = { ts: string; msg: string; type: "info" | "warn" | "critical" };
+// Same row shape as the admin Audit Logs page, so an event reads the same way
+// in both places.
+type LogEntry = AuditRow;
 
 let clinicData: typeof import("@/lib/clinic-data") | null = null;
 async function getClinicData() {
@@ -286,6 +296,8 @@ function QueuePage() {
   const [auditLog, setAuditLog] = useState<LogEntry[]>([]);
   const [auditLogLoading, setAuditLogLoading] = useState(true);
   const [auditLogError, setAuditLogError] = useState(false);
+  // Closed by default — the log is for looking back, not for working the queue.
+  const [showLog, setShowLog] = useState(false);
 
   useEffect(() => {
     getClinicData().then(() => setClinicReady(true));
@@ -315,18 +327,23 @@ function QueuePage() {
       unsubscribe = subscribeQueueAudit(
         (events) => {
           setAuditLog(
-            events.map((e) => ({
-              ts: e.timestamp?.toDate?.()
-                ? e.timestamp.toDate().toISOString()
-                : new Date().toISOString(),
-              msg: `${e.action.toUpperCase()}: ${e.patientId} — ${e.details}`,
-              type:
-                e.action === "handoff"
-                  ? "warn"
-                  : e.triage === "red"
-                    ? "critical"
-                    : "info",
-            })),
+            events.map((e, i) => {
+              const p = phraseQueueEvent(e);
+              return {
+                id: e.id ?? `${e.entryId}-${e.action}-${i}`,
+                when: e.timestamp?.toDate?.()
+                  ? e.timestamp.toDate().toISOString()
+                  : new Date().toISOString(),
+                text: p.text,
+                detail: p.detail ?? [],
+                emphasis:
+                  e.action === "handoff"
+                    ? "warn"
+                    : e.triage === "red"
+                      ? "critical"
+                      : undefined,
+              };
+            }),
           );
           setAuditLogLoading(false);
         },
@@ -360,6 +377,18 @@ function QueuePage() {
       : computedTriage;
   const [busy, setBusy] = useState(false);
   const [handoffTarget, setHandoffTarget] = useState<string | null>(null);
+  // Who the open handoff is going to — a staff id picked from the list.
+  const [handoffChoice, setHandoffChoice] = useState("");
+  useEffect(() => {
+    setHandoffChoice("");
+  }, [handoffTarget]);
+  // Doctors and nurses at this clinic, for the walk-in "assign clinician" and
+  // handoff pickers, instead of typing a raw ID like "Doc-3".
+  const {
+    clinicians,
+    loading: cliniciansLoading,
+    error: cliniciansError,
+  } = useClinicClinicians(receptionist?.clinicId);
 
   const active = queue.filter((q) => q.status !== "done");
   const waiting = active.filter(
@@ -460,9 +489,10 @@ function QueuePage() {
       const deliverAt = nextAllowed(now);
       await callPatient(next, deliverAt);
       const entry: LogEntry = {
-        ts: new Date().toISOString(),
-        msg: `Called ${next.patientName} (${next.triage.toUpperCase()}) → ${next.clinician || "triage"}`,
-        type: "info",
+        id: `local-${Date.now()}`,
+        when: new Date().toISOString(),
+        text: `Reception called ${next.patientName} in`,
+        detail: next.clinician ? [`Sent to ${next.clinician}`] : [],
       };
       setAuditLog((l) => [entry, ...l].slice(0, 20));
       toast.success(
@@ -558,6 +588,321 @@ function QueuePage() {
       </AppShell>
     );
   }
+
+  // The active queue in three parts. Each row carries its index in `active`
+  // (see renderRow) rather than its place in the group.
+  const indexedActive = active.map((q, idx) => ({ q, idx }));
+  const queueGroups = [
+    {
+      key: "waiting",
+      title: "Waiting",
+      icon: Clock,
+      hint: "Not yet called",
+      empty: "No one waiting",
+      rows: indexedActive.filter(({ q }) => q.status === "waiting"),
+    },
+    {
+      key: "called",
+      title: "Called",
+      icon: Megaphone,
+      hint: "Paged — not in the room yet",
+      empty: "No one called right now",
+      rows: indexedActive.filter(({ q }) => q.status === "called"),
+    },
+    {
+      key: "in-room",
+      title: "In Room",
+      icon: Stethoscope,
+      hint: "With a clinician",
+      empty: "No one in a room right now",
+      rows: indexedActive.filter(
+        ({ q }) => q.status === "in-room" || q.status === "handoff",
+      ),
+    },
+  ];
+
+  // One queue row. `idx` is the patient's index in `active`, NOT in their
+  // group: the "in queue" number is counted from that index, so splitting the
+  // list into sections must hand each row the same index it had before.
+  const renderRow = (q: QueueEntry, idx: number) => {
+    const waitMin = getWaitTime(q.joinedAt);
+    const overdue = isOverdue(q);
+    const target = TRIAGE_MAX_WAIT_MINUTES[q.triage];
+    const position =
+      q.status === "waiting"
+        ? active.filter((o, i) => o.status === "waiting" && i <= idx).length
+        : null;
+    // Same button in two places: on a phone the action row is full of "Call"
+    // and "Already with clinician", so a third button there wraps onto a line
+    // of its own. Up beside the position badge it costs no height; from
+    // tablet width it goes back to the far right of the action row.
+    const removeButton = (placement: string) => (
+      <button
+        onClick={() => handleRemoveFromQueue(q.id)}
+        title="Remove from queue"
+        className={`${placement} w-10 h-10 shrink-0 items-center justify-center rounded-lg text-lg text-muted-foreground/70 hover:bg-secondary hover:text-destructive`}
+      >
+        ×
+      </button>
+    );
+    // Patients with no queue position are somewhere specific —
+    // called, in a room, or being handed over — so say which.
+    const StatusIcon =
+      position == null ? (STATUS_ICON[q.status] ?? ArrowRight) : null;
+
+    return (
+      <li
+        key={q.id}
+        className={`relative overflow-hidden rounded-xl border transition-shadow hover:shadow-sm ${TRIAGE_ROW_TINT[q.triage]}`}
+      >
+        {/* Urgency before the text: a 5px edge in the triage
+                      colour, with a faint matching tint on red and orange. */}
+        <span
+          aria-hidden
+          className={`absolute left-0 top-0 bottom-0 w-[5px] ${TRIAGE_EDGE[q.triage]}`}
+        />
+
+        <div className="flex flex-col gap-3 p-3 pl-5 sm:grid sm:grid-cols-[3.5rem_1fr] sm:gap-x-3 xl:grid-cols-[3.5rem_1fr_auto] xl:items-start">
+          <div className="flex items-center gap-3 shrink-0 sm:w-14 sm:flex-col sm:gap-1">
+            {position != null ? (
+              <>
+                <span className="w-10 h-10 shrink-0 rounded-full bg-[oklch(0.55_0.18_245)] text-white text-base font-bold flex items-center justify-center">
+                  {position}
+                </span>
+                <span className="text-xs text-muted-foreground">in queue</span>
+              </>
+            ) : (
+              <span
+                title={STATUS_TEXT[q.status] ?? q.status}
+                className="w-10 h-10 shrink-0 rounded-full border bg-white text-muted-foreground flex items-center justify-center"
+              >
+                {StatusIcon ? <StatusIcon size={18} /> : null}
+              </span>
+            )}
+            {removeButton("flex sm:hidden ml-auto")}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-base font-semibold">{q.patientName}</p>
+              <span
+                className={`text-xs font-semibold px-2.5 py-1 rounded-full ${TRIAGE_COLORS[q.triage]}`}
+              >
+                {TRIAGE_SHORT[q.triage]}
+              </span>
+              <span
+                className={`text-xs px-2.5 py-1 rounded-full border ${STATUS_STYLE[q.status] ?? ""}`}
+              >
+                {STATUS_TEXT[q.status] ?? q.status}
+              </span>
+              {/* The patient tapped "I'm on my way". Informational
+                            only — it says the call was heard, not that anyone
+                            has arrived, so no button reads it and the no-show
+                            prompt below still applies. */}
+              {q.patientAcknowledgedAt && (
+                <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                  <Check size={14} /> Confirmed coming
+                </span>
+              )}
+            </div>
+
+            <p className="text-xs text-muted-foreground mt-1">
+              {[q.patientId, q.reason].filter(Boolean).join(" · ")}
+            </p>
+
+            {/* Called but never arrived. Without this the entry just
+                          sits as "Called" indefinitely and nobody notices. */}
+            {q.status === "called" &&
+              q.calledAt &&
+              (now.getTime() - new Date(q.calledAt).getTime()) / 60000 >
+                NO_SHOW_AFTER_MIN && (
+                <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+                  <p className="text-xs text-amber-900">
+                    Called{" "}
+                    {Math.round(
+                      (now.getTime() - new Date(q.calledAt).getTime()) / 60000,
+                    )}{" "}
+                    min ago but hasn't arrived.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <button
+                      onClick={() => handleSetQueueStatus(q.id, "waiting")}
+                      className={BTN_OUTLINE}
+                    >
+                      Put back in queue
+                    </button>
+                    <button
+                      onClick={() => handleRemoveFromQueue(q.id)}
+                      className={BTN_OUTLINE}
+                    >
+                      Mark as no-show
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            {/* Wait time stays plain text. The numbers in
+                          TRIAGE_MAX_WAIT_MINUTES are the SATS guideline for
+                          the level, not a wait this clinic is promising — a
+                          filling bar reads as exactly that promise, down to
+                          the minute, which no clinic can make. Past the
+                          guideline is an amber note, not a red one: reception
+                          can't speed up a clinician, they just need to know
+                          when to escalate to a nurse. */}
+            <p className="mt-2 text-sm">
+              <span
+                className={
+                  overdue
+                    ? "font-medium text-amber-700"
+                    : "text-muted-foreground"
+                }
+              >
+                Waiting {waitMin} min
+              </span>
+              {target === 0 ? (
+                <span
+                  className={
+                    overdue ? "text-amber-700" : "text-muted-foreground"
+                  }
+                >
+                  {" "}
+                  · should be seen immediately
+                </span>
+              ) : (
+                overdue && (
+                  <span className="text-amber-700">
+                    {" "}
+                    — past the usual SATS guideline for this level
+                  </span>
+                )
+              )}
+            </p>
+
+            <p className="text-xs mt-1.5">
+              {q.handedOffTo ? (
+                <span className="text-purple-700">
+                  Being handed to <strong>{q.handedOffTo}</strong>
+                </span>
+              ) : q.clinician ? (
+                <span className="text-slate-700">
+                  Seeing <strong>{q.clinician}</strong>
+                </span>
+              ) : (
+                <span className="text-muted-foreground italic">
+                  No clinician assigned yet
+                </span>
+              )}
+            </p>
+          </div>
+
+          {/* One solid button per row — the next step for this
+                        patient. Everything else is outlined so there is never
+                        a question of what to press. */}
+          <div className="flex flex-wrap items-center gap-2 w-full sm:col-start-2 xl:col-start-3 xl:row-start-1 xl:w-auto xl:shrink-0">
+            {q.status === "waiting" && (
+              <>
+                <button
+                  onClick={() => handleSetQueueStatus(q.id, "called")}
+                  className={BTN_PRIMARY}
+                >
+                  Call
+                </button>
+                {/* For a patient already standing at the desk: goes
+                              straight to "With clinician" and skips the page,
+                              so no notification is sent. Call (above) is the
+                              path that notifies. */}
+                <button
+                  onClick={() => handleSetQueueStatus(q.id, "in-room")}
+                  title="The patient is already at the desk — move them straight to With clinician without paging them"
+                  className={BTN_OUTLINE}
+                >
+                  Already with clinician
+                </button>
+              </>
+            )}
+            {q.status === "called" && (
+              <button
+                onClick={() => handleSetQueueStatus(q.id, "in-room")}
+                className={BTN_PRIMARY}
+              >
+                In room
+              </button>
+            )}
+            {q.status === "in-room" && (
+              <>
+                {handoffTarget === q.id ? (
+                  <div className="w-full sm:w-72 space-y-2">
+                    <StaffSearchSelect
+                      id={`handoff-${q.id}`}
+                      autoFocus
+                      inlineList
+                      options={clinicians}
+                      value={handoffChoice}
+                      onChange={setHandoffChoice}
+                      loading={cliniciansLoading}
+                      error={cliniciansError}
+                      placeholder="Hand off to… (name or ID)"
+                      pendingHint="Choose who to hand over to from the list."
+                      inputClassName="w-full min-h-[40px] text-sm border rounded-lg px-3 bg-white outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
+                      onEscape={() => setHandoffTarget(null)}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleHandoff(q.id, handoffChoice)}
+                        disabled={!handoffChoice || busy}
+                        className={BTN_PRIMARY}
+                      >
+                        Hand off
+                      </button>
+                      <button
+                        onClick={() => setHandoffTarget(null)}
+                        className={BTN_OUTLINE}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleSetQueueStatus(q.id, "done")}
+                      className={BTN_PRIMARY}
+                    >
+                      Done
+                    </button>
+                    <button
+                      onClick={() => setHandoffTarget(q.id)}
+                      className={BTN_OUTLINE}
+                    >
+                      <ArrowRight size={14} /> Handoff
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+            {q.status === "handoff" && (
+              <>
+                <button
+                  onClick={() => handleAcceptHandoff(q.id, q.handedOffTo || "")}
+                  disabled={!q.handedOffTo}
+                  className={BTN_PRIMARY}
+                >
+                  <CheckCircle size={14} /> Accept
+                </button>
+                <button
+                  onClick={() => handleSetQueueStatus(q.id, "in-room")}
+                  className={BTN_OUTLINE}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+            {removeButton("hidden sm:flex ml-auto")}
+          </div>
+        </div>
+      </li>
+    );
+  };
 
   return (
     <AppShell
@@ -694,13 +1039,16 @@ function QueuePage() {
               placeholder="Reason for visit"
               className="w-full border rounded-md px-2.5 py-1.5 text-sm"
             />
-            <input
+            <StaffSearchSelect
+              id="walkin-clinician"
+              options={clinicians}
               value={draft.clinician}
-              onChange={(e) =>
-                setDraft({ ...draft, clinician: e.target.value })
-              }
-              placeholder="Assign clinician (optional)"
-              className="w-full border rounded-md px-2.5 py-1.5 text-sm font-mono"
+              onChange={(staffId) => setDraft({ ...draft, clinician: staffId })}
+              loading={cliniciansLoading}
+              error={cliniciansError}
+              placeholder="Assign clinician (optional) — search name or ID"
+              pendingHint="Choose someone from the list, or clear this box to leave the patient unassigned."
+              inputClassName="w-full border rounded-md px-2.5 py-1.5 text-sm bg-white"
             />
             <div className="border rounded-md bg-white p-3">
               <p className="text-sm font-medium">Tick anything that applies</p>
@@ -783,322 +1131,90 @@ function QueuePage() {
           </p>
         )}
 
-        <ul className="space-y-2">
-          {active.length === 0 ? (
-            <li className="text-sm text-muted-foreground py-4 text-center">
-              Queue is empty
-            </li>
-          ) : (
-            active.map((q, idx) => {
-              const waitMin = getWaitTime(q.joinedAt);
-              const overdue = isOverdue(q);
-              const target = TRIAGE_MAX_WAIT_MINUTES[q.triage];
-              const position =
-                q.status === "waiting"
-                  ? active.filter((o, i) => o.status === "waiting" && i <= idx)
-                      .length
-                  : null;
-              // Patients with no queue position are somewhere specific —
-              // called, in a room, or being handed over — so say which.
-              const StatusIcon =
-                position == null ? (STATUS_ICON[q.status] ?? ArrowRight) : null;
-
-              return (
-                <li
-                  key={q.id}
-                  className={`relative overflow-hidden rounded-xl border transition-shadow hover:shadow-sm ${TRIAGE_ROW_TINT[q.triage]}`}
-                >
-                  {/* Urgency before the text: a 5px edge in the triage
-                      colour, with a faint matching tint on red and orange. */}
-                  <span
-                    aria-hidden
-                    className={`absolute left-0 top-0 bottom-0 w-[5px] ${TRIAGE_EDGE[q.triage]}`}
-                  />
-
-                  <div className="flex flex-col sm:flex-row sm:items-start gap-3 p-3 pl-5">
-                    <div className="flex items-center gap-3 shrink-0 sm:w-14 sm:flex-col sm:gap-1">
-                      {position != null ? (
-                        <>
-                          <span className="w-10 h-10 shrink-0 rounded-full bg-[oklch(0.16_0.07_265)] text-white text-base font-bold flex items-center justify-center">
-                            {position}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            in queue
-                          </span>
-                        </>
-                      ) : (
-                        <span
-                          title={STATUS_TEXT[q.status] ?? q.status}
-                          className="w-10 h-10 shrink-0 rounded-full border bg-white text-muted-foreground flex items-center justify-center"
-                        >
-                          {StatusIcon ? <StatusIcon size={18} /> : null}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-base font-semibold">
-                          {q.patientName}
-                        </p>
-                        <span
-                          className={`text-xs font-semibold px-2.5 py-1 rounded-full ${TRIAGE_COLORS[q.triage]}`}
-                        >
-                          {TRIAGE_SHORT[q.triage]}
-                        </span>
-                        <span
-                          className={`text-xs px-2.5 py-1 rounded-full border ${STATUS_STYLE[q.status] ?? ""}`}
-                        >
-                          {STATUS_TEXT[q.status] ?? q.status}
-                        </span>
-                        {/* The patient tapped "I'm on my way". Informational
-                            only — it says the call was heard, not that anyone
-                            has arrived, so no button reads it and the no-show
-                            prompt below still applies. */}
-                        {q.patientAcknowledgedAt && (
-                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                            <Check size={14} /> Confirmed coming
-                          </span>
-                        )}
-                      </div>
-
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {[q.patientId, q.reason].filter(Boolean).join(" · ")}
-                      </p>
-
-                      {/* Called but never arrived. Without this the entry just
-                          sits as "Called" indefinitely and nobody notices. */}
-                      {q.status === "called" &&
-                        q.calledAt &&
-                        (now.getTime() - new Date(q.calledAt).getTime()) /
-                          60000 >
-                          NO_SHOW_AFTER_MIN && (
-                          <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
-                            <p className="text-xs text-amber-900">
-                              Called{" "}
-                              {Math.round(
-                                (now.getTime() -
-                                  new Date(q.calledAt).getTime()) /
-                                  60000,
-                              )}{" "}
-                              min ago but hasn't arrived.
-                            </p>
-                            <div className="flex flex-wrap gap-2 mt-2">
-                              <button
-                                onClick={() =>
-                                  handleSetQueueStatus(q.id, "waiting")
-                                }
-                                className={BTN_OUTLINE}
-                              >
-                                Put back in queue
-                              </button>
-                              <button
-                                onClick={() => handleRemoveFromQueue(q.id)}
-                                className={BTN_OUTLINE}
-                              >
-                                Mark as no-show
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                      {/* Wait time stays plain text. The numbers in
-                          TRIAGE_MAX_WAIT_MINUTES are the SATS guideline for
-                          the level, not a wait this clinic is promising — a
-                          filling bar reads as exactly that promise, down to
-                          the minute, which no clinic can make. Past the
-                          guideline is an amber note, not a red one: reception
-                          can't speed up a clinician, they just need to know
-                          when to escalate to a nurse. */}
-                      <p className="mt-2 text-sm">
-                        <span
-                          className={
-                            overdue
-                              ? "font-medium text-amber-700"
-                              : "text-muted-foreground"
-                          }
-                        >
-                          Waiting {waitMin} min
-                        </span>
-                        {target === 0 ? (
-                          <span
-                            className={
-                              overdue
-                                ? "text-amber-700"
-                                : "text-muted-foreground"
-                            }
-                          >
-                            {" "}
-                            · should be seen immediately
-                          </span>
-                        ) : (
-                          overdue && (
-                            <span className="text-amber-700">
-                              {" "}
-                              — past the usual SATS guideline for this level
-                            </span>
-                          )
-                        )}
-                      </p>
-
-                      <p className="text-xs mt-1.5">
-                        {q.handedOffTo ? (
-                          <span className="text-purple-700">
-                            Being handed to <strong>{q.handedOffTo}</strong>
-                          </span>
-                        ) : q.clinician ? (
-                          <span className="text-slate-700">
-                            Seeing <strong>{q.clinician}</strong>
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground italic">
-                            No clinician assigned yet
-                          </span>
-                        )}
-                      </p>
-                    </div>
-
-                    {/* One solid button per row — the next step for this
-                        patient. Everything else is outlined so there is never
-                        a question of what to press. */}
-                    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:shrink-0">
-                      {q.status === "waiting" && (
-                        <>
-                          <button
-                            onClick={() => handleSetQueueStatus(q.id, "called")}
-                            className={BTN_PRIMARY}
-                          >
-                            Call
-                          </button>
-                          <button
-                            onClick={() =>
-                              handleSetQueueStatus(q.id, "in-room")
-                            }
-                            className={BTN_OUTLINE}
-                          >
-                            Skip call
-                          </button>
-                        </>
-                      )}
-                      {q.status === "called" && (
-                        <button
-                          onClick={() => handleSetQueueStatus(q.id, "in-room")}
-                          className={BTN_PRIMARY}
-                        >
-                          In room
-                        </button>
-                      )}
-                      {q.status === "in-room" && (
-                        <>
-                          {handoffTarget === q.id ? (
-                            <input
-                              autoFocus
-                              placeholder="To clinician"
-                              className="w-full sm:w-36 min-h-[40px] text-sm border rounded-lg px-3"
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter")
-                                  handleHandoff(q.id, e.currentTarget.value);
-                                if (e.key === "Escape") setHandoffTarget(null);
-                              }}
-                            />
-                          ) : (
-                            <>
-                              <button
-                                onClick={() =>
-                                  handleSetQueueStatus(q.id, "done")
-                                }
-                                className={BTN_PRIMARY}
-                              >
-                                Done
-                              </button>
-                              <button
-                                onClick={() => setHandoffTarget(q.id)}
-                                className={BTN_OUTLINE}
-                              >
-                                <ArrowRight size={14} /> Handoff
-                              </button>
-                            </>
-                          )}
-                        </>
-                      )}
-                      {q.status === "handoff" && (
-                        <>
-                          <button
-                            onClick={() =>
-                              handleAcceptHandoff(q.id, q.handedOffTo || "")
-                            }
-                            disabled={!q.handedOffTo}
-                            className={BTN_PRIMARY}
-                          >
-                            <CheckCircle size={14} /> Accept
-                          </button>
-                          <button
-                            onClick={() =>
-                              handleSetQueueStatus(q.id, "in-room")
-                            }
-                            className={BTN_OUTLINE}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      )}
-                      <button
-                        onClick={() => handleRemoveFromQueue(q.id)}
-                        title="Remove from queue"
-                        className="ml-auto w-10 h-10 shrink-0 flex items-center justify-center rounded-lg text-lg text-muted-foreground/70 hover:bg-secondary hover:text-destructive"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                </li>
-              );
-            })
-          )}
-        </ul>
-
-        {(auditLogLoading || auditLogError || auditLog.length > 0) && (
-          <div className="mt-4 pt-4 border-t">
-            <div className="flex items-center gap-2 mb-2">
-              <ClipboardList size={12} className="text-muted-foreground" />
-              <p className="text-[10px] tracking-wider text-muted-foreground">
-                AUDIT LOG (persisted to Firestore)
-              </p>
-            </div>
-            {auditLogLoading && (
-              <p className="text-xs text-muted-foreground">Loading…</p>
-            )}
-            {auditLogError && (
-              <p className="text-xs text-destructive">
-                Could not load audit log.
-              </p>
-            )}
-            {!auditLogLoading && !auditLogError && (
-              <ul className="text-xs space-y-1 max-h-64 overflow-y-auto">
-                {auditLog.map((l, i) => (
-                  <li
-                    key={i}
-                    className={
-                      l.type === "critical"
-                        ? "text-red-600 font-medium"
-                        : l.type === "warn"
-                          ? "text-orange-600"
-                          : "text-muted-foreground"
-                    }
+        {/* Three parts, so it's clear who has been paged but hasn't arrived
+            (Called) rather than lumping them in with people still waiting.
+            An empty part stays as a single muted line so the structure is
+            always visible. Handoffs sit in "In Room": they're with a clinician
+            and being passed to another. */}
+        <div className="space-y-6">
+          {queueGroups.map((g) => {
+            const GroupIcon = g.icon;
+            return (
+              <section key={g.key} aria-labelledby={`queue-group-${g.key}`}>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pb-2 mb-2 border-b">
+                  <GroupIcon size={16} className="text-muted-foreground" />
+                  <h4
+                    id={`queue-group-${g.key}`}
+                    className="text-sm font-semibold"
                   >
-                    <span className="font-mono mr-2">
-                      {new Date(l.ts).toLocaleTimeString("en-ZA", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                    {l.msg}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+                    {g.title}
+                  </h4>
+                  <span
+                    className={`text-xs font-medium px-2 py-0.5 rounded-full border ${STATUS_STYLE[g.key]}`}
+                  >
+                    {g.rows.length}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {g.hint}
+                  </span>
+                </div>
+                {g.rows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground px-1 py-2">
+                    {g.empty}
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {g.rows.map(({ q, idx }) => renderRow(q, idx))}
+                  </ul>
+                )}
+              </section>
+            );
+          })}
+        </div>
+
+        {/* Collapsed until asked for. Same events the admin sees on their Audit
+            Logs page — both read the queueAudit collection for this clinic. */}
+        <div className="mt-4 pt-4 border-t">
+          <button
+            onClick={() => setShowLog((v) => !v)}
+            aria-expanded={showLog}
+            className="w-full min-h-[40px] flex items-center gap-2 text-left"
+          >
+            <ClipboardList size={14} className="text-muted-foreground" />
+            <span className="text-sm font-medium">
+              {showLog ? "Hide activity log" : "View activity log"}
+            </span>
+            <ChevronDown
+              size={14}
+              className={`text-muted-foreground transition ${
+                showLog ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+          {showLog && (
+            <div className="mt-2 border rounded-lg overflow-hidden">
+              {auditLogLoading && (
+                <p className="px-5 py-4 text-sm text-muted-foreground">
+                  Loading…
+                </p>
+              )}
+              {auditLogError && (
+                <p className="px-5 py-4 text-sm text-destructive">
+                  Could not load the activity log.
+                </p>
+              )}
+              {!auditLogLoading && !auditLogError && (
+                <div className="max-h-80 overflow-y-auto">
+                  <AuditEventList
+                    rows={auditLog}
+                    tone="queue"
+                    empty="No activity recorded yet."
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </AppShell>
   );

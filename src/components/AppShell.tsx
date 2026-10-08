@@ -129,8 +129,13 @@ const navByRole: Record<Role, NavItem[]> = {
       label: "Clinic Applications",
       icon: ClipboardList,
     },
+    { to: "/super-admin/audit", label: "Security & Audit", icon: ShieldCheck },
   ],
 };
+
+// How long the sidebar waits for a patient's or pharmacist's name before it
+// stops showing a placeholder and falls back to what it has.
+const NAME_WAIT_MS = 4000;
 
 const staffCanSwitch: Partial<Record<Role, boolean>> = {
   pharmacist: true,
@@ -253,10 +258,11 @@ export function AppShell({
   };
 
   const username = typeof window !== "undefined" ? getUsername() : "";
-  const { patient: sidebarPatient } = useCurrentPatient();
+  const { patient: sidebarPatient, loading: patientLoading } =
+    useCurrentPatient();
   // Real pharmacist data. clinicIds/fullName are undefined for every other
   // role, so this does no Firestore reads when not relevant.
-  const { pharmacist } = useCurrentPharmacist();
+  const { pharmacist, loading: pharmacistLoading } = useCurrentPharmacist();
   const realPharmacistClinic = useRealActiveClinic(
     pharmacist?.clinicIds,
     "pharmacist",
@@ -270,7 +276,33 @@ export function AppShell({
       : role === "pharmacist" && pharmacist?.fullName
         ? pharmacist.fullName
         : (staffNameOverride ?? displayNameFor(role, username));
-  const initial = display.charAt(0).toUpperCase();
+  // A patient's or pharmacist's name comes from an async hook. Until it lands,
+  // `display` above is the login identifier — an email address, for anyone who
+  // signs in with one — so show a placeholder instead of flashing it.
+  //
+  // useCurrentPatient also builds a first, provisional record whose fullName is
+  // just the patient id ("Pat-5") before the users document arrives, so that
+  // counts as "not loaded yet" too.
+  const patientNameReady =
+    !!sidebarPatient?.fullName &&
+    sidebarPatient.fullName !== sidebarPatient.patientId;
+  const patientNamePending =
+    role === "patient" &&
+    !patientNameReady &&
+    (patientLoading || !!sidebarPatient);
+  const pharmacistNamePending =
+    role === "pharmacist" && pharmacistLoading && !pharmacist?.fullName;
+  // Waiting is capped: useCurrentPatient never stops "loading" if the patient
+  // document doesn't exist, and a placeholder that never goes away is worse
+  // than the fallback it was hiding.
+  const [nameWaitOver, setNameWaitOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setNameWaitOver(true), NAME_WAIT_MS);
+    return () => clearTimeout(t);
+  }, []);
+  const nameLoading =
+    !nameWaitOver && (patientNamePending || pharmacistNamePending);
+  const initial = nameLoading ? "" : display.charAt(0).toUpperCase();
   const canSwitch = !!staffCanSwitch[role];
   const siteLabel =
     role === "super_admin"
@@ -331,7 +363,15 @@ export function AppShell({
             {initial}
           </div>
           <div className="text-sm leading-tight">
-            <div className="font-semibold">{display}</div>
+            {nameLoading ? (
+              <div
+                role="status"
+                aria-label="Loading your name"
+                className="h-4 w-28 rounded bg-white/20 animate-pulse mb-1"
+              />
+            ) : (
+              <div className="font-semibold">{display}</div>
+            )}
             <div className="text-[11px] text-white/50">{siteLabel}</div>
           </div>
         </div>

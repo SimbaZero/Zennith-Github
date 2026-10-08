@@ -11,6 +11,7 @@ import {
   type Role,
 } from "@/lib/auth";
 import { useQueryClient } from "@tanstack/react-query";
+import { logAction } from "@/lib/audit";
 import {
   generateSecret,
   verifyTotp,
@@ -114,6 +115,17 @@ function TwoFactor() {
     try {
       const ok = await verifyTotp(secret, code);
       if (!ok) {
+        // A real sign-in attempt that failed after the password was accepted —
+        // logged fire-and-forget (logAction never blocks or throws). clinicId
+        // is null on purpose: login events are a platform-level record, and a
+        // clinic id would put every login into that clinic admin's own audit
+        // list. Only the username goes in — never the code or the secret.
+        logAction({
+          clinicId: null,
+          actor_id: u || "unknown",
+          action_type: "auth.login_failed",
+          description: `Failed sign-in for "${u || "unknown"}": wrong two-factor code`,
+        });
         setError("Invalid code — check your authenticator app and try again.");
         setDigits(["", "", "", "", "", ""]);
         refs.current[0]?.focus();
@@ -122,6 +134,13 @@ function TwoFactor() {
       // First valid code during enrollment activates 2FA for this account.
       if (enrolling) await saveTotpSecret(secret);
       setAuth(role, u, f || null);
+      // A completed login: password and second factor both accepted.
+      logAction({
+        clinicId: null,
+        actor_id: u || "unknown",
+        action_type: "auth.login_success",
+        description: `"${u || "unknown"}" signed in as ${role}`,
+      });
       // super_admin lives at /super-admin (the role id uses an underscore)
       (navigate as any)({ to: `/${role.replace("_", "-")}` });
     } finally {

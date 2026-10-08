@@ -18,7 +18,7 @@ import {
   rejectClinicApplication,
   type ClinicRecord,
 } from "@/lib/clinic-data";
-import { getUsername } from "@/lib/auth";
+import { getUsername, useCurrentAdmin } from "@/lib/auth";
 import { logAction } from "@/lib/audit";
 import { assignClinicAdmin } from "@/lib/super-admin-service";
 import { sendClinicDecisionEmail } from "@/lib/clinic-decision-email";
@@ -91,6 +91,7 @@ function formatDate(iso?: string): string {
 
 function Applications() {
   const queryClient = useQueryClient();
+  const { admin } = useCurrentAdmin();
   const {
     data: clinics = [],
     isLoading,
@@ -114,7 +115,11 @@ function Applications() {
   const shown = pending.filter((c) => matchesApplicationSearch(c, search));
 
   return (
-    <AppShell role="super_admin" title="Clinic Applications">
+    <AppShell
+      role="super_admin"
+      title="Clinic Applications"
+      staffNameOverride={admin?.fullName}
+    >
       <p className="text-sm text-muted-foreground mb-4 max-w-2xl">
         Clinics that register themselves wait here until you have checked them.
         The checks are done by hand: Zennith is not connected to a regulator or

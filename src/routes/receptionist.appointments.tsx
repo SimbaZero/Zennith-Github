@@ -3,6 +3,10 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import {
+  StaffSearchSelect,
+  useClinicClinicians,
+} from "@/components/StaffSearchSelect";
+import {
   fetchRecentAppointments,
   createAppointment,
   resolveCurrentReceptionist,
@@ -21,7 +25,9 @@ export const Route = createFileRoute("/receptionist/appointments")({
 const APPOINTMENT_KINDS = ["Consultation", "Follow-up", "Procedure", "Review"];
 const squash = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
 function publicKind(type: string) {
-  return APPOINTMENT_KINDS.find((k) => squash(k) === squash(type)) ?? "Appointment";
+  return (
+    APPOINTMENT_KINDS.find((k) => squash(k) === squash(type)) ?? "Appointment"
+  );
 }
 
 function ReceptionAppointments() {
@@ -69,6 +75,14 @@ function ReceptionAppointments() {
     type: "Consultation",
   });
 
+  // Doctors and nurses at this clinic — the clinician is picked by name from
+  // this, instead of typed as a raw ID from memory.
+  const {
+    clinicians,
+    loading: cliniciansLoading,
+    error: cliniciansError,
+  } = useClinicClinicians(receptionist?.clinicId);
+
   const create = useMutation({
     mutationFn: () =>
       createAppointment({
@@ -97,7 +111,7 @@ function ReceptionAppointments() {
     if (!draft.patientId.trim())
       return toast.error("Patient ID is required (e.g. Pat-828)");
     if (!draft.clinician.trim())
-      return toast.error("Clinician is required (e.g. Doc-2 or Nur-315)");
+      return toast.error("Choose a clinician from the list");
     create.mutate();
   };
 
@@ -143,12 +157,26 @@ function ReceptionAppointments() {
               onChange={(v) => setDraft({ ...draft, patientId: v })}
               placeholder="e.g. Pat-828"
             />
-            <Field
-              label="Clinician"
-              value={draft.clinician}
-              onChange={(v) => setDraft({ ...draft, clinician: v })}
-              placeholder="Doc-2 / Nur-315"
-            />
+            <div>
+              <label
+                htmlFor="appt-clinician"
+                className="text-[11px] tracking-wider text-muted-foreground block mb-1"
+              >
+                Clinician
+              </label>
+              <StaffSearchSelect
+                id="appt-clinician"
+                options={clinicians}
+                value={draft.clinician}
+                onChange={(staffId) =>
+                  setDraft({ ...draft, clinician: staffId })
+                }
+                loading={cliniciansLoading}
+                error={cliniciansError}
+                placeholder="Search name or ID…"
+                pendingHint="Choose a clinician from the list."
+              />
+            </div>
             <Field
               label="Date"
               type="date"
