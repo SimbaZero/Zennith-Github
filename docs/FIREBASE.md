@@ -109,7 +109,8 @@ as their password in earlier runs are repaired automatically.
 | Create a staff login | Admin portal → Create User (creates Auth account + profile without logging the admin out) |
 | Block a staff login | Admin portal → All Staff → delete (removes profile → login rejected). Fully delete the Auth record under Authentication → Users |
 | Reset a password | Console → Authentication → Users → ⋮ → Reset password (or delete + recreate) |
-| Reset someone's 2FA | Firestore → `profiles` → their doc → delete the `totpSecret` field → next login re-enrolls |
+| Reset someone's 2FA | Firestore → `profiles` → their doc → delete the `totpSecret` and `twoFactorMethod` fields → next login re-enrolls (a patient can then choose text message or authenticator app). Users can't reset their own 2FA; the rules forbid it |
+| Fix where a patient's sign-in codes go | Staff edit the phone number on the patient's `users` record (`contactNum`); codes only go to a valid SA mobile number |
 | Register a walk-in patient | Receptionist portal → Registration (allocates IDs via `counters/registration`, creates `users` + `patients` + `medicalRecords`) |
 | Give a registered patient a login | Currently manual: create the Auth user (console or admin portal), then set `legacyUserId` on their profile to the patient's `userId` |
 | Book an appointment | Doctor portal (own schedule) or Receptionist portal (any clinician, `Doc-N`/`Nur-N`) |

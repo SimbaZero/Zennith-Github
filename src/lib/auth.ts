@@ -610,14 +610,56 @@ export async function removeUser(username: string): Promise<void> {
   }
 }
 
-/* ================= TWO-FACTOR (TOTP secret on the profile) ================= */
+/* ================= TWO-FACTOR (method + TOTP secret on the profile) ================= */
 
-/** The signed-in user's TOTP secret, or null if 2FA is not yet enrolled. */
-export async function fetchTotpSecret(): Promise<string | null> {
+export type TwoFactorMethod = "totp" | "sms";
+
+export interface TwoFactorProfile {
+  role: Role;
+  /** null until the first successful code: the user still has to enrol. */
+  method: TwoFactorMethod | null;
+  totpSecret: string | null;
+  /** The facility (clinic) the user is scoped to; null = platform-wide. */
+  facilityId: string | null;
+}
+
+/**
+ * The signed-in user's role, facility and 2FA state, read from their profile,
+ * never from the URL. Null when nobody is signed in or the account has no
+ * valid profile.
+ *
+ * `twoFactorMethod` is only ever "sms" (written by the server after a verified
+ * text-message code); authenticator accounts are recognised by their secret.
+ *
+ * Resetting 2FA (lost phone, new number) is done by an admin in the Firebase
+ * console: delete profiles/{uid}.totpSecret and .twoFactorMethod.
+ */
+export async function fetchTwoFactorProfile(): Promise<TwoFactorProfile | null> {
+  // After a page refresh Firebase restores the session asynchronously.
+  await auth.authStateReady();
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
   const snap = await getDoc(doc(db, USERS, uid));
-  return snap.exists() ? (snap.data().totpSecret ?? null) : null;
+  if (!snap.exists()) return null;
+  const d = snap.data();
+  if (!ROLES.includes(d.role)) return null;
+  const totpSecret: string | null =
+    typeof d.totpSecret === "string" && d.totpSecret !== "" ? d.totpSecret : null;
+  return {
+    role: d.role as Role,
+    method: d.twoFactorMethod === "sms" ? "sms" : totpSecret ? "totp" : null,
+    totpSecret,
+    // Empty or non-string facility = platform-wide, as the old URL param did.
+    facilityId:
+      typeof d.facilityId === "string" && d.facilityId !== "" ? d.facilityId : null,
+  };
+}
+
+/** Fresh ID token for server functions to verify who is calling. */
+export async function currentIdToken(): Promise<string> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Not signed in");
+  return user.getIdToken();
 }
 
 /** Stores the TOTP secret on the signed-in user's profile (called once, at enrollment). */
@@ -625,18 +667,6 @@ export async function saveTotpSecret(secret: string): Promise<void> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Not signed in");
   await updateDoc(doc(db, USERS, uid), { totpSecret: secret });
-}
-
-/**
- * Clears the stored TOTP secret so the account can re-enroll a new
- * authenticator (e.g. lost phone, deleted the authenticator app).
- * Safe to expose here because reaching this screen already required a
- * correct email + password — this is a recovery step, not a bypass.
- */
-export async function resetTotpSecret(): Promise<void> {
-  const uid = auth.currentUser?.uid;
-  if (!uid) throw new Error("Not signed in");
-  await updateDoc(doc(db, USERS, uid), { totpSecret: null });
 }
 
 /* ================= SESSION (localStorage cache for route guards) ================= */

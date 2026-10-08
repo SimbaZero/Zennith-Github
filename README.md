@@ -257,12 +257,12 @@ is what you want for testing anything cross-clinic.
 > After the password step, the **first** login for each account shows a QR code. Scan it
 > with Google Authenticator, Authy or Microsoft Authenticator and enter the 6-digit code
 > to enrol. Every login after that needs the current rotating code — typing random digits
-> does not work.
+> does not work. Patients can instead choose a **text-message code**, sent by the server
+> to the number on their record (see docs/ARCHITECTURE.md).
 >
-> To reset an account's 2FA, delete the `totpSecret` field from its document in the
-> Firestore `profiles` collection. There is also a reset button on the two-factor screen,
-> which is a **development-only bypass** and must be removed before any real deployment
-> (see Known limitations).
+> To reset an account's 2FA, an admin deletes the `totpSecret` and `twoFactorMethod`
+> fields from its document in the Firestore `profiles` collection. Users can't reset
+> their own 2FA.
 
 ---
 
@@ -395,8 +395,6 @@ that answers "is this ID taken?" without returning the data.
 **Anonymous Auth is still enabled** on the Firebase project, from local testing. Disable
 it before any real deployment.
 
-**The 2FA reset button is a development bypass.** It clears `totpSecret` for the current
-account with no verification. Remove or gate it before deployment.
 
 **The Gemini OCR key is exposed client-side.** The Digitize Files feature reads
 `VITE_GEMINI_API_KEY`, and the `VITE_` prefix means it ships in the browser bundle.

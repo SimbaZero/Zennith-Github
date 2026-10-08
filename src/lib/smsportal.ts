@@ -16,6 +16,39 @@ export function formatPhoneForSms(raw: string | undefined | null): string {
   return digits.startsWith("+") ? digits : `+${digits}`;
 }
 
+/**
+ * A South African mobile number in E.164 form ("+27821234567"), or null if
+ * `raw` isn't one. Stricter than formatPhoneForSms: sign-in codes must only
+ * go to a real SA mobile, never to a landline, a toll-free or share-call
+ * number (080, 086), VoIP (087) or a malformed number.
+ */
+export function toSouthAfricanMobile(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let digits = raw.replace(/[\s().-]/g, "").replace(/^(\+|00)/, "");
+  if (/^0\d{9}$/.test(digits)) digits = `27${digits.slice(1)}`;
+  // Mobile ranges: 06x, 071-074, 076-079, 081-084.
+  return /^27(6\d|7[1-46-9]|8[1-4])\d{7}$/.test(digits) ? `+${digits}` : null;
+}
+
+/**
+ * `text` with South African phone numbers (+27…, 0027…, 27…, 0…, with or
+ * without spaces or dashes) masked, for logs. Longer digit runs such as
+ * timestamps are left alone.
+ */
+export function withoutPhoneNumbers(text: string): string {
+  return text.replace(/(?<!\d)(?:\+|00)?(?:27|0)(?:[\s-]?\d){9}(?!\d)/g, "<number>");
+}
+
+/** Whether SMSPortal credentials are set, i.e. texts can actually be sent. */
+export function isSmsConfigured(env?: unknown): boolean {
+  return !!readEnv(env, "SMSPORTAL_CLIENT_ID") && !!readEnv(env, "SMSPORTAL_API_SECRET");
+}
+
+/** SMSPORTAL_TEST_MODE=true: log instead of sending (development only). */
+export function isSmsTestMode(env?: unknown): boolean {
+  return readEnv(env, "SMSPORTAL_TEST_MODE") === "true";
+}
+
 interface SmsPortalSendResponse {
   messages?: number;
   errorReport?: unknown;
@@ -25,11 +58,14 @@ export async function sendSms({
   to,
   message,
   testMode,
+  sensitive = false,
   env,
 }: {
   to: string;
   message: string;
   testMode?: boolean;
+  /** The message is a secret (a sign-in code): never write it to the log. */
+  sensitive?: boolean;
   env?: unknown;
 }): Promise<{ ok: boolean; dryRun?: boolean; reason?: string }> {
   const phone = formatPhoneForSms(to);
@@ -51,7 +87,7 @@ export async function sendSms({
   const shouldTest = testMode ?? (readEnv(env, "SMSPORTAL_TEST_MODE") === "true");
 
   if (!clientId || !apiSecret || shouldTest) {
-    console.info(`[sms:test] ${phone} :: ${message}`);
+    console.info(`[sms:test] ${phone.slice(0, 5)}***** :: ${sensitive ? "(message not logged)" : message}`);
     return { ok: true, dryRun: true };
   }
 
@@ -70,7 +106,7 @@ export async function sendSms({
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      console.error("[sms] send failed:", res.status, text);
+      console.error("[sms] send failed:", res.status, withoutPhoneNumbers(text));
       return { ok: false, reason: `sms-provider:${res.status}` };
     }
 
@@ -81,7 +117,7 @@ export async function sendSms({
       | null;
     const report = body?.sendResponse ?? body;
     if (typeof report?.messages === "number" && report.messages < 1) {
-      console.error("[sms] message not enqueued:", JSON.stringify(report.errorReport ?? {}));
+      console.error("[sms] message not enqueued:", withoutPhoneNumbers(JSON.stringify(report.errorReport ?? {})));
       return { ok: false, reason: "sms-not-enqueued" };
     }
 

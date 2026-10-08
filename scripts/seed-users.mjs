@@ -40,14 +40,14 @@ for (const role of ROLES) {
   const email = `${role}@zennith.test`;
   try {
     const cred = await createUserWithEmailAndPassword(auth, email, PASSWORD);
-    await setDoc(doc(db, "profiles", cred.user.uid), profile(role));
+    await setDoc(doc(db, "profiles", cred.user.uid), profile(role), { merge: true });
     console.log(`created ${role} (${email})`);
   } catch (e) {
     if (e.code === "auth/email-already-in-use") {
       // Ensure the profile doc exists even if the auth account was created before.
       try {
         const cred = await signInWithEmailAndPassword(auth, email, PASSWORD);
-        await setDoc(doc(db, "profiles", cred.user.uid), profile(role));
+        await setDoc(doc(db, "profiles", cred.user.uid), profile(role), { merge: true });
         console.log(`exists  ${role} (${email}) — profile refreshed`);
       } catch {
         console.error(
