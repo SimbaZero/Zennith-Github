@@ -21,6 +21,8 @@ export interface FirestoreDoc {
   data: FirestoreData;
   /** The document's version, for pinning a later write to what was read. */
   updateTime?: string;
+  /** When the document was first written. */
+  createTime?: string;
 }
 
 /** A conditional write lost to a concurrent change; re-read and decide again. */
@@ -42,7 +44,13 @@ export interface FieldFilter {
 }
 
 export type FirestoreWrite =
-  | { update: [collection: string, id: string]; data: FirestoreData; appendToArrays?: Record<string, unknown[]> }
+  | {
+      update: [collection: string, id: string];
+      data: FirestoreData;
+      appendToArrays?: Record<string, unknown[]>;
+      /** Defaults to "the document exists". */
+      precondition?: WriteOptions["precondition"];
+    }
   | { create: string; data: FirestoreData }
   /** Replaces the whole document, optionally only if it's still at a known version. */
   | { set: [collection: string, id: string]; data: FirestoreData; precondition?: WriteOptions["precondition"] }
@@ -62,6 +70,7 @@ interface RestDocument {
   name: string;
   fields?: Record<string, RestValue>;
   updateTime?: string;
+  createTime?: string;
 }
 
 export class FirestoreConfigError extends Error {}
@@ -255,7 +264,7 @@ export class FirestoreAdmin {
         fieldPath: quoteFieldPath(field),
         appendMissingElements: { values: values.map(encodeValue) },
       })),
-      currentDocument: { exists: true },
+      currentDocument: write.precondition ?? { exists: true },
     };
   }
 
@@ -374,7 +383,12 @@ function base64Url(bytes: Uint8Array): string {
 }
 
 function fromRestDocument(doc: RestDocument): FirestoreDoc {
-  return { id: doc.name.split("/").pop() ?? "", data: decodeFields(doc.fields ?? {}), updateTime: doc.updateTime };
+  return {
+    id: doc.name.split("/").pop() ?? "",
+    data: decodeFields(doc.fields ?? {}),
+    updateTime: doc.updateTime,
+    createTime: doc.createTime,
+  };
 }
 
 function encodeFields(data: FirestoreData): Record<string, RestValue> {

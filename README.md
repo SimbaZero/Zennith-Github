@@ -48,8 +48,9 @@ history is shown as evidence to weigh, the way a blood-pressure reading is evide
 score decides it, and nothing sets the flag automatically.
 
 **Notifications for every role, not just patients.** Overdue triage alerts to reception,
-stock and reorder alerts to pharmacy and clinic admins, appointment reminders to patients
-(by SMS, on a scheduled job). When a patient is called, they get an **"I'm on my way"**
+stock and reorder alerts to pharmacy and clinic admins, and texts to patients: one when an
+appointment is booked, then reminders they can answer 1 (yes) or 2 (no) on a scheduled
+job. When a patient is called, they get an **"I'm on my way"**
 button — an acknowledgement, kept strictly separate from "in room" status, which only
 staff can set. A patient can never move themselves through the queue.
 
@@ -151,7 +152,7 @@ VITE_FIREBASE_APP_ID=
 
 Everything else in `.env.example` is optional and switches a feature on: `RESEND_API_KEY`
 for patient signup emails, `SMSPORTAL_*` and `FIREBASE_SERVICE_ACCOUNT` for SMS
-appointment reminders, `VITE_GEMINI_API_KEY` for OCR on the Digitize Files page. The
+booking texts, appointment reminders and sign-in codes, `VITE_GEMINI_API_KEY` for OCR on the Digitize Files page. The
 server-side ones have no `VITE_` prefix on purpose — that prefix would publish them in
 the browser bundle. In production set them with `wrangler secret put NAME`.
 
@@ -343,7 +344,7 @@ src/
 ├── routes/      file-based routes — the filename is the URL
 ├── lib/         all data access and domain logic, one service per role
 ├── components/  shared UI, including the authenticated shell
-├── server/      Cloudflare Worker code: SMS reminders, API routes, Firestore admin
+├── server/      Cloudflare Worker code: SMS booking texts, reminders and sign-in codes, API routes, Firestore admin
 ├── firebase.ts  Firebase init, with IndexedDB persistence for offline
 └── styles.css   Tailwind entry and the app's animations
 ```
