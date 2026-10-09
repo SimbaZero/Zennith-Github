@@ -3,10 +3,9 @@ import { AlertTriangle, ChevronDown } from "lucide-react";
 import { AuditEmptyLine } from "@/components/AuditEventList";
 import { eventTime } from "@/lib/audit-phrasing";
 import type { Flag } from "@/lib/audit-insights";
-import type { DeletionRequest } from "@/lib/clinic-data";
 
 // The building blocks of an audit page — a titled section, a stat tile, the
-// "Worth a look" list, a read-only deletion-request row.
+// "Worth a look" list.
 //
 // These are the same patterns as the admin Audit Logs page (admin.audit.tsx),
 // written as shared exports so another page can use them. The admin page still
@@ -163,84 +162,5 @@ export function AuditFlagsSection({
         </p>
       )}
     </AuditSection>
-  );
-}
-
-/**
- * A patient's deletion request, for someone who watches the whole platform.
- * Read-only on purpose: the clinic's own admin responds to these (and records
- * what they did); this row only makes sure they can't sit unanswered unseen.
- */
-export function DeletionRequestSummaryRow({
-  request,
-  clinicName,
-}: {
-  request: DeletionRequest;
-  clinicName?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const when = new Date(request.requestedAt);
-  const days = Number.isNaN(when.getTime())
-    ? null
-    : Math.floor((Date.now() - when.getTime()) / 86_400_000);
-  // Same threshold the clinic admin's own page uses for "overdue a response".
-  const overdue = days != null && days > 2;
-
-  return (
-    <li>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="w-full text-left px-5 py-4 hover:bg-secondary/40 flex items-start gap-3"
-      >
-        <div className="flex-1 min-w-0">
-          <p className="font-medium text-sm">
-            {request.patientName}{" "}
-            <span className="text-muted-foreground font-normal">
-              · {request.patientId}
-            </span>
-          </p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {clinicName ?? "Clinic not recorded"} · requested{" "}
-            {days == null
-              ? "—"
-              : days === 0
-                ? "today"
-                : days === 1
-                  ? "yesterday"
-                  : `${days} days ago`}
-            {overdue && (
-              <span className="text-amber-700 font-medium">
-                {" "}
-                · overdue a response
-              </span>
-            )}
-          </p>
-        </div>
-        <ChevronDown
-          size={14}
-          className={`mt-1 shrink-0 text-muted-foreground transition ${
-            open ? "rotate-180" : ""
-          }`}
-        />
-      </button>
-      {open && (
-        <div className="px-5 pb-4">
-          <p className="text-xs tracking-wider text-muted-foreground mb-1">
-            REASON GIVEN
-          </p>
-          {request.reason ? (
-            <p className="text-sm italic">"{request.reason}"</p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              The patient didn't give a reason.
-            </p>
-          )}
-          <p className="text-xs text-muted-foreground mt-3">
-            The clinic's own admin responds to this request.
-          </p>
-        </div>
-      )}
-    </li>
   );
 }

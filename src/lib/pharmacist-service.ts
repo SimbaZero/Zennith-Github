@@ -16,6 +16,7 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { stock as mockStock } from "@/lib/data";
+import { registerSessionCache } from "@/lib/session-caches";
 import {
   notifyClinicAdmins,
   notifyRoleAtClinic,
@@ -453,6 +454,12 @@ export interface CurrentPharmacist {
 }
 
 const pharmacistCacheByUid = new Map<string, Promise<CurrentPharmacist>>();
+
+/** Forgets the signed-in pharmacist's cached profile. Run on sign-out — see session-caches.ts. */
+export function clearPharmacistCache(): void {
+  pharmacistCacheByUid.clear();
+}
+registerSessionCache(clearPharmacistCache);
 
 async function resolveCurrentPharmacistForUid(
   uid: string,

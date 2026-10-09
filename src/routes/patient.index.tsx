@@ -5,6 +5,10 @@ import { useNow } from "@/lib/store";
 import { useInventory } from "@/lib/pharmacist-service";
 import { sameClinicId } from "@/lib/clinic-id";
 import {
+  appointmentDateTimeLabel,
+  isUpcomingAppointment,
+} from "@/lib/appointment-time";
+import {
   useCurrentPatient,
   usePatientAppointments,
   useMedicationStatus,
@@ -26,15 +30,9 @@ export const Route = createFileRoute("/patient/")({
   component: PatientDashboard,
 });
 
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("en-ZA", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+// The stored appointment time is the clinic's wall-clock time, not UTC — read it
+// as such (see appointment-time.ts) rather than converting it to the device's.
+const formatDateTime = appointmentDateTimeLabel;
 
 function AppointmentStatusBadge({ status }: { status: string }) {
   const color =
@@ -66,7 +64,9 @@ function PatientDashboard() {
   const unread = notifications.filter((n) => !n.isRead).length;
 
   const upcoming = appointments
-    .filter((a) => a.status !== "Cancelled" && new Date(a.dateTime) >= now)
+    .filter(
+      (a) => a.status !== "Cancelled" && isUpcomingAppointment(a.dateTime, now),
+    )
     .slice(0, 3);
   const nextAppointment = upcoming[0];
 

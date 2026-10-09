@@ -277,7 +277,7 @@ function Roles() {
       className="border-y border-[oklch(0.9_0.01_250)] bg-white"
     >
       <div className="mx-auto max-w-6xl px-6 py-20">
-        <div className="grid lg:grid-cols-[1fr_24rem] gap-10 items-end">
+        <div className="grid lg:grid-cols-[1fr_24rem] gap-10 items-start">
           <div>
             <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
               One system, five kinds of work
@@ -386,7 +386,7 @@ function Joining() {
 function About() {
   return (
     <section>
-      <div className="mx-auto max-w-6xl px-6 py-20 grid lg:grid-cols-2 gap-12 items-center">
+      <div className="mx-auto max-w-6xl px-6 py-20 grid lg:grid-cols-2 gap-12 items-start">
         <div>
           <h2 className="font-serif text-3xl sm:text-4xl tracking-tight">
             Why we built it

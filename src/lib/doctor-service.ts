@@ -13,6 +13,7 @@ import {
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import type { AppointmentStatus } from "@/components/AppShell";
+import { registerSessionCache } from "@/lib/session-caches";
 
 // ---------------------------------------------------------------------------
 // AUTH RACE FIX
@@ -142,10 +143,18 @@ async function buildCurrentDoctor(
     licenseNo: doctorData.licenseNo,
   };
 }
-/** Still available if you want to force a fresh lookup for some reason. */
+/**
+ * Forgets everything this module has cached: the signed-in doctor's profile and
+ * the patient names/conditions looked up for the lists and appointment pages.
+ * Run on sign-out (see session-caches.ts) so the next person on this tab can't be
+ * handed the previous person's identity or lookups.
+ */
 export function clearDoctorCache(): void {
   doctorCacheByUid.clear();
+  patientNameCache.clear();
+  patientDetailCache.clear();
 }
+registerSessionCache(clearDoctorCache);
 
 export function useCurrentDoctor(): {
   doctor: CurrentDoctor | null;
@@ -232,19 +241,31 @@ export function toBadgeStatus(s: string): AppointmentStatus {
   return "Incomplete";
 }
 
-const patientNameCache = new Map<string, { name: string; condition: string }>();
+// A patient's name and condition CAN change — reception renames a patient, a
+// nurse updates the condition — so a looked-up value is only trusted for a
+// minute, not for the life of the tab. The appointment pages that use this have
+// no live listener on the patient to tell them something changed, so a time limit
+// is the simplest honest signal. (The patient lists use a different check: see
+// patientDetailCache, which has a live document to key on.)
+const PATIENT_NAME_TTL_MS = 60_000;
+const patientNameCache = new Map<
+  string,
+  { name: string; condition: string; at: number }
+>();
 
 export async function resolvePatientNames(
   patientIds: string[],
 ): Promise<Map<string, { name: string; condition: string }>> {
-  const unique = [...new Set(patientIds)].filter(
-    (id) => !patientNameCache.has(id),
-  );
+  const now = Date.now();
+  const unique = [...new Set(patientIds)].filter((id) => {
+    const hit = patientNameCache.get(id);
+    return !hit || now - hit.at > PATIENT_NAME_TTL_MS;
+  });
   await Promise.all(
     unique.map(async (pid) => {
       const pSnap = await getDoc(doc(db, "patients", pid));
       if (!pSnap.exists()) {
-        patientNameCache.set(pid, { name: pid, condition: "" });
+        patientNameCache.set(pid, { name: pid, condition: "", at: Date.now() });
         return;
       }
       const p = pSnap.data();
@@ -256,6 +277,7 @@ export async function resolvePatientNames(
       patientNameCache.set(pid, {
         name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
         condition: p.chronicCondition ?? "",
+        at: Date.now(),
       });
     }),
   );
@@ -509,24 +531,36 @@ export interface PatientDirectoryEntry {
   lastVisit: string;
 }
 
-// Name/last-visit rarely change, so cache lookups across snapshot updates
-// and across search queries — avoids re-fetching users/medicalRecords for
-// patients we've already resolved.
-const patientDetailCache = new Map<
-  string,
-  { name: string; lastVisit: string }
->();
+// A patient's name comes from a separate users document, so looking it up costs
+// a read per patient. Names are cached across snapshot updates and searches to
+// avoid that — but a name CAN change (reception can rename a patient), and a
+// cache that never expires would show the old spelling until the tab is closed.
+//
+// So each cached name is kept with a "stamp" of the patient document it was read
+// for: when that document was last updated, and its searchable-name words. The
+// patient lists already hold a live listener on that document and reception's
+// save rewrites it, so a rename changes the stamp and the very next snapshot
+// re-reads the name — with no extra reads while nothing has changed.
+//
+// (The stamp is only trustworthy because reception saves the users document
+// BEFORE the patient document; the other way round, a listener could fire on the
+// new stamp and still read the old name — see the profile page's save.)
+const patientDetailCache = new Map<string, { name: string; stamp: string }>();
 
-async function enrichPatient(
+const patientStamp = (p: Record<string, unknown>) =>
+  `${p.lastUpdated ?? ""}|${Array.isArray(p.nameTokensLower) ? p.nameTokensLower.join(",") : ""}`;
+
+// Exported only so the cache behaviour can be tested directly.
+export async function enrichPatient(
   patientId: string,
   p: Record<string, any>,
 ): Promise<PatientDirectoryEntry> {
-  // Only the NAME is cached. lastVisit used to be cached too, which is why
-  // dispensing medication or editing a record didn't update this list —
-  // the patients listener fired correctly, then this returned the stale
-  // cached row anyway. A name comes from the users doc and effectively
-  // never changes; lastVisit changes every time a patient is seen.
-  const cachedName = patientDetailCache.get(patientId)?.name;
+  // Only the NAME is cached; lastVisit changes every time a patient is seen, so
+  // it is always read fresh (it once was cached too, which is why dispensing
+  // medication didn't update this list).
+  const stamp = patientStamp(p);
+  const hit = patientDetailCache.get(patientId);
+  const cachedName = hit && hit.stamp === stamp ? hit.name : null;
 
   const [uSnap, mrSnap] = await Promise.all([
     cachedName == null && p.userId != null
@@ -539,10 +573,15 @@ async function enrichPatient(
   const u = uSnap?.exists() ? uSnap.data() : {};
   const mr = mrSnap?.exists() ? mrSnap.data() : {};
 
-  const name =
-    cachedName ?? ([u.names, u.surname].filter(Boolean).join(" ") || patientId);
+  const looked = [u.names, u.surname].filter(Boolean).join(" ");
+  const name = cachedName ?? (looked || patientId);
+  // Remember only a name that was actually found. When the lookup comes back
+  // empty the displayed name is just the patient ID, and caching THAT would show
+  // an ID in place of a name until the stamp next changed.
+  if (cachedName != null || looked) {
+    patientDetailCache.set(patientId, { name, stamp });
+  }
   const lastVisit = (mr.lastVisit ?? "").slice(0, 10) || "—";
-  patientDetailCache.set(patientId, { name, lastVisit });
 
   return { patientId, name, condition: p.chronicCondition ?? "—", lastVisit };
 }

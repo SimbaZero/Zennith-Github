@@ -17,6 +17,7 @@ import {
   type ReceptionPatientRecord,
 } from "@/lib/clinic-data";
 import { logAction } from "@/lib/audit";
+import { normalizeInsurance } from "@/lib/record-edit";
 import { HIDDEN_BY_PATIENT } from "@/lib/privacy";
 import {
   DOCUMENT_CHECK_NOTE,
@@ -154,30 +155,41 @@ function PatientDetail() {
       const userId = patientData.userId;
       const recordNo = patientData.medicalRecordNo;
 
-      const insurance =
-        form.insurance !== "None" ? form.insurance.trim() : undefined;
-      const insuranceChanged = form.insurance !== record.insurance;
+      // Blank or "None" both mean no insurance, and both are stored as null.
+      // Typing "None" used to become `undefined`, which the write layer drops —
+      // so it looked saved and the old policy number came back. Compared in the
+      // same normalised form, so "None" over "None" isn't a change either.
+      const insurance = normalizeInsurance(form.insurance);
+      const insuranceChanged =
+        insurance !== normalizeInsurance(record.insurance);
       // The name is saved on the users document above, but the patient list is
       // searched by name through a copy of it on the patient document — so a
       // renamed patient has to have that copy rewritten too, or they stay
       // findable only under the old spelling.
       const nameChanged = form.name.trim() !== record.name.trim();
 
+      // The person's own record goes first, and finishes, before the patient
+      // document is touched. Doctors' and nurses' patient lists cache a name
+      // against the patient document's last-updated stamp and re-read the name
+      // when it changes (see patientDetailCache in doctor-service) — so if both
+      // were written at once, a list could see the new stamp, read the not-yet-
+      // saved old name, and keep showing it. Written in this order, the new stamp
+      // can only ever be seen after the new name is already there.
+      await updateUser(userId, {
+        names,
+        surname,
+        ...(idChanged ? { idNumber, idType: form.idType } : {}),
+        // Fields the patient has hidden are locked on screen and skipped
+        // here, so the marker text can never overwrite the real value.
+        ...(privacy.showContact
+          ? { contactNum: form.cell, email: form.email }
+          : {}),
+        // Address used to be shown as editable but was never written.
+        ...(privacy.showAddress
+          ? { suburb: form.suburb.trim(), city: form.city.trim() }
+          : {}),
+      });
       await Promise.all([
-        updateUser(userId, {
-          names,
-          surname,
-          ...(idChanged ? { idNumber, idType: form.idType } : {}),
-          // Fields the patient has hidden are locked on screen and skipped
-          // here, so the marker text can never overwrite the real value.
-          ...(privacy.showContact
-            ? { contactNum: form.cell, email: form.email }
-            : {}),
-          // Address used to be shown as editable but was never written.
-          ...(privacy.showAddress
-            ? { suburb: form.suburb.trim(), city: form.city.trim() }
-            : {}),
-        }),
         // No chronicCondition — reception doesn't edit clinical data (POPIA).
         updatePatient(pid, {
           ...(privacy.showEmergencyContact

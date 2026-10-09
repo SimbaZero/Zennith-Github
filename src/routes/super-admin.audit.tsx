@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { ChevronDown, KeyRound, Search, UserX, Users } from "lucide-react";
+import { ChevronDown, KeyRound, Search, Users } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import {
   AuditEmptyLine,
@@ -11,7 +11,6 @@ import {
   AuditFlagsSection,
   AuditMiniStat,
   AuditSection,
-  DeletionRequestSummaryRow,
 } from "@/components/AuditPanels";
 import { useLogs } from "@/lib/audit";
 import { eventTime, phraseStaffLog } from "@/lib/audit-phrasing";
@@ -21,7 +20,6 @@ import {
   type LoginHistoryEntry,
 } from "@/lib/audit-insights";
 import { useCurrentAdmin } from "@/lib/auth";
-import { useDeletionRequests } from "@/lib/clinic-data";
 import { useClinics } from "@/lib/super-admin-service";
 
 export const Route = createFileRoute("/super-admin/audit")({
@@ -37,7 +35,7 @@ const EVENT_WINDOW = 500;
 const DISMISSED_KEY = "zennith_dismissed_flags_super";
 
 // One set of buttons drives the whole page, as on the clinic admin's Audit Logs.
-type Filter = "all" | "review" | "logins" | "deletions";
+type Filter = "all" | "review" | "logins" | "removals";
 
 /** "Today at 14:32" / "Yesterday at 09:10" / "Thu 8 Oct at 16:02". */
 function whenLabel(iso: string): string {
@@ -71,10 +69,6 @@ function SuperAdminAudit() {
   // the Super Admin's view, per the note on useLogs in audit.ts).
   const { rows: logs, loading, error } = useLogs(undefined, EVENT_WINDOW);
   const { clinics } = useClinics();
-  const { requests, loading: requestsLoading } = useDeletionRequests(
-    undefined,
-    { allClinics: true },
-  );
   const clinicName = useMemo(
     () => new Map(clinics.map((c) => [c.clinicId, c.clinicName])),
     [clinics],
@@ -148,19 +142,6 @@ function SuperAdminAudit() {
     [logs, clinicName, needle],
   );
 
-  const visibleRequests = useMemo(
-    () =>
-      requests.filter(
-        (r) =>
-          !needle ||
-          r.patientName.toLowerCase().includes(needle) ||
-          r.patientId.toLowerCase().includes(needle) ||
-          (r.clinicId != null &&
-            (clinicName.get(r.clinicId) ?? "").toLowerCase().includes(needle)),
-      ),
-    [requests, clinicName, needle],
-  );
-
   const now = Date.now();
   const dayAgo = (iso: string) => now - new Date(iso).getTime() < 86_400_000;
   const signIns24h = logs.filter(
@@ -170,16 +151,20 @@ function SuperAdminAudit() {
     (l) => l.action_type === "auth.login_failed" && dayAgo(l.timestamp),
   ).length;
   const critical = flags.filter((f) => f.severity === "critical").length;
+  // Every removal in the window, not only the ones the search box leaves visible.
+  const removedTotal = logs.filter(
+    (l) => l.action_type === "staff.remove",
+  ).length;
 
   const show = (section: Filter) => filter === "all" || filter === section;
   const filterButtons: { key: Filter; label: string; count?: number }[] = [
     { key: "all", label: "Everything" },
     { key: "review", label: "Worth a look", count: flags.length },
     { key: "logins", label: "Sign-ins" },
-    { key: "deletions", label: "Account deletions", count: requests.length },
+    { key: "removals", label: "Staff removals" },
   ];
   const searchable =
-    filter === "all" || filter === "logins" || filter === "deletions";
+    filter === "all" || filter === "logins" || filter === "removals";
 
   return (
     <AppShell
@@ -198,10 +183,7 @@ function SuperAdminAudit() {
           label="FAILED ATTEMPTS (24H)"
           value={String(failed24h)}
         />
-        <AuditMiniStat
-          label="DELETION REQUESTS"
-          value={String(requests.length)}
-        />
+        <AuditMiniStat label="STAFF REMOVED" value={String(removedTotal)} />
       </div>
 
       <div className="bg-white rounded-xl border p-4 mb-6">
@@ -306,61 +288,27 @@ function SuperAdminAudit() {
           </AuditSection>
         )}
 
-        {show("deletions") && (
-          <>
-            <AuditSection
-              icon={<Users size={16} className="text-[oklch(0.45_0.15_290)]" />}
-              title="Staff accounts removed"
-              count={removedRows.length}
-              hint="Logins revoked, at any clinic"
-            >
-              {loading ? (
-                <AuditEmptyLine>Loading…</AuditEmptyLine>
-              ) : (
-                <AuditEventList
-                  rows={removedRows}
-                  tone="staff"
-                  empty={
-                    needle
-                      ? "Nothing matches your search."
-                      : "No staff accounts have been removed."
-                  }
-                />
-              )}
-            </AuditSection>
-
-            <AuditSection
-              icon={<UserX size={16} className="text-amber-700" />}
-              title="Patient deletion requests"
-              count={visibleRequests.length}
-              hint="Patients asking for their account and data to be deactivated, waiting for a response"
-              tone={requests.length > 0 ? "amber" : "plain"}
-            >
-              {requestsLoading ? (
-                <AuditEmptyLine>Loading…</AuditEmptyLine>
-              ) : visibleRequests.length === 0 ? (
-                <AuditEmptyLine>
-                  {needle
+        {show("removals") && (
+          <AuditSection
+            icon={<Users size={16} className="text-[oklch(0.45_0.15_290)]" />}
+            title="Staff accounts removed"
+            count={removedRows.length}
+            hint="Logins revoked, at any clinic"
+          >
+            {loading ? (
+              <AuditEmptyLine>Loading…</AuditEmptyLine>
+            ) : (
+              <AuditEventList
+                rows={removedRows}
+                tone="staff"
+                empty={
+                  needle
                     ? "Nothing matches your search."
-                    : "No deletion requests are waiting."}
-                </AuditEmptyLine>
-              ) : (
-                <ul className="divide-y">
-                  {visibleRequests.map((r) => (
-                    <DeletionRequestSummaryRow
-                      key={r.patientId}
-                      request={r}
-                      clinicName={
-                        r.clinicId != null
-                          ? clinicName.get(r.clinicId)
-                          : undefined
-                      }
-                    />
-                  ))}
-                </ul>
-              )}
-            </AuditSection>
-          </>
+                    : "No staff accounts have been removed."
+                }
+              />
+            )}
+          </AuditSection>
         )}
       </div>
     </AppShell>

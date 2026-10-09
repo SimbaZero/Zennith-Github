@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { registerSessionCache } from "@/lib/session-caches";
 
 // Real replacement for the old useActiveClinic() in src/lib/clinic.ts, which
 // ran on a hardcoded 3-clinic list with string ids ("hillbrow", "orchards",
@@ -24,6 +25,28 @@ const listeners: Record<ClinicRole, Set<() => void>> = {
   pharmacist: new Set(),
 };
 const activeIdByRole: Partial<Record<ClinicRole, number>> = {};
+
+/**
+ * Forgets which clinic each role was last looking at, both in memory and in the
+ * browser's saved copy of it. Run on sign-out — see session-caches.ts. The choice
+ * belongs to the person who made it: left behind, the next doctor to sign in on
+ * this browser would open on the previous doctor's clinic whenever they happen
+ * to work there too. Anything mounted is told, so it doesn't keep showing it.
+ */
+export function clearActiveClinics(): void {
+  for (const role of Object.keys(listeners) as ClinicRole[]) {
+    delete activeIdByRole[role];
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem(KEY_PREFIX + role);
+      } catch {
+        /* storage unavailable — nothing was saved to remove */
+      }
+    }
+    listeners[role].forEach((f) => f());
+  }
+}
+registerSessionCache(clearActiveClinics);
 
 function readStored(role: ClinicRole): number | null {
   if (typeof window === "undefined") return null;

@@ -49,6 +49,7 @@ import {
   usePatientRecord, // import source instead of reaching into doctor-service.ts
   type DoctorAppointment,
 } from "@/lib/doctor-service";
+import { registerSessionCache } from "@/lib/session-caches";
 
 export {
   usePatientDirectory,
@@ -215,9 +216,11 @@ export function useCurrentNurse(): {
   return { nurse, loading, error };
 }
 
+/** Forgets the signed-in nurse's cached profile. Run on sign-out — see session-caches.ts. */
 export function clearNurseCache(): void {
   nurseCacheByUid.clear();
 }
+registerSessionCache(clearNurseCache);
 
 // ---------------------------------------------------------------------------
 // Dashboard — same composition as useDoctorDashboard() (identity +

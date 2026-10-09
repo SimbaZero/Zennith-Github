@@ -9,6 +9,11 @@ import {
   type PatientAppointmentRow,
 } from "@/lib/patient-service";
 import { isOffline } from "@/lib/offline";
+import {
+  appointmentDateLabel,
+  appointmentTime,
+  hasAppointmentPassed,
+} from "@/lib/appointment-time";
 import { Check, X, Bell, Lock } from "lucide-react";
 import { toast } from "sonner";
 
@@ -33,16 +38,10 @@ function AppointmentStatusBadge({ status }: { status: string }) {
   );
 }
 
-function formatDate(dt: Date) {
-  return dt.toLocaleDateString("en-ZA", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-function formatTime(dt: Date) {
-  return dt.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" });
-}
+// Read the stored clinic time as it is — see appointment-time.ts. These used to
+// convert it through the device's timezone and show it two hours late.
+const formatDate = appointmentDateLabel;
+const formatTime = appointmentTime;
 
 // Soft lock: anything already in the past, Completed, or Cancelled can no
 // longer be touched by the patient. Only upcoming, still-open appointments
@@ -50,7 +49,7 @@ function formatTime(dt: Date) {
 // done upstream in usePatientAppointments).
 function isLocked(a: PatientAppointmentRow, now: Date): boolean {
   return (
-    new Date(a.dateTime) < now ||
+    hasAppointmentPassed(a.dateTime, now) ||
     a.status === "Cancelled" ||
     a.status === "Completed"
   );
@@ -173,7 +172,6 @@ function PatientAppointments() {
                 </tr>
               )}
               {upcoming.map((a, i) => {
-                const dt = new Date(a.dateTime);
                 const isNext = i === 0;
                 const pending = a.status !== "Confirmed";
                 return (
@@ -182,9 +180,9 @@ function PatientAppointments() {
                     className={`border-t ${isNext ? "bg-[oklch(0.97_0.05_245)]" : ""}`}
                   >
                     <td className="px-5 py-3.5 font-medium">
-                      <div>{formatDate(dt)}</div>
+                      <div>{formatDate(a.dateTime)}</div>
                       <div className="text-xs text-muted-foreground font-mono">
-                        {formatTime(dt)}
+                        {formatTime(a.dateTime)}
                       </div>
                     </td>
                     <td className="px-5 py-3.5">{a.type}</td>
@@ -292,12 +290,13 @@ function PatientAppointments() {
               {/* A chronic patient can accumulate hundreds of past visits,
                   so this shows the most recent few rather than everything. */}
               {past.slice(0, pastLimit).map((a) => {
-                const dt = new Date(a.dateTime);
                 return (
                   <tr key={a.docId} className="border-t text-muted-foreground">
                     <td className="px-5 py-3.5 font-medium">
-                      <div>{formatDate(dt)}</div>
-                      <div className="text-xs font-mono">{formatTime(dt)}</div>
+                      <div>{formatDate(a.dateTime)}</div>
+                      <div className="text-xs font-mono">
+                        {formatTime(a.dateTime)}
+                      </div>
                     </td>
                     <td className="px-5 py-3.5">{a.type}</td>
                     <td className="px-5 py-3.5 font-mono text-xs">

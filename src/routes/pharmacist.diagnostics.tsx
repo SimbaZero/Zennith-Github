@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { StockFallbackBanner } from "@/components/StockFallbackBanner";
 import {
   usePatientDirectory,
   getPrescriptionForPatient,
@@ -228,7 +229,7 @@ function HandoverPanel({
 }) {
   const { pharmacist } = useCurrentPharmacist();
   const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
-  const { stock } = useInventory();
+  const { stock, usingFallback } = useInventory();
   const clinicId = realClinic.activeClinicId ?? pharmacist?.clinicId;
 
   const [docId, setDocId] = useState("");
@@ -260,6 +261,10 @@ function HandoverPanel({
     !!pharmacist?.pharmacistId;
 
   if (!prescription) return null;
+  // With the live stock feed down there are no stock lines to match, which used
+  // to produce the next message — claiming the medication isn't stocked when it
+  // is and the feed is simply unavailable.
+  if (usingFallback) return <StockFallbackBanner className="mt-3" />;
   if (matches.length === 0) {
     return (
       <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-3">

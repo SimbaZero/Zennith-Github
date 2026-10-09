@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
+import { StockFallbackBanner } from "@/components/StockFallbackBanner";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import {
@@ -27,7 +28,7 @@ export const Route = createFileRoute("/pharmacist/deliveries")({
 function Deliveries() {
   const { pharmacist } = useCurrentPharmacist();
   const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
-  const { stock } = useInventory();
+  const { stock, loading: stockLoading, usingFallback } = useInventory();
 
   // Deliveries go to whichever clinic is selected in the header — there is
   // no separate destination picker. Having both meant the header could say
@@ -129,7 +130,13 @@ function Deliveries() {
         </span>
       </div>
 
-      <PharmacyStockTiles stock={available} />
+      {usingFallback && <StockFallbackBanner className="mb-4" />}
+
+      <PharmacyStockTiles
+        stock={available}
+        loading={stockLoading}
+        unavailable={usingFallback}
+      />
 
       {/* Pharmacy's own restocking — moved here from the Distribution page,
           which is being retired. This is the pharmacy receiving from its
@@ -540,8 +547,13 @@ function SupplierIntake({
 // ---------------------------------------------------------------------------
 function PharmacyStockTiles({
   stock,
+  loading,
+  unavailable,
 }: {
   stock: ReturnType<typeof useInventory>["stock"];
+  loading: boolean;
+  /** useInventory fell back to demo data: there is no real stock to show. */
+  unavailable: boolean;
 }) {
   const tone = (units: number, threshold: number) =>
     units <= 0
@@ -609,7 +621,15 @@ function PharmacyStockTiles({
         </datalist>
       </div>
       {allTiles.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Loading stock…</p>
+        // This used to say "Loading stock…" whatever the reason it was empty,
+        // so a stock feed that had failed looked like it was still on its way.
+        <p className="text-sm text-muted-foreground">
+          {unavailable
+            ? "Live stock can't be loaded, so there is nothing to show."
+            : loading
+              ? "Loading stock…"
+              : "No stock is recorded at the pharmacy yet."}
+        </p>
       ) : tiles.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No medication matches "{search.trim()}".

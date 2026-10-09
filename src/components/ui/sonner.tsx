@@ -61,10 +61,14 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast:
-            "group toast gap-3! rounded-xl! border! border-l-4! px-4! py-3.5! shadow-xl! text-[14px]! font-medium!",
+            "group toast gap-4! rounded-xl! border! border-l-4! px-4! py-3.5! shadow-xl! text-[14px]! font-medium!",
           title: "font-semibold!",
           description: "text-[13px]! font-normal! opacity-80!",
-          icon: "m-0!",
+          // Sonner gives the icon a fixed 16px box, left-aligned. Our badge is
+          // 28px, so it used to spill 12px out of that box and sit hard against
+          // the text — the toast's gap was being spent on the overflow, leaving
+          // none. Sizing the box to the badge makes the gap a real gap.
+          icon: "m-0! h-7! w-7! justify-center!",
           closeButton: "bg-white! border-slate-200! text-slate-500!",
           actionButton: "bg-slate-900! text-white!",
           cancelButton: "bg-slate-100! text-slate-700!",

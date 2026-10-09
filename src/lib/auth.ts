@@ -28,6 +28,7 @@ import {
 import { assertOnline } from "@/lib/offline";
 import { auth, db, firebaseConfig } from "@/firebase";
 import { logAction } from "./audit";
+import { clearSessionCaches } from "@/lib/session-caches";
 import { friendlyServerMessage } from "@/lib/form-rules";
 
 export type Role =
@@ -651,6 +652,10 @@ export function setAuth(
   if (username) localStorage.setItem(NAME_KEY, username);
   if (facilityId) localStorage.setItem(FACILITY_KEY, facilityId);
   else localStorage.removeItem(FACILITY_KEY);
+  // A new session starts clean. Sign-out already empties these, but a lookup
+  // that was still in flight then can finish afterwards and leave the previous
+  // person's entry behind; nothing is cached yet at this point in a login.
+  clearSessionCaches();
 }
 export function getAuth(): Role | null {
   if (typeof window === "undefined") return null;
@@ -681,6 +686,10 @@ export function clearAuth() {
     localStorage.removeItem(NAME_KEY);
     localStorage.removeItem(FACILITY_KEY);
   }
+  // Forget what the app had cached about who was signed in (the doctor/nurse/
+  // pharmacist/patient profiles, patients' names, the chosen clinic…), so the
+  // next person on this tab starts from nothing. See session-caches.ts.
+  clearSessionCaches();
   fbSignOut(auth).catch(() => {});
 }
 

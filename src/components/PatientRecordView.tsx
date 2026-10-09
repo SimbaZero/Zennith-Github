@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { usePatientRecord } from "@/lib/doctor-service";
 import { HIDDEN_BY_PATIENT } from "@/lib/privacy";
 import { updatePatient, updateMedicalRecord } from "@/lib/clinic-data";
+import { editedFields, type EditableFields } from "@/lib/record-edit";
 import { useClinicInventory, dispenseMedication } from "@/lib/nurse-service";
 import { FastLaneToggle } from "@/components/FastLaneToggle";
 import { addDoc, collection } from "firebase/firestore";
@@ -43,18 +44,6 @@ interface PatientRecordViewProps {
   clinicName?: string | null;
 }
 
-interface EditableFields {
-  condition: string;
-  bloodType: string;
-  allergies: string;
-  prescription: string;
-  dosage: string;
-  bp: string;
-  glucose: string;
-  cd4: string;
-  viralLoad: string;
-}
-
 const PLACEHOLDER_VALUES = new Set(["—", "None recorded", "None"]);
 const clean = (v: string) => (PLACEHOLDER_VALUES.has(v) ? "" : v);
 
@@ -75,6 +64,9 @@ export function PatientRecordView({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<EditableFields | null>(null);
+  // How the form looked when editing began, so saving can tell a field that was
+  // emptied from one that was never touched — see record-edit.ts.
+  const [baseline, setBaseline] = useState<EditableFields | null>(null);
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState(false);
 
@@ -100,7 +92,7 @@ export function PatientRecordView({
 
   const beginEdit = () => {
     if (!record) return;
-    setForm({
+    const start: EditableFields = {
       condition: clean(record.condition),
       bloodType: clean(record.bloodType),
       allergies: clean(record.allergies),
@@ -110,13 +102,16 @@ export function PatientRecordView({
       glucose: clean(record.glucose),
       cd4: clean(record.cd4),
       viralLoad: clean(record.viralLoad),
-    });
+    };
+    setForm(start);
+    setBaseline(start);
     setEditing(true);
   };
 
   const cancelEdit = () => {
     setEditing(false);
     setForm(null);
+    setBaseline(null);
   };
 
   const setField = (field: keyof EditableFields, value: string) => {
@@ -124,28 +119,28 @@ export function PatientRecordView({
   };
 
   const saveEdit = async () => {
-    if (!form || !record) return;
+    if (!form || !baseline || !record) return;
     setSaving(true);
     try {
       // Editing the chart is a real checkup interaction — counts as a visit.
       const lastVisit = new Date().toISOString().slice(0, 10);
+      // Only what changed is written, and a field that was emptied is written
+      // as null. Before, an emptied field became `undefined`, which the write
+      // layer silently drops — so clearing an allergy "saved" and then came back.
+      const { patient: patientEdits, record: recordEdits } = editedFields(
+        baseline,
+        form,
+      );
       await Promise.all([
         updatePatient(record.patientId, {
-          chronicCondition: form.condition || undefined,
+          ...patientEdits,
           // Duplicated from medicalRecords so reception can show it without
           // opening the clinical record — see PatientUpdateInput.
           lastVisit,
         }),
         medicalRecordNo != null
           ? updateMedicalRecord(medicalRecordNo, {
-              bloodType: form.bloodType || undefined,
-              allergies: form.allergies || undefined,
-              prescription: form.prescription || undefined,
-              dosage: form.dosage ? Number(form.dosage) : undefined,
-              bp: form.bp || undefined,
-              glucose: form.glucose ? Number(form.glucose) : undefined,
-              cd4: form.cd4 ? Number(form.cd4) : undefined,
-              viralLoad: form.viralLoad ? Number(form.viralLoad) : undefined,
+              ...recordEdits,
               lastVisit,
             } as any)
           : Promise.resolve(),
@@ -161,6 +156,7 @@ export function PatientRecordView({
       );
       setEditing(false);
       setForm(null);
+      setBaseline(null);
     } catch (err) {
       console.error("Failed to save medical record:", err);
       toast.error("Could not save changes");

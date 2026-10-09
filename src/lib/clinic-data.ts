@@ -1578,6 +1578,22 @@ export interface RegistrationInput {
   remarks: string;
   /** Staff ID of whoever is registering (e.g. a receptionistId), for the audit log. */
   actorId?: string | null;
+  // The registration form collects these but they used to be dropped on submit.
+  // They go on the PATIENT document (staff/self readable), deliberately not on
+  // `users`, which anyone holding the API key can read — a street address has
+  // no business there. Each is written only when filled in. Nothing displays
+  // them yet; whatever does must respect the patient's `showAddress` setting.
+  residentialAddress?: string;
+  mailingAddress?: string;
+  emergencyContactRelationship?: string;
+  emergencyContactAddress?: string;
+  /**
+   * True when the patient (or guardian) gave POPIA consent at the desk. The form
+   * refuses to submit without it, but the fact was never stored. Left undefined
+   * by flows that capture no consent (the nurse Digitize flow) — which records
+   * "unknown", not "refused".
+   */
+  popiaConsent?: boolean;
 }
 
 /** Whole years since a YYYY-MM-DD date of birth, or null if there isn't one.
@@ -1612,6 +1628,10 @@ export async function peekNextPatientId(): Promise<string> {
   }
   return `Pat-${patientNo}`;
 }
+
+/** `{ key: value }` when there is a value to store, otherwise nothing at all. */
+const optionalText = (key: string, value?: string) =>
+  value?.trim() ? { [key]: value.trim() } : {};
 
 export async function registerPatient(
   input: RegistrationInput,
@@ -1690,6 +1710,19 @@ export async function registerPatient(
       // name itself lives on the users document; there was nothing here to
       // search it by.
       nameTokensLower: nameTokens(input.fullName),
+      ...optionalText("residentialAddress", input.residentialAddress),
+      ...optionalText("mailingAddress", input.mailingAddress),
+      ...optionalText(
+        "emergencyContactRelationship",
+        input.emergencyContactRelationship,
+      ),
+      ...optionalText("emergencyContactAddress", input.emergencyContactAddress),
+      // Stored as its own boolean (with when it was recorded) rather than left
+      // only as a typed name buried in the remarks, so it can be reported on.
+      // Server time: a legal record shouldn't depend on the desk's clock.
+      ...(input.popiaConsent
+        ? { popiaConsent: true, popiaConsentAt: serverTimestamp() }
+        : {}),
     }),
   ]);
 
@@ -1990,8 +2023,12 @@ export async function fetchDoctorDashboard(): Promise<DoctorDashboardData> {
 // Patient record editing (Receptionist "View" -> prefilled edit page)
 // ---------------------------------------------------------------------------
 
+// For the fields below that can be cleared, `null` means "clear it" and
+// `undefined` (or leaving the key out) means "not provided — leave it alone".
+// The write layer drops `undefined` (stripUndefined, below), which is exactly why
+// clearing needs its own value: a cleared field must arrive as null.
 export interface PatientUpdateInput {
-  chronicCondition?: string;
+  chronicCondition?: string | null;
   emergencyContactName?: string;
   emergencyContactNo?: string;
   // DELIBERATE DUPLICATES of the same fields on medicalRecords. Reception
@@ -2001,7 +2038,7 @@ export interface PatientUpdateInput {
   // Anything that writes one of these to medicalRecords must write it here
   // too. Don't "deduplicate" them back.
   lastVisit?: string;
-  insurancePolicyNumber?: string;
+  insurancePolicyNumber?: string | null;
   /** A nurse or doctor's clinical judgement — see src/lib/fast-lane.ts. Never
    *  set by reception, which this interface is also used by. */
   fastLane?: boolean;
@@ -2045,16 +2082,18 @@ export interface UserUpdateInput {
   remarks?: string;
 }
 
+// null = clear the field; undefined / absent = leave it alone (see
+// PatientUpdateInput).
 export interface MedicalRecordUpdateInput {
-  bloodType?: string;
-  allergies?: string;
-  prescription?: string;
-  dosage?: number;
-  bp?: string;
-  glucose?: number;
-  cd4?: number;
-  viralLoad?: number;
-  insurancePolicyNumber?: string;
+  bloodType?: string | null;
+  allergies?: string | null;
+  prescription?: string | null;
+  dosage?: number | null;
+  bp?: string | null;
+  glucose?: number | null;
+  cd4?: number | null;
+  viralLoad?: number | null;
+  insurancePolicyNumber?: string | null;
 }
 
 // Firestore's updateDoc() rejects any field explicitly set to `undefined` —
@@ -2535,46 +2574,23 @@ export interface DeletionRequest {
   requestedAt: string;
   reason?: string;
   status: "pending" | "actioned" | "declined";
-  /** Which clinic the patient belongs to — used by the platform-wide view. */
-  clinicId?: number;
 }
 
-export function useDeletionRequests(
-  clinicId?: number,
-  /**
-   * `allClinics` is the super admin's platform-wide view. It is a separate,
-   * explicit switch on purpose: `clinicId` is `undefined` while an admin's
-   * profile is still loading, and that must keep meaning "nothing yet" — not
-   * "everyone's", which would flash other clinics' requests on a clinic admin's
-   * page.
-   */
-  options?: { allClinics?: boolean },
-): {
+export function useDeletionRequests(clinicId?: number): {
   requests: DeletionRequest[];
   loading: boolean;
 } {
   const [requests, setRequests] = useState<DeletionRequest[]>([]);
   const [loading, setLoading] = useState(true);
-  const allClinics = options?.allClinics === true;
 
   useEffect(() => {
-    if (!allClinics && clinicId == null) {
+    if (clinicId == null) {
       setRequests([]);
       setLoading(false);
       return;
     }
-    // Per clinic, it reads that clinic's patients and picks the pending ones out
-    // below. Platform-wide, it asks Firestore for just the pending ones — far
-    // cheaper than streaming every patient on the platform. Everything after
-    // the query (names, ordering, the row shape) is shared.
-    const source = allClinics
-      ? query(
-          collection(db, "patients"),
-          where("deletionRequest.status", "==", "pending"),
-        )
-      : query(collection(db, "patients"), where("clinicId", "==", clinicId));
     const unsub = onSnapshot(
-      source,
+      query(collection(db, "patients"), where("clinicId", "==", clinicId)),
       async (snap) => {
         const withRequests = snap.docs.filter(
           (d) => d.data().deletionRequest?.status === "pending",
@@ -2597,10 +2613,6 @@ export function useDeletionRequests(
               requestedAt: data.deletionRequest.requestedAt ?? "",
               reason: data.deletionRequest.reason,
               status: "pending" as const,
-              clinicId:
-                data.clinicId != null && Number.isFinite(Number(data.clinicId))
-                  ? Number(data.clinicId)
-                  : undefined,
             };
           }),
         );
@@ -2614,7 +2626,7 @@ export function useDeletionRequests(
       },
     );
     return () => unsub();
-  }, [clinicId, allClinics]);
+  }, [clinicId]);
 
   return { requests, loading };
 }

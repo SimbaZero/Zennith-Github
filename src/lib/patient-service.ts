@@ -24,6 +24,8 @@ import {
   type AdherenceLogEntry,
 } from "@/lib/reminders";
 import { notifyUser } from "@/lib/notify";
+import { appointmentDateLabel, appointmentTime } from "@/lib/appointment-time";
+import { registerSessionCache } from "@/lib/session-caches";
 
 // ---------------------------------------------------------------------------
 // AUTH RACE FIX — same pattern as doctor-service.ts. On a hard reload our
@@ -302,6 +304,18 @@ function toDisplayStatus(raw: string): string {
 // change often within a session.
 const clinicianNameCache = new Map<string, string>();
 
+/**
+ * Forgets who the signed-in patient is (their patient id, looked up per login)
+ * and the clinician names resolved for their appointments. Run on sign-out — see
+ * session-caches.ts. (A clinician renamed mid-session still shows the old name
+ * until then.)
+ */
+export function clearPatientCaches(): void {
+  patientIdCacheByUid.clear();
+  clinicianNameCache.clear();
+}
+registerSessionCache(clearPatientCaches);
+
 async function resolveClinicianName(clinicianId: string): Promise<string> {
   if (clinicianNameCache.has(clinicianId))
     return clinicianNameCache.get(clinicianId)!;
@@ -508,8 +522,10 @@ export async function requestAppointmentReminder(
   appt: { dateTime: string; type: string },
   userId: number,
 ): Promise<void> {
-  const dt = new Date(appt.dateTime);
-  const when = `${dt.toLocaleDateString("en-ZA", { day: "numeric", month: "short" })} at ${dt.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })}`;
+  // The stored time is the clinic's wall-clock time — see appointment-time.ts.
+  // Converting it through the device's timezone put a wrong time in this
+  // notification, which the patient would then read as the appointment time.
+  const when = `${appointmentDateLabel(appt.dateTime, { day: "numeric", month: "short" })} at ${appointmentTime(appt.dateTime)}`;
   await addDoc(collection(db, "notifications"), {
     notifId: Date.now(),
     userId,

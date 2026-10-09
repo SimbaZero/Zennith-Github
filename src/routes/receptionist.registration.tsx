@@ -124,9 +124,9 @@ function Registration() {
   const buildRemarks = () => {
     const extra: string[] = [];
     if (f.marital !== "Single") extra.push(`Marital status: ${f.marital}`);
-    if (f.occupation !== "Unemployed" || f.employer)
+    if (f.occupation !== "Unemployed" || f.employer || f.employerAddr)
       extra.push(
-        `Occupation: ${f.occupation}${f.employer ? ` at ${f.employer}` : ""}${f.employerTel ? ` (${f.employerTel})` : ""}`,
+        `Occupation: ${f.occupation}${f.employer ? ` at ${f.employer}` : ""}${f.employerTel ? ` (${f.employerTel})` : ""}${f.employerAddr ? ` — ${f.employerAddr}` : ""}`,
       );
     if (f.finClass !== "Self-pay" || f.scheme)
       extra.push(
@@ -158,6 +158,14 @@ function Registration() {
         suburb: f.town,
         emergencyContactName: f.emName,
         emergencyContactNo: f.emTel,
+        // Collected on this form but never sent before — see RegistrationInput.
+        residentialAddress: f.residential,
+        mailingAddress: f.mailing,
+        emergencyContactRelationship: f.emRel,
+        emergencyContactAddress: f.emAddr,
+        // submit() already refuses to get here without the box ticked; this
+        // records that it was, as a field of its own.
+        popiaConsent: f.consent,
         insurance: f.scheme
           ? `${f.scheme}${f.schemeNo ? ` · ${f.schemeNo}` : ""}`
           : "",
