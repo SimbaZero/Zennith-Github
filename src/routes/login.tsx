@@ -75,10 +75,10 @@ function Login() {
     // login (useCurrentDoctor / useCurrentNurse / useCurrentPharmacist /
     // useCurrentAdmin), not from a picker on this page — that ran on a
     // hardcoded 3-clinic list unrelated to the real clinics collection.
-    navigate({
-      to: "/two-factor",
-      search: { role: user.role, u: username.trim(), f: user.facilityId ?? "" },
-    });
+    // Only the username goes in the URL: the two-factor page reads the role
+    // and facility from the signed-in user's profile, so editing the URL
+    // can't change them.
+    navigate({ to: "/two-factor", search: { u: username.trim() } });
   };
 
   const current = SLIDES[slide];

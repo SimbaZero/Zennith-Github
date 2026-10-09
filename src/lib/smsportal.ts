@@ -1,11 +1,7 @@
-// Server-only: runs in the Worker (reminder cron, reply webhook), never in
-// the browser. Firestore access goes through the service-account REST client
-// because there is no signed-in user here.
+// Server-only: sending texts through SMSPortal and reading its reply
+// webhooks. Runs in the Worker (reminder cron, reply webhook), never in the
+// browser.
 import { readEnv } from "../server/env";
-import type { FirestoreAdmin, FirestoreWrite } from "../server/firestore-admin";
-import { clinicWallClock } from "./clinic-time";
-
-export type SmsReplyAction = "confirm" | "decline";
 
 // https://docs.smsportal.com/reference/bulkmessages_postv3
 const SMSPORTAL_SEND_URL = "https://rest.smsportal.com/v3/BulkMessages";
@@ -20,32 +16,37 @@ export function formatPhoneForSms(raw: string | undefined | null): string {
   return digits.startsWith("+") ? digits : `+${digits}`;
 }
 
-export function buildAppointmentReminderText({
-  appointmentDate,
-  appointmentTime,
-  clinician,
-  isMorningReply = false,
-}: {
-  appointmentDate: string;
-  appointmentTime: string;
-  clinician: string;
-  isMorningReply?: boolean;
-}) {
-  const dateLabel = new Date(`${appointmentDate}T${appointmentTime}:00`).toLocaleDateString("en-ZA", {
-    day: "numeric",
-    month: "short",
-    weekday: "short",
-  });
-  const timeLabel = new Date(`${appointmentDate}T${appointmentTime}:00`).toLocaleTimeString("en-ZA", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+/**
+ * A South African mobile number in E.164 form ("+27821234567"), or null if
+ * `raw` isn't one. Stricter than formatPhoneForSms: sign-in codes must only
+ * go to a real SA mobile, never to a landline, a toll-free or share-call
+ * number (080, 086), VoIP (087) or a malformed number.
+ */
+export function toSouthAfricanMobile(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let digits = raw.replace(/[\s().-]/g, "").replace(/^(\+|00)/, "");
+  if (/^0\d{9}$/.test(digits)) digits = `27${digits.slice(1)}`;
+  // Mobile ranges: 06x, 071-074, 076-079, 081-084.
+  return /^27(6\d|7[1-46-9]|8[1-4])\d{7}$/.test(digits) ? `+${digits}` : null;
+}
 
-  if (isMorningReply) {
-    return `Hello. Please confirm your appointment with ${clinician} on ${dateLabel} at ${timeLabel}. Reply 1 to confirm, 2 to decline.`;
-  }
+/**
+ * `text` with South African phone numbers (+27…, 0027…, 27…, 0…, with or
+ * without spaces or dashes) masked, for logs. Longer digit runs such as
+ * timestamps are left alone.
+ */
+export function withoutPhoneNumbers(text: string): string {
+  return text.replace(/(?<!\d)(?:\+|00)?(?:27|0)(?:[\s-]?\d){9}(?!\d)/g, "<number>");
+}
 
-  return `This is a reminder that you have an appointment with ${clinician} on ${dateLabel} at ${timeLabel}. Please reply 1 to confirm or 2 to decline.`;
+/** Whether SMSPortal credentials are set, i.e. texts can actually be sent. */
+export function isSmsConfigured(env?: unknown): boolean {
+  return !!readEnv(env, "SMSPORTAL_CLIENT_ID") && !!readEnv(env, "SMSPORTAL_API_SECRET");
+}
+
+/** SMSPORTAL_TEST_MODE=true: log instead of sending (development only). */
+export function isSmsTestMode(env?: unknown): boolean {
+  return readEnv(env, "SMSPORTAL_TEST_MODE") === "true";
 }
 
 interface SmsPortalSendResponse {
@@ -57,22 +58,36 @@ export async function sendSms({
   to,
   message,
   testMode,
+  sensitive = false,
   env,
 }: {
   to: string;
   message: string;
   testMode?: boolean;
+  /** The message is a secret (a sign-in code): never write it to the log. */
+  sensitive?: boolean;
   env?: unknown;
 }): Promise<{ ok: boolean; dryRun?: boolean; reason?: string }> {
   const phone = formatPhoneForSms(to);
   if (!phone) return { ok: false, reason: "missing-phone" };
+
+  // Testing on a database of demo patients: SMS_ONLY_TO (comma-separated
+  // numbers) limits every text to those numbers, so nobody else is messaged.
+  const onlyTo = readEnv(env, "SMS_ONLY_TO");
+  if (onlyTo) {
+    const allowed = new Set(onlyTo.split(",").map((n) => formatPhoneForSms(n.trim())).filter(Boolean));
+    if (!allowed.has(phone)) {
+      console.info(`[sms] not sent: SMS_ONLY_TO is set and ${phone.slice(0, 5)}***** isn't on it`);
+      return { ok: false, reason: "not-on-sms-only-to" };
+    }
+  }
 
   const clientId = readEnv(env, "SMSPORTAL_CLIENT_ID") ?? "";
   const apiSecret = readEnv(env, "SMSPORTAL_API_SECRET") ?? "";
   const shouldTest = testMode ?? (readEnv(env, "SMSPORTAL_TEST_MODE") === "true");
 
   if (!clientId || !apiSecret || shouldTest) {
-    console.info(`[sms:test] ${phone} :: ${message}`);
+    console.info(`[sms:test] ${phone.slice(0, 5)}***** :: ${sensitive ? "(message not logged)" : message}`);
     return { ok: true, dryRun: true };
   }
 
@@ -91,7 +106,7 @@ export async function sendSms({
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      console.error("[sms] send failed:", res.status, text);
+      console.error("[sms] send failed:", res.status, withoutPhoneNumbers(text));
       return { ok: false, reason: `sms-provider:${res.status}` };
     }
 
@@ -102,7 +117,7 @@ export async function sendSms({
       | null;
     const report = body?.sendResponse ?? body;
     if (typeof report?.messages === "number" && report.messages < 1) {
-      console.error("[sms] message not enqueued:", JSON.stringify(report.errorReport ?? {}));
+      console.error("[sms] message not enqueued:", withoutPhoneNumbers(JSON.stringify(report.errorReport ?? {})));
       return { ok: false, reason: "sms-not-enqueued" };
     }
 
@@ -161,75 +176,4 @@ export async function readInboundSmsPayload(
     from: pick("sourcephonenumber", "msisdn", "from"),
     message: pick("incomingdata", "message", "text", "body"),
   };
-}
-
-/**
- * The appointment a reply refers to: the soonest upcoming, still-open
- * appointment whose reminder was texted to this exact number.
- *
- * This deliberately doesn't go through users.contactNum or patients.userId.
- * The webhook runs with admin rights, and firestore.rules lets anyone create
- * a users doc and lets a patient rewrite their own patients doc, so those
- * links could be pointed at someone else's record. reminderSentTo is only
- * ever written by the reminder job.
- */
-async function findRemindedAppointment(fs: FirestoreAdmin, phone: string, now: Date) {
-  // Only appointments that haven't started: an evening reply about
-  // tomorrow's appointment must not land on one from earlier today.
-  const wallNow = clinicWallClock(now).getTime();
-  const appointments = await fs.query("appointments", [
-    { field: "reminderSentTo", op: "EQUAL", value: phone },
-  ]);
-  return (
-    appointments
-      .filter((a) => typeof a.data.appointDateTime === "string" && new Date(a.data.appointDateTime).getTime() >= wallNow)
-      .filter((a) => !["Cancelled", "Completed", "No-Show", "In Progress"].includes(String(a.data.status ?? "")))
-      .sort((a, b) => String(a.data.appointDateTime).localeCompare(String(b.data.appointDateTime)))[0] ?? null
-  );
-}
-
-export async function handleInboundSmsReply(
-  payload: { from: string; message: string },
-  fs: FirestoreAdmin,
-  now = new Date(),
-): Promise<{ ok: boolean; patientId?: string; action?: SmsReplyAction; reason?: string }> {
-  const message = payload.message.trim();
-  const choice = message.startsWith("1") ? "confirm" : message.startsWith("2") ? "decline" : null;
-
-  if (!choice) {
-    return { ok: false, reason: "no-confirmation-choice" };
-  }
-
-  const from = formatPhoneForSms(payload.from);
-  if (!from) {
-    return { ok: false, reason: "missing-sender" };
-  }
-
-  const appointment = await findRemindedAppointment(fs, from, now);
-  if (!appointment) {
-    return { ok: false, reason: "no-reminded-appointment" };
-  }
-
-  const status = choice === "confirm" ? "Confirmed" : "Cancelled";
-  const writes: FirestoreWrite[] = [{ update: ["appointments", appointment.id], data: { status } }];
-
-  const patientId = String(appointment.data.patientId ?? "");
-  const patient = patientId ? await fs.get("patients", patientId) : null;
-  const userId = Number(patient?.data.userId ?? 0);
-  if (userId) {
-    const payloadStatus = choice === "confirm" ? "confirmed" : "declined";
-    writes.push({
-      create: "notifications",
-      data: {
-        userId,
-        title: "Appointment update",
-        message: `Your appointment was ${payloadStatus}.`,
-        isRead: false,
-        timeSent: new Date().toISOString(),
-      },
-    });
-  }
-  await fs.commit(writes);
-
-  return { ok: true, patientId, action: choice };
 }
