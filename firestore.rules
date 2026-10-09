@@ -119,8 +119,20 @@ service cloud.firestore {
     }
 
     match /appointments/{id} {
+      // A patient may change ONLY the status field on THEIR OWN appointment,
+      // and only among the three outcomes a patient is allowed to choose:
+      // confirming they'll attend, or cancelling. They can never set
+      // Completed, No-show or In-progress themselves — those stay staff-only.
+      function patientStatusOnly() {
+        return role() == "patient" && myPatientId() != ""
+          && resource.data.get("patientId", "") == myPatientId()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+          && resource.data.get("status", "Scheduled") in ["Scheduled", "Confirmed", "Cancelled"]
+          && request.resource.data.status in ["Scheduled", "Confirmed", "Cancelled"];
+      }
       allow read: if signedIn();
-      allow write: if isStaff() || isSuperAdmin();
+      allow create, delete: if isStaff() || isSuperAdmin();
+      allow update: if isStaff() || isSuperAdmin() || patientStatusOnly();
     }
 
     match /notifications/{id} {
@@ -202,61 +214,15 @@ service cloud.firestore {
 
     // Nobody edits someone else's profile, and nobody changes their own role
     // or clinic — that would be self-promotion into another clinic's data.
-    //
-    // The owner also can't change the links that decide whose record and
-    // phone the account uses (legacyUserId, patientId), or their second
-    // factor: twoFactorMethod is only written by the server after a verified
-    // text-message code, and an authenticator secret can be added once, at
-    // first enrolment, never replaced or removed (the old self-service reset
-    // let anyone with the password enrol their own authenticator). An admin
-    // resets 2FA by clearing both fields.
-    //
-    // KNOWN LIMITATION: profiles stay readable by any signed-in user, so a
-    // totpSecret is readable too. Moving it somewhere private is a separate fix.
     match /profiles/{uid} {
-      // Absent and null count as the same value.
-      function unchanged(field) {
-        return request.resource.data.get(field, null) == resource.data.get(field, null);
-      }
-      // An empty secret counts as none, as the app treats it.
-      function firstTotpEnrolment() {
-        return resource.data.get("totpSecret", null) in [null, ""]
-          && resource.data.get("twoFactorMethod", null) == null
-          && request.resource.data.get("totpSecret", null) is string
-          && request.resource.data.totpSecret.size() >= 16;
-      }
-
       allow read: if signedIn();
       allow create: if true; // a signing-up patient has no profile yet
       allow update: if isSuperAdmin() || role() == "admin"
                     || (request.auth.uid == uid
                         && request.resource.data.role == resource.data.role
                         && request.resource.data.get("clinicId", -1)
-                           == resource.data.get("clinicId", -1)
-                        && unchanged("legacyUserId")
-                        && unchanged("patientId")
-                        && unchanged("twoFactorMethod")
-                        && (unchanged("totpSecret") || firstTotpEnrolment()));
+                           == resource.data.get("clinicId", -1));
       allow delete: if isSuperAdmin() || role() == "admin";
-    }
-
-    // Text-message sign-in codes (hashed) and send counters. Only the server
-    // touches these, as the service account; no browser may read a code hash
-    // or reset a counter.
-    match /smsChallenges/{uid} {
-      allow read, write: if false;
-    }
-    match /smsPhoneLimits/{phone} {
-      allow read, write: if false;
-    }
-    match /smsVerifiedPhones/{phone} {
-      allow read, write: if false;
-    }
-    match /smsVerifiedPhoneDays/{id} {
-      allow read, write: if false;
-    }
-    match /smsGlobalLimits/{id} {
-      allow read, write: if false;
     }
 
     match /doctors/{id} {

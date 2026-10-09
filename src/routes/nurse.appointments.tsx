@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AppShell,
   StatusBadge,
@@ -8,6 +8,7 @@ import {
 import { useCurrentNurse } from "@/lib/nurse-service";
 import { useDoctorAppointments } from "@/lib/doctor-service"; // role-agnostic despite the name — see nurse-service.ts note
 import { setAppointmentStatus, createAppointment } from "@/lib/clinic-data";
+import { OUTCOME_STATUSES, isOutcomeLocked } from "@/lib/appointment-time";
 import {
   Plus,
   Check,
@@ -72,6 +73,16 @@ function NurseAppointments() {
 
   // Per-row pending state for instant button feedback — the actual list
   // update comes from the live hook re-querying, not this flag.
+  // Complete / No-show / Incomplete stay greyed out until the appointment's time
+  // has arrived, and unlock by themselves (no reload) once it does.
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const outcomeLocked = (a: { date: string; time: string }, status: string) =>
+    OUTCOME_STATUSES.includes(status) && isOutcomeLocked(a.date, a.time, clock);
+
   const [pendingId, setPendingId] = useState<string | null>(null);
 
   // Same stage-then-confirm pattern already applied to Doctor's appointments
@@ -95,6 +106,11 @@ function NurseAppointments() {
   const confirmStatus = async (docId: string) => {
     const status = staged[docId];
     if (!status) return;
+    const appt = appointments.find((x) => x.docId === docId);
+    if (appt && outcomeLocked(appt, status)) {
+      toast.error(`That can't be recorded before ${appt.time}`);
+      return;
+    }
     setPendingId(docId);
     try {
       await setAppointmentStatus(docId, status);
@@ -352,19 +368,22 @@ function NurseAppointments() {
                         {actions.map(({ status, icon: Icon, cls }) => {
                           const isCurrent = a.status === status;
                           const isStaged = staged[a.docId] === status;
+                          const locked = outcomeLocked(a, status);
                           return (
                             <button
                               key={status}
-                              disabled={isPending}
+                              disabled={isPending || locked}
                               onClick={() =>
                                 stageStatus(a.docId, status, a.status)
                               }
                               title={
-                                isCurrent
-                                  ? `Currently ${status}`
-                                  : `Stage: ${status}`
+                                locked
+                                  ? `Available once the appointment time (${a.time}) has arrived`
+                                  : isCurrent
+                                    ? `Currently ${status}`
+                                    : `Stage: ${status}`
                               }
-                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 ${
+                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed ${
                                 isStaged
                                   ? cls +
                                     " ring-2 ring-offset-1 ring-[oklch(0.55_0.18_245)]"

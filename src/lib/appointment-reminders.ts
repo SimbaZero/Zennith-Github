@@ -1,12 +1,12 @@
 // Server-only: run by the Worker's cron triggers (src/server/plugins/sms-reminders.ts)
 // and by POST /api/sms/reminders.
 import { readEnv } from "../server/env";
-import { firestoreAdminFromEnv, type FirestoreDoc, type FirestoreWrite } from "../server/firestore-admin";
-import { loadAppointmentContexts, reminderText } from "./appointment-sms";
+import { firestoreAdminFromEnv, WriteConflict, type FirestoreDoc, type FirestoreWrite } from "../server/firestore-admin";
+import { formatAppointmentWhen, loadAppointmentContexts, reminderText } from "./appointment-sms";
 import { clinicWallClock } from "./clinic-time";
 import { formatPhoneForSms, sendSms } from "./smsportal";
 
-export type AppointmentReminderKind = "day-before-18:00" | "day-before-20:00" | "morning-08:00";
+export type AppointmentReminderKind = "day-before-18:00" | "day-before-20:00" | "morning-08:00" | "hour-before";
 
 export interface AppointmentReminderTarget {
   kind: AppointmentReminderKind;
@@ -226,4 +226,100 @@ export function getPatientPhoneCandidates(value: string): string[] {
   const normalized = formatPhoneForSms(value);
   if (!normalized) return [];
   return [normalized, normalized.replace(/^\+27/, "0"), normalized.replace(/^\+/, "")];
+}
+
+/* ---------------- one hour before ---------------- */
+
+/** The cron expression that drives the hour-before job; see sms-reminders.ts and wrangler.json. */
+export const HOUR_BEFORE_CRON = "*/15 * * * *";
+
+/** Statuses for which "your appointment is in an hour" is no longer true or useful. */
+const NO_HOUR_BEFORE = ["cancelled", "completed", "complete", "no-show", "no show", "in progress", "in-progress"];
+
+/**
+ * Is `appointDateTime` between now and an hour away, by the clinic's wall clock?
+ * `wallNow` is clinicWallClock(now). A reminder is due from 60 minutes before the
+ * start until the start itself - a late cron run still sends it, since "your
+ * appointment is at 14:00" is true right up to 14:00 - and never after.
+ */
+export function isHourBeforeDue(appointDateTime: string, wallNow: Date): boolean {
+  const start = new Date(appointDateTime);
+  if (Number.isNaN(start.getTime())) return false;
+  return wallNow >= addMinutes(start, -60) && wallNow < start;
+}
+
+/**
+ * Sends each patient an in-app notification an hour before an appointment.
+ * Separate from the SMS reminders above: it covers every live appointment,
+ * confirmed or not (those skip the SMS), costs nothing to send, and is
+ * recorded in the appointment's reminderLog as "hour-before" so it goes out
+ * once. It only touches appointments starting today, so a run reads one day.
+ */
+export async function processHourBeforeNotifications(now = new Date(), env?: unknown) {
+  const fs = firestoreAdminFromEnv(env);
+  const wallNow = clinicWallClock(now);
+  const today = wallNow.toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.UTC(wallNow.getUTCFullYear(), wallNow.getUTCMonth(), wallNow.getUTCDate() + 1))
+    .toISOString()
+    .slice(0, 10);
+
+  const appointments = await fs.query("appointments", [
+    { field: "appointDateTime", op: "GREATER_THAN_OR_EQUAL", value: today },
+    { field: "appointDateTime", op: "LESS_THAN", value: tomorrow },
+  ]);
+
+  const due = appointments.filter((a) => {
+    const d = a.data;
+    if (typeof d.appointDateTime !== "string" || !d.patientId) return false;
+    if (NO_HOUR_BEFORE.includes(String(d.status ?? "").trim().toLowerCase())) return false;
+    if (Array.isArray(d.reminderLog) && (d.reminderLog as string[]).includes("hour-before")) return false;
+    return isHourBeforeDue(d.appointDateTime, wallNow);
+  });
+
+  const results: ReminderResult[] = [];
+  if (due.length === 0) return results;
+
+  const contexts = await loadAppointmentContexts(fs, due);
+  for (const appointment of due) {
+    const appointmentId = appointment.id;
+    try {
+      const context = contexts.get(appointmentId);
+      if (!context?.userId) {
+        results.push({ appointmentId, kind: "hour-before", sent: false, reason: "no-user" });
+        continue;
+      }
+      const at = new Date(String(appointment.data.appointDateTime));
+      const time = `${String(at.getUTCHours()).padStart(2, "0")}:${String(at.getUTCMinutes()).padStart(2, "0")}`;
+      const where = context.clinicName ? ` at ${context.clinicName}` : "";
+      const with_ = context.clinicianName ? ` with ${context.clinicianName}` : "";
+
+      // A fixed id that must not exist yet: if two runs overlap, one commit
+      // fails as a whole (log entry included) instead of notifying twice.
+      await fs.commit([
+        {
+          set: ["notifications", `hourbefore_${appointmentId}`],
+          precondition: { exists: false },
+          data: {
+            userId: context.userId,
+            title: "Appointment in one hour",
+            message: `${context.firstName ? `${context.firstName}, y` : "Y"}our appointment${with_}${where} is at ${time} today (${formatAppointmentWhen(at)}).`,
+            isRead: false,
+            timeSent: new Date().toISOString(),
+            source: "hour-before-reminder",
+            link: "/patient/appointments",
+          },
+        },
+        { update: ["appointments", appointmentId], data: {}, appendToArrays: { reminderLog: ["hour-before"] } },
+      ]);
+      results.push({ appointmentId, kind: "hour-before", sent: true });
+    } catch (error) {
+      if (error instanceof WriteConflict) {
+        results.push({ appointmentId, kind: "hour-before", sent: false, reason: "already-sent" });
+        continue;
+      }
+      console.error(`[hour-before] appointment ${appointmentId} failed:`, error);
+      results.push({ appointmentId, kind: "hour-before", sent: false, reason: "error" });
+    }
+  }
+  return results;
 }

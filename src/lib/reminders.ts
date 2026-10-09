@@ -130,6 +130,22 @@ export function doseSlots(
 }
 
 /**
+ * The reminder times that are due right now: past their time, still inside the
+ * window, and not already marked taken. This is the one rule both the
+ * dashboard's reminder card and the app-wide notifier use.
+ */
+export function dueDoseTimes(
+  times: string[],
+  now: Date,
+  takenTimes: string[],
+  dayCovered = false,
+): string[] {
+  return doseSlots(times, now, takenTimes, dayCovered)
+    .filter((s) => s.state === "due")
+    .map((s) => s.time);
+}
+
+/**
  * The next reminder after `now`: a later time today if there is one,
  * otherwise the first time tomorrow. Null when no times are set. A time
  * that is due right now is NOT "next" — that case has its own banner.

@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
+import { toast } from "sonner";
 import { isOffline } from "@/lib/offline";
 import { notifyClinicAdmins } from "@/lib/notify";
 import {
@@ -23,7 +24,7 @@ import {
   formatTime12h,
   type AdherenceLogEntry,
 } from "@/lib/reminders";
-import { notifyUser } from "@/lib/notify";
+import { notifyUser, useReleaseWhenDue } from "@/lib/notify";
 import { appointmentDateLabel, appointmentTime } from "@/lib/appointment-time";
 import { registerSessionCache } from "@/lib/session-caches";
 
@@ -422,7 +423,7 @@ export function usePatientAppointments(
  */
 export async function updateAppointmentStatus(
   docId: string,
-  status: "Confirmed" | "Cancelled",
+  status: "Confirmed" | "Cancelled" | "Scheduled",
 ): Promise<void> {
   const write = updateDoc(doc(db, "appointments", docId), { status });
   // Confirming or cancelling an appointment you ALREADY have is a statement
@@ -433,12 +434,46 @@ export async function updateAppointmentStatus(
   // Offline the promise waits for the server, which left the Confirm/Cancel
   // buttons dead with no feedback at all.
   if (isOffline()) {
-    write.catch((err) =>
-      console.error("Queued appointment status change failed:", err),
-    );
+    // The change shows on screen at once and is sent later. If the server then
+    // refuses it (a security-rule rejection), Firestore quietly puts the old
+    // value back - so say so, or the patient just watches it revert.
+    write.catch((err) => {
+      logAppointmentWriteFailure("queued status change", err, docId, status);
+      toast.error(
+        "Your appointment change couldn't be saved, so it was undone. Please try again.",
+      );
+    });
     return;
   }
-  await write;
+  try {
+    await write;
+  } catch (err) {
+    logAppointmentWriteFailure("status change", err, docId, status);
+    throw err;
+  }
+}
+
+/**
+ * Puts the real Firebase error in the console. The pages only show a general
+ * "failed" toast; the useful part is the code - "permission-denied" means a
+ * firestore.rules clause refused the write (which one is shown in the Rules
+ * Playground by replaying this document, this signed-in user and this status).
+ */
+function logAppointmentWriteFailure(
+  what: string,
+  err: unknown,
+  docId: string,
+  status: string,
+) {
+  const e = err as { code?: string; message?: string };
+  console.error(
+    `[appointments] ${what} FAILED: ${e?.code ?? "unknown-code"} - ${e?.message ?? String(err)}`,
+    {
+      path: `appointments/${docId}`,
+      attemptedStatus: status,
+      signedInUid: auth.currentUser?.uid ?? null,
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +489,8 @@ export interface PatientNotification {
   message: string;
   timeSent: string;
   isRead: boolean;
+  /** Set on a reminder scheduled for later; hidden until then. */
+  deliverAt?: string;
 }
 
 export function usePatientNotifications(
@@ -482,6 +519,8 @@ export function usePatientNotifications(
               message: n.message ?? "",
               timeSent: n.timeSent ?? "",
               isRead: !!n.isRead,
+              deliverAt:
+                typeof n.deliverAt === "string" ? n.deliverAt : undefined,
             };
           })
           .sort((a, b) => b.timeSent.localeCompare(a.timeSent));
@@ -495,7 +534,7 @@ export function usePatientNotifications(
     return () => unsubscribe();
   }, [userId]);
 
-  return items;
+  return useReleaseWhenDue(items);
 }
 
 export async function markNotificationRead(docId: string): Promise<void> {
@@ -509,31 +548,51 @@ export async function markAllNotificationsRead(
 }
 
 /**
- * Real write: sends the patient an immediate real notification nudging them
- * to confirm/cancel a specific upcoming appointment.
+ * Schedules a reminder about an appointment for `deliverAt`.
  *
- * TODO(infra): this only fires when the patient clicks "Remind me" — there is
- * no automatic "after N hours of no response" version yet. A truly automatic
- * reminder needs a server-side scheduled job (e.g. Firebase Cloud Functions
- * on a timer) checking unconfirmed appointments, which this stack doesn't
- * have (no custom server — the browser talks directly to Firebase).
+ * The notification is written now but carries a `deliverAt` time, and every
+ * place that lists notifications (the bell, the alerts page, the dashboard
+ * count) holds it back until then - see useReleaseWhenDue. So it shows up at the
+ * chosen time with no server needed, and a patient who isn't in the app at that
+ * moment sees it, unread, as soon as they next open it. It is not a push to
+ * their phone.
+ *
+ * One pending reminder per appointment: asking again replaces the earlier one.
+ *
+ * TODO(infra): a text message at the chosen time would need a scheduled server
+ * job; the cron that sends appointment SMS runs three times a day.
  */
 export async function requestAppointmentReminder(
-  appt: { dateTime: string; type: string },
+  appt: { docId: string; dateTime: string; type: string; status?: string },
   userId: number,
+  deliverAt: Date,
 ): Promise<void> {
-  // The stored time is the clinic's wall-clock time — see appointment-time.ts.
+  // The stored time is the clinic's wall-clock time - see appointment-time.ts.
   // Converting it through the device's timezone put a wrong time in this
   // notification, which the patient would then read as the appointment time.
   const when = `${appointmentDateLabel(appt.dateTime, { day: "numeric", month: "short" })} at ${appointmentTime(appt.dateTime)}`;
-  await addDoc(collection(db, "notifications"), {
-    notifId: Date.now(),
-    userId,
-    title: "Appointment needs confirmation",
-    message: `You still haven't confirmed or cancelled your ${appt.type} appointment on ${when}.`,
-    isRead: false,
-    timeSent: new Date().toISOString(),
-  });
+  const unconfirmed = appt.status !== "Confirmed" && appt.status !== undefined;
+  const write = setDoc(
+    doc(db, "notifications", `apptremind_${userId}_${appt.docId}`),
+    {
+      notifId: deliverAt.getTime(),
+      userId,
+      title: "Appointment reminder",
+      message: `Your ${appt.type} appointment is on ${when}.${unconfirmed ? " You haven't confirmed it yet." : ""}`,
+      isRead: false,
+      // Ordered in the list by when it arrives, not when it was asked for.
+      timeSent: deliverAt.toISOString(),
+      deliverAt: deliverAt.toISOString(),
+      link: "/patient/appointments",
+    },
+  );
+  // Offline the promise waits for the server; the write is queued and sent on
+  // reconnect, so don't leave the patient watching a spinner.
+  if (isOffline()) {
+    write.catch((err) => console.error("Queued reminder failed:", err));
+    return;
+  }
+  await write;
 }
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,8 @@ import {
 } from "lucide-react";
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
 import { useSignedInName } from "@/lib/signed-in-name";
+import { toast } from "sonner";
+import { useMedicationReminderNotifier } from "@/lib/use-reminder-notifier";
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { waitForPendingWrites } from "firebase/firestore";
 import { db } from "@/firebase";
@@ -253,6 +255,9 @@ export function AppShell({
 
   const username = typeof window !== "undefined" ? getUsername() : "";
   const { patient: sidebarPatient } = useCurrentPatient();
+  // Medication reminders fire from here so they reach a patient on any page,
+  // not only while the dashboard is open.
+  useMedicationReminderNotifier(sidebarPatient, role === "patient");
   // Real pharmacist data. clinicIds/fullName are undefined for every other
   // role, so this does no Firestore reads when not relevant.
   const { pharmacist } = useCurrentPharmacist();
@@ -599,7 +604,12 @@ function NotificationsButton({ role }: { role: Role }) {
               : undefined;
 
   // Admins are addressed by profile id, everyone else by numeric userId.
-  const byUserId = useNotifications(role === "admin" ? undefined : userId);
+  // A reminder the person scheduled ("remind me in 3 hours") appears here by
+  // itself when its time comes; say so with a toast too, so it's seen.
+  const byUserId = useNotifications(
+    role === "admin" ? undefined : userId,
+    (n) => toast(n.title, { description: n.message, duration: 15_000 }),
+  );
   const byProfile = useNotificationsByProfile(
     role === "admin" ? admin?.profileId : undefined,
   );

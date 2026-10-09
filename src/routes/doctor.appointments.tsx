@@ -1,5 +1,5 @@
 ﻿import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AppShell,
   StatusBadge,
@@ -7,6 +7,7 @@ import {
 } from "@/components/AppShell";
 import { useCurrentDoctor, useDoctorAppointments } from "@/lib/doctor-service";
 import { setAppointmentStatus, createAppointment } from "@/lib/clinic-data";
+import { OUTCOME_STATUSES, isOutcomeLocked } from "@/lib/appointment-time";
 import {
   Plus,
   Check,
@@ -18,12 +19,29 @@ import {
   CalendarDays,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export const Route = createFileRoute("/doctor/appointments")({
   validateSearch: (s: Record<string, unknown>): { date?: string } =>
     typeof s.date === "string" ? { date: s.date } : {},
   component: DoctorAppointments,
 });
+
+// The calendar hands back a Date at LOCAL midnight; read its local parts. (toIso
+// below uses UTC, which would move the chosen day back one in South Africa.)
+function toIsoDay(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function fromIsoDay(iso: string): Date | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
+}
 
 function toIso(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -73,6 +91,17 @@ function DoctorAppointments() {
     setSelected(toIso(d));
   };
 
+  // Complete / No-show / Incomplete stay greyed out until the appointment's time
+  // has arrived, and unlock by themselves (no reload) once it does.
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const outcomeLocked = (a: { date: string; time: string }, status: string) =>
+    OUTCOME_STATUSES.includes(status) && isOutcomeLocked(a.date, a.time, clock);
+
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [staged, setStaged] = useState<Record<string, AppointmentStatus>>({});
 
@@ -92,6 +121,11 @@ function DoctorAppointments() {
   const confirmStatus = async (docId: string) => {
     const status = staged[docId];
     if (!status) return;
+    const appt = appointments.find((x) => x.docId === docId);
+    if (appt && outcomeLocked(appt, status)) {
+      toast.error(`That can't be recorded before ${appt.time}`);
+      return;
+    }
     setPendingId(docId);
     try {
       await setAppointmentStatus(docId, status);
@@ -186,15 +220,42 @@ function DoctorAppointments() {
             <ChevronRight size={16} />
           </button>
         </div>
-        <label className="flex items-center gap-1.5 text-sm border rounded-md px-2 py-1.5 cursor-pointer hover:bg-secondary bg-white">
-          <CalendarDays size={14} className="text-muted-foreground" />
-          <input
-            type="date"
-            value={selected}
-            onChange={(e) => e.target.value && setSelected(e.target.value)}
-            className="outline-none bg-transparent cursor-pointer"
-          />
-        </label>
+        {/* Not a native <input type="date">: the browser draws that picker
+            itself, outside the page, and it can run off the edge of a small or
+            narrow window with nothing we can do about it. This popover flips and
+            shifts to stay inside the window, and scrolls if there isn't room. */}
+        <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Choose a date"
+              className="flex items-center gap-1.5 text-sm border rounded-md px-2 py-1.5 hover:bg-secondary bg-white"
+            >
+              <CalendarDays size={14} className="text-muted-foreground" />
+              {selected}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            collisionPadding={8}
+            className="w-auto p-0 overflow-auto"
+            style={{
+              maxHeight: "var(--radix-popover-content-available-height)",
+              maxWidth: "var(--radix-popover-content-available-width)",
+            }}
+          >
+            <Calendar
+              mode="single"
+              selected={fromIsoDay(selected)}
+              defaultMonth={fromIsoDay(selected)}
+              onSelect={(d) => {
+                if (!d) return;
+                setSelected(toIsoDay(d));
+                setCalendarOpen(false);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
 
       {loading && (
@@ -336,19 +397,22 @@ function DoctorAppointments() {
                         {actions.map(({ status, icon: Icon, cls }) => {
                           const isCurrent = a.status === status;
                           const isStaged = staged[a.docId] === status;
+                          const locked = outcomeLocked(a, status);
                           return (
                             <button
                               key={status}
-                              disabled={isPending}
+                              disabled={isPending || locked}
                               onClick={() =>
                                 stageStatus(a.docId, status, a.status)
                               }
                               title={
-                                isCurrent
-                                  ? `Currently ${status}`
-                                  : `Stage: ${status}`
+                                locked
+                                  ? `Available once the appointment time (${a.time}) has arrived`
+                                  : isCurrent
+                                    ? `Currently ${status}`
+                                    : `Stage: ${status}`
                               }
-                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 ${
+                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed ${
                                 isStaged
                                   ? cls +
                                     " ring-2 ring-offset-1 ring-[oklch(0.55_0.18_245)]"

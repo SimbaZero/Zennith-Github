@@ -1,9 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import { useNow } from "@/lib/store";
-import { useInventory } from "@/lib/pharmacist-service";
-import { sameClinicId } from "@/lib/clinic-id";
+import { useStockSearch, STOCK_SEARCH_MIN_CHARS } from "@/lib/use-stock-search";
 import {
   appointmentDateTimeLabel,
   isUpcomingAppointment,
@@ -51,7 +50,6 @@ function AppointmentStatusBadge({ status }: { status: string }) {
 function PatientDashboard() {
   const navigate = useNavigate();
   const now = useNow(1000);
-  const { stock, loading: stockLoading, usingFallback } = useInventory();
 
   const { patient, loading: patientLoading } = useCurrentPatient();
   const { status: medStatus } = useMedicationStatus(
@@ -82,27 +80,11 @@ function PatientDashboard() {
   });
 
   const [q, setQ] = useState("");
-  // Only this patient's own clinic. useInventory reads every clinic's stock, so
-  // without this a patient was told a drug was "In stock" when the only units
-  // were somewhere they couldn't collect it. Compared number/string-tolerantly:
-  // StockItem.clinicId is typed number but is whatever Firestore holds.
-  const clinicStock = useMemo(
-    () => stock.filter((s) => sameClinicId(s.clinicId, patient?.clinicId)),
-    [stock, patient?.clinicId],
-  );
-  const results = useMemo(() => {
-    const term = q.trim().toLowerCase();
-    // When useInventory has fallen back to demo data the rows are invented and
-    // belong to no clinic — never present them as availability.
-    if (usingFallback || term.length < 2) return [];
-    return clinicStock
-      .filter(
-        (s) =>
-          s.name.toLowerCase().includes(term) ||
-          (s.category ?? "").toLowerCase().includes(term),
-      )
-      .slice(0, 6);
-  }, [q, clinicStock, usingFallback]);
+  // Asked of the server, which answers only for this patient's own clinic: the
+  // browser isn't allowed to read the stock collection itself (firestore.rules),
+  // and trying to is what used to switch this box off.
+  const search = useStockSearch(q);
+  const searching = q.trim().length >= STOCK_SEARCH_MIN_CHARS;
 
   return (
     <AppShell role="patient" title="My Dashboard" showBack={false}>
@@ -137,45 +119,42 @@ function PatientDashboard() {
         <p className="text-xs text-muted-foreground mb-3">
           Search what is in stock at {patient?.clinicName ?? "your clinic"}.
         </p>
-        {usingFallback && (
-          <div
-            role="status"
-            className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
-          >
-            Live stock is unavailable right now, so search is paused rather than
-            showing demo numbers. Please check with your clinic before
-            travelling.
-          </div>
-        )}
-        {!usingFallback && !patientLoading && patient?.clinicId == null && (
+        {searching && search.status === "done" && !search.clinicLinked && (
           <p className="mb-3 text-sm text-muted-foreground">
             You're not linked to a clinic yet, so there's no stock to search.
           </p>
         )}
+        {search.status === "unavailable" && (
+          <div
+            role="status"
+            className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          >
+            Live stock can't be checked right now. You can keep typing, but
+            please check with your clinic before travelling.
+          </div>
+        )}
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          disabled={usingFallback || patient?.clinicId == null}
           placeholder='Search by medication name, e.g. "Metformin", "TLD"...'
-          className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] disabled:bg-secondary/50 disabled:cursor-not-allowed"
+          className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
         />
-        {!usingFallback && q.trim().length >= 2 && (
+        {searching && search.status !== "unavailable" && (
           <ul className="mt-3 divide-y border rounded-md">
-            {(stockLoading || patientLoading) && (
-              <li className="p-3 text-sm text-muted-foreground">
-                Loading stock…
-              </li>
+            {search.status === "loading" && (
+              <li className="p-3 text-sm text-muted-foreground">Searching…</li>
             )}
-            {!stockLoading && !patientLoading && results.length === 0 && (
-              <li className="p-3 text-sm text-muted-foreground">
-                No match found at {patient?.clinicName ?? "your clinic"}.
-              </li>
-            )}
-            {results.map((s) => {
-              const inStock = s.units > 0;
-              return (
+            {search.status === "done" &&
+              search.clinicLinked &&
+              search.items.length === 0 && (
+                <li className="p-3 text-sm text-muted-foreground">
+                  No match found at {patient?.clinicName ?? "your clinic"}.
+                </li>
+              )}
+            {search.status === "done" &&
+              search.items.map((s) => (
                 <li
-                  key={s.docId ?? s.name}
+                  key={s.name}
                   className="p-3 flex items-center justify-between"
                 >
                   <div>
@@ -185,18 +164,17 @@ function PatientDashboard() {
                     </p>
                   </div>
                   <span
-                    className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full ${inStock ? "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]" : "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]"}`}
+                    className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full ${s.inStock ? "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]" : "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]"}`}
                   >
-                    {inStock ? (
+                    {s.inStock ? (
                       <CheckCircle2 size={12} />
                     ) : (
                       <AlertCircle size={12} />
                     )}
-                    {inStock ? "In stock" : "Out of stock"}
+                    {s.inStock ? "In stock" : "Out of stock"}
                   </span>
                 </li>
-              );
-            })}
+              ))}
           </ul>
         )}
       </div>

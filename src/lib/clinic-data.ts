@@ -39,6 +39,10 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { notifyUser, userIdForStaff } from "@/lib/notify";
 import { logAction } from "@/lib/audit";
 import { clinicIdVariants } from "@/lib/clinic-id";
+import {
+  OUTCOME_STATUSES,
+  isUpcomingAppointmentStrict,
+} from "@/lib/appointment-time";
 import { resolvePrivacy, gate } from "@/lib/privacy";
 import type { PrivacySettings } from "@/lib/patient-service";
 import { getAuth, getUsername } from "@/lib/auth";
@@ -1293,6 +1297,18 @@ export async function setAppointmentStatus(
     const ref = doc(db, "appointments", apptDocId);
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Appointment not found");
+    // The pages grey these buttons out until the appointment's time; this is
+    // the same rule where a stale tab or a direct call can't walk around it.
+    const startsAt = snap.data().appointDateTime;
+    if (
+      OUTCOME_STATUSES.includes(status) &&
+      typeof startsAt === "string" &&
+      isUpcomingAppointmentStrict(startsAt)
+    ) {
+      throw new Error(
+        "That appointment hasn't happened yet - its outcome can be recorded once its time has arrived",
+      );
+    }
     tx.update(ref, { status: FROM_BADGE[status] });
   });
 }

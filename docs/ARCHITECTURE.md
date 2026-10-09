@@ -24,31 +24,16 @@ flowchart LR
 2. **Role lookup** — the user's role comes from `profiles/{authUid}` in
    Firestore. No profile → sign-in rejected ("no role assigned").
 3. **Two-factor** — `two-factor.tsx` reads the role and 2FA state from the
-   profile (`fetchTwoFactorProfile`), never from the URL. Two methods:
-   - **Authenticator app** (all roles): [src/lib/totp.ts](../src/lib/totp.ts)
-     (RFC 6238 TOTP, SHA-1/30s/6-digit, verified against the RFC test
-     vector). First login shows a setup key; the first valid code stores the
-     secret at `profiles/{uid}.totpSecret`. Later logins verify the rotating
-     code (±30s drift window).
-   - **Text message** (patients only, chosen at first login): server
-     functions in [src/lib/sms-otp.ts](../src/lib/sms-otp.ts) → 
-     [src/server/sms-otp.ts](../src/server/sms-otp.ts). The server verifies
-     the caller's Firebase ID token, texts a 6-digit code via SMSPortal to
-     the number on `users/{legacyUserId}.contactNum`, and keeps only a salted
-     hash in `smsChallenges/{uid}` (5-minute expiry, 5 attempts per code and
-     20 wrong codes per day, 1 send a minute and 5 an hour per account).
-     Until an account has verified its number, its sends also count against
-     10 an hour per number and an app-wide cap per day. A verified code
-     records the account under `smsVerifiedPhones/{number}` and sets
-     `profiles/{uid}.twoFactorMethod = "sms"`; from then on the account's
-     sends come out of its own 15 a day, which no other account can use up,
-     so family members sharing a phone can't be locked out by someone else
-     signing up with their number. Up to 5 accounts per number get this,
-     the ones that verified it most recently, for 90 days after they last did,
-     and together they get at most 75 a day, so cycling new accounts through
-     one SIM can't multiply the texts. Daily counts reset at 00:00 UTC.
-   Users can't reset their own 2FA; an admin clears `totpSecret` and
-   `twoFactorMethod` in the console.
+   profile (`fetchTwoFactorProfile`), never from the URL. The only method is
+   the **authenticator app** (all roles): [src/lib/totp.ts](../src/lib/totp.ts)
+   (RFC 6238 TOTP, SHA-1/30s/6-digit, verified against the RFC test
+   vector). First login shows a QR code and setup key; the first valid code
+   stores the secret at `profiles/{uid}.totpSecret`. Later logins verify the
+   rotating code (±30s drift window). Text-message codes for patients were
+   removed: a profile still marked `twoFactorMethod: "sms"` is treated as an
+   authenticator account if it has a secret, otherwise it is asked to enrol one,
+   and the stale marker is cleared on that sign-in. An admin resets 2FA by
+   clearing `totpSecret` in the console.
 4. **Session** — after 2FA, `setAuth(role, username, facilityId)` caches the role in
    `localStorage`. Route guards (`beforeLoad` in each `<role>.tsx` layout) read
    this cache **synchronously**, so guards work before Firebase resolves.

@@ -1,7 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquare, Smartphone } from "lucide-react";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AuthBackground } from "@/components/AuthBackground";
 import {
@@ -9,7 +8,6 @@ import {
   fetchTwoFactorProfile,
   saveTotpSecret,
   currentIdToken,
-  type TwoFactorMethod,
   type TwoFactorProfile,
 } from "@/lib/auth";
 
@@ -19,7 +17,6 @@ import {
   otpauthUrl,
   formatSecret,
 } from "@/lib/totp";
-import { sendSmsCode, verifySmsCode, type SmsCodeFailure } from "@/lib/sms-otp";
 import { logAction } from "@/lib/audit";
 
 export const Route = createFileRoute("/two-factor")({
@@ -107,9 +104,6 @@ function TwoFactor() {
     // show the wrong method (e.g. the choice screen after enrolling by SMS).
     gcTime: 0,
   });
-  // Patients who haven't enrolled yet pick a method; everyone else uses theirs.
-  const [choice, setChoice] = useState<TwoFactorMethod | null>(null);
-
   // The role and facility come from the profile, never from the URL.
   const devBypass = useDevBypass();
   const finish = (p: TwoFactorProfile, opts?: { devBypass?: boolean }) => {
@@ -132,11 +126,8 @@ function TwoFactor() {
     (navigate as any)({ to: `/${p.role.replace("_", "-")}` });
   };
 
+  // The authenticator app is the only second factor, for every role.
   const enrolling = !!profile && profile.method === null;
-  // Staff always use the authenticator; only an enrolling patient chooses.
-  const method: TwoFactorMethod | null = !profile
-    ? null
-    : (profile.method ?? (profile.role === "patient" ? choice : "totp"));
 
   const subtitle = isLoading
     ? "Checking your account…"
@@ -144,13 +135,11 @@ function TwoFactor() {
       ? "We couldn't check your account"
       : !profile
         ? "Your sign-in session has ended"
-        : method === null
-          ? "Choose how you'd like to receive sign-in codes"
-          : method === "sms"
-            ? "We'll text a 6-digit code to your phone"
-            : enrolling
-              ? "Set up two-factor authentication for your account"
-              : "Enter the 6-digit code from your authenticator app";
+        : enrolling
+          ? profile.smsRetired
+            ? "Text-message codes are no longer available. Set up an authenticator app to keep signing in"
+            : "Set up two-factor authentication for your account"
+          : "Enter the 6-digit code from your authenticator app";
 
   return (
     <AuthBackground>
@@ -200,10 +189,6 @@ function TwoFactor() {
               Sign in again
             </button>
           </div>
-        ) : method === null ? (
-          <MethodChoice onPick={setChoice} />
-        ) : method === "sms" ? (
-          <SmsCode onVerified={() => finish(profile)} canUseApp={enrolling} />
         ) : (
           <AuthenticatorCode
             storedSecret={profile.totpSecret}
@@ -222,16 +207,6 @@ function TwoFactor() {
           </button>
         )}
 
-        {enrolling && profile.role === "patient" && method !== null && (
-          <button
-            type="button"
-            onClick={() => setChoice(null)}
-            className="w-full mt-4 text-sm text-[oklch(0.55_0.18_245)] hover:underline"
-          >
-            Choose a different method
-          </button>
-        )}
-
         {(isLoading || isError || !!profile) && (
           <button
             type="button"
@@ -244,237 +219,6 @@ function TwoFactor() {
       </div>
     </AuthBackground>
   );
-}
-
-/* ---------------- method choice (patients enrolling) ---------------- */
-
-function MethodChoice({ onPick }: { onPick: (m: TwoFactorMethod) => void }) {
-  const option = (
-    m: TwoFactorMethod,
-    Icon: typeof MessageSquare,
-    title: string,
-    body: string,
-  ) => (
-    <button
-      type="button"
-      onClick={() => onPick(m)}
-      className="w-full flex items-start gap-3 text-left rounded-lg border p-4 hover:border-[oklch(0.55_0.18_245)] hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-[oklch(0.55_0.18_245)] outline-none transition"
-    >
-      <Icon size={20} className="mt-0.5 shrink-0 text-[oklch(0.55_0.18_245)]" />
-      <span>
-        <span className="block font-medium text-sm">{title}</span>
-        <span className="block text-xs text-muted-foreground mt-0.5">
-          {body}
-        </span>
-      </span>
-    </button>
-  );
-  return (
-    <div className="space-y-3">
-      {option(
-        "sms",
-        MessageSquare,
-        "Text message",
-        "We'll send a code to the mobile number you registered with.",
-      )}
-      {option(
-        "totp",
-        Smartphone,
-        "Authenticator app",
-        "Use Google Authenticator, Microsoft Authenticator or Authy.",
-      )}
-    </div>
-  );
-}
-
-/* ---------------- text-message code ---------------- */
-
-function smsMessage(
-  reason: SmsCodeFailure,
-  extra: { retryAt?: number; attemptsLeft?: number },
-  canUseApp: boolean,
-): string {
-  const orApp = canUseApp ? ", or use an authenticator app instead." : ".";
-  switch (reason) {
-    case "no-phone":
-      return `We don't have a South African mobile number on your account. Ask clinic reception to update it${orApp}`;
-    case "not-configured":
-      return `Text message codes aren't available right now${
-        canUseApp
-          ? ". Use an authenticator app instead."
-          : ". Contact the clinic for help."
-      }`;
-    case "not-eligible":
-      return "Text message sign-in isn't available for this account.";
-    case "unauthenticated":
-      return "Your sign-in session has ended. Go back and sign in again.";
-    case "cooldown":
-      return "A code was sent recently. Enter it below, or request a new one when the timer ends.";
-    case "rate-limited": {
-      const retry = new Date(extra.retryAt ?? Date.now());
-      // Some limits last a day: show the date too, or "08:00" reads as today.
-      const when =
-        retry.getTime() - Date.now() > 12 * 60 * 60_000
-          ? retry.toLocaleString("en-ZA", {
-              weekday: "short",
-              day: "numeric",
-              month: "short",
-              hour: "2-digit",
-              minute: "2-digit",
-            })
-          : retry.toLocaleTimeString("en-ZA", {
-              hour: "2-digit",
-              minute: "2-digit",
-            });
-      return `Text-message codes are paused for this account. Try again after ${when}.`;
-    }
-    case "send-failed":
-      return "We couldn't send the text message. Try again in a minute.";
-    case "expired":
-      return "That code has expired. Request a new one.";
-    case "invalid-code":
-      return extra.attemptsLeft != null
-        ? `That code doesn't match. ${extra.attemptsLeft} ${
-            extra.attemptsLeft === 1 ? "attempt" : "attempts"
-          } left.`
-        : "Enter the 6-digit code from the text message.";
-    case "too-many-attempts":
-      return "Too many incorrect attempts. Request a new code; if that's refused, try again tomorrow or ask the clinic to reset your sign-in.";
-    case "busy":
-      return "We couldn't process that just now. Try again in a moment.";
-    default:
-      return "Something went wrong. Try again.";
-  }
-}
-
-function SmsCode({
-  onVerified,
-  canUseApp,
-}: {
-  onVerified: () => void;
-  canUseApp: boolean;
-}) {
-  const [digits, setDigits] = useState(EMPTY);
-  const [last4, setLast4] = useState<string | null>(null);
-  const [resendAt, setResendAt] = useState(0);
-  const [error, setError] = useState("");
-  const [sending, setSending] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const now = useTicker(resendAt > Date.now());
-
-  // Nothing is sent until the user asks for a code.
-  const send = async () => {
-    setError("");
-    setSending(true);
-    try {
-      const res = await sendSmsCode({
-        data: { idToken: await currentIdToken() },
-      });
-      if (res.ok) {
-        setLast4(res.phoneLast4);
-        setResendAt(res.resendAt);
-        setDigits(EMPTY);
-      } else {
-        if (res.reason === "cooldown" && res.retryAt) setResendAt(res.retryAt);
-        // A code went out moments ago (e.g. before a page refresh), so let
-        // them enter it.
-        if (res.reason === "cooldown" && res.phoneLast4)
-          setLast4(res.phoneLast4);
-        setError(smsMessage(res.reason, res, canUseApp));
-      }
-    } catch {
-      setError("Something went wrong sending the code. Try again.");
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const verify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const code = digits.join("");
-    if (code.length !== 6) {
-      setError("Enter all 6 digits");
-      return;
-    }
-    setError("");
-    setChecking(true);
-    try {
-      const res = await verifySmsCode({
-        data: { idToken: await currentIdToken(), code },
-      });
-      if (res.ok) {
-        onVerified();
-        return;
-      }
-      setError(smsMessage(res.reason, res, canUseApp));
-      setDigits(EMPTY);
-    } catch {
-      setError("Something went wrong checking the code. Try again.");
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const secondsLeft = Math.max(0, Math.ceil((resendAt - now) / 1000));
-
-  if (last4 === null) {
-    return (
-      <div className="space-y-3">
-        {error && (
-          <p className="text-sm text-destructive text-center">{error}</p>
-        )}
-        <button
-          type="button"
-          onClick={send}
-          disabled={sending || secondsLeft > 0}
-          className={PRIMARY_BUTTON}
-        >
-          {sending
-            ? "Sending…"
-            : secondsLeft > 0
-              ? `Text me a code (${secondsLeft}s)`
-              : "Text me a code"}
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <form onSubmit={verify} className="space-y-5">
-      <p className="text-sm text-center">
-        We sent a code to the number ending in{" "}
-        <strong className="font-mono">{last4}</strong>. It expires in 5 minutes.
-      </p>
-      <CodeInput value={digits} onChange={setDigits} />
-      {error && <p className="text-sm text-destructive text-center">{error}</p>}
-      <button disabled={checking} className={PRIMARY_BUTTON}>
-        {checking ? "Verifying…" : "Verify"}
-      </button>
-      <button
-        type="button"
-        onClick={send}
-        disabled={sending || secondsLeft > 0}
-        className="w-full text-sm text-[oklch(0.55_0.18_245)] hover:underline disabled:text-muted-foreground disabled:no-underline"
-      >
-        {sending
-          ? "Sending…"
-          : secondsLeft > 0
-            ? `Resend code in ${secondsLeft}s`
-            : "Resend code"}
-      </button>
-    </form>
-  );
-}
-
-/** Current time, re-rendering every second while `active`. */
-function useTicker(active: boolean) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [active]);
-  return active ? now : Date.now();
 }
 
 /* ---------------- authenticator app ---------------- */

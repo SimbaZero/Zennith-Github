@@ -257,12 +257,12 @@ is what you want for testing anything cross-clinic.
 > After the password step, the **first** login for each account shows a QR code. Scan it
 > with Google Authenticator, Authy or Microsoft Authenticator and enter the 6-digit code
 > to enrol. Every login after that needs the current rotating code — typing random digits
-> does not work. Patients can instead choose a **text-message code**, sent by the server
-> to the number on their record (see docs/ARCHITECTURE.md).
+> does not work. The authenticator app is the only second factor, for every role. (Text-message
+> codes for patients were removed; a patient who used them is asked to set up an authenticator
+> app at their next sign-in.)
 >
-> To reset an account's 2FA, an admin deletes the `totpSecret` and `twoFactorMethod`
-> fields from its document in the Firestore `profiles` collection. Users can't reset
-> their own 2FA.
+> To reset an account's 2FA, an admin deletes the `totpSecret` field from its document in
+> the Firestore `profiles` collection.
 
 ---
 

@@ -7,7 +7,11 @@
 // nitro.config.ts.
 import { definePlugin } from "nitro";
 import { useNitroHooks } from "nitro/app";
-import { processDueAppointmentReminders } from "../../lib/appointment-reminders";
+import {
+  HOUR_BEFORE_CRON,
+  processDueAppointmentReminders,
+  processHourBeforeNotifications,
+} from "../../lib/appointment-reminders";
 
 export default definePlugin(() => {
   useNitroHooks().hook("cloudflare:scheduled", async ({ controller, env }) => {
@@ -15,6 +19,15 @@ export default definePlugin(() => {
     // can't push a reminder outside its window.
     const firedAt = new Date(controller.scheduledTime);
     try {
+      // The frequent trigger only does the in-app hour-before notifications; the
+      // three daily triggers only do the SMS reminders. Keeping them apart means
+      // two jobs never run at the same minute and double-send.
+      if (controller.cron === HOUR_BEFORE_CRON) {
+        const results = await processHourBeforeNotifications(firedAt, env);
+        const sent = results.filter((r) => r.sent).length;
+        if (results.length) console.info(`[hour-before] cron ${controller.cron}: ${sent} sent, ${results.length - sent} not sent`);
+        return;
+      }
       const results = await processDueAppointmentReminders(firedAt, env);
       const sent = results.filter((r) => r.sent).length;
       console.info(`[sms-reminders] cron ${controller.cron}: ${sent} sent, ${results.length - sent} not sent`);

@@ -65,3 +65,44 @@ export function isUpcomingAppointment(iso: string, now = new Date()): boolean {
   const t = new Date(iso).getTime();
   return !Number.isNaN(t) && t >= clinicWallClock(now).getTime();
 }
+
+// ---- soft-locking an appointment's outcome until its time --------------------
+
+/**
+ * The statuses that record how a visit WENT. Marking an appointment Complete,
+ * No-show or Incomplete before its time has come is recording an outcome that
+ * can't have happened yet - usually a mis-click on the wrong day. "In-progress"
+ * is deliberately not here: a patient who arrives early is seen early.
+ */
+export const OUTCOME_STATUSES: readonly string[] = [
+  "Complete",
+  "No-show",
+  "Incomplete",
+];
+
+/** An appointment given as the clinic lists it: a date and an "HH:mm" time. */
+export function appointmentStart(date: string, time: string): string {
+  return `${date}T${time}:00.000Z`;
+}
+
+/**
+ * Is it too early to record an outcome for an appointment at this date/time?
+ * True only while the appointment is still to come; an unreadable time is not
+ * locked, so bad data never stops a clinician doing their job.
+ */
+export function isOutcomeLocked(
+  date: string,
+  time: string,
+  now = new Date(),
+): boolean {
+  return isUpcomingAppointmentStrict(appointmentStart(date, time), now);
+}
+
+/** Does the appointment start strictly after the clinic's current time? */
+export function isUpcomingAppointmentStrict(
+  iso: string,
+  now = new Date(),
+): boolean {
+  const t = new Date(iso).getTime();
+  return !Number.isNaN(t) && t > clinicWallClock(now).getTime();
+}

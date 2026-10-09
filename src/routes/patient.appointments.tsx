@@ -15,6 +15,17 @@ import {
   hasAppointmentPassed,
 } from "@/lib/appointment-time";
 import { Check, X, Bell, Lock } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  REMINDER_PRESETS,
+  appointmentStartInstant,
+  reminderRefusal,
+  scheduleReminder,
+} from "@/lib/reminder-schedule";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/patient/appointments")({
@@ -122,21 +133,37 @@ function PatientAppointments() {
       );
     } catch (err) {
       console.error(err);
-      toast.error("Failed to update appointment. Please try again.");
+      // The Firebase code tells "the rules refused this" (permission-denied)
+      // apart from "you're offline" or "that appointment is gone".
+      const code = (err as { code?: string })?.code;
+      toast.error("Failed to update appointment. Please try again.", {
+        description: code ? `Reason: ${code}` : undefined,
+      });
     }
   };
 
-  const sendReminder = async (a: PatientAppointmentRow) => {
+  const scheduleReminderFor = async (
+    a: PatientAppointmentRow,
+    deliverAt: Date,
+  ): Promise<boolean> => {
     if (patient?.userId == null) {
-      toast.error("Can't send a reminder — no linked account found.");
-      return;
+      toast.error("Can't set a reminder — no linked account found.");
+      return false;
     }
     try {
-      await requestAppointmentReminder(a, patient.userId);
-      toast.success("Reminder sent to your notifications");
+      await requestAppointmentReminder(a, patient.userId, deliverAt);
+      toast.success(`We'll remind you ${describeWhen(deliverAt)}`, {
+        description:
+          "It will appear in your notifications then. We can't send it to your phone yet.",
+      });
+      return true;
     } catch (err) {
       console.error(err);
-      toast.error("Couldn't send reminder. Please try again.");
+      const code = (err as { code?: string })?.code;
+      toast.error("Couldn't set the reminder. Please try again.", {
+        description: code ? `Reason: ${code}` : undefined,
+      });
+      return false;
     }
   };
 
@@ -240,13 +267,10 @@ function PatientAppointments() {
                           {a.status === "Cancelled" ? "Cancelled" : "Cancel"}
                         </button>
                         {pending && (
-                          <button
-                            onClick={() => sendReminder(a)}
-                            className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-[oklch(0.97_0.05_245)]"
-                            title="Send yourself a reminder notification now"
-                          >
-                            <Bell size={12} /> Remind me
-                          </button>
+                          <RemindMe
+                            appointment={a}
+                            onSchedule={(at) => scheduleReminderFor(a, at)}
+                          />
                         )}
                       </div>
                     </td>
@@ -336,5 +360,188 @@ function PatientAppointments() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+/** "in 3 hours' time" is awkward; this reads "today at 14:00", "tomorrow at 09:30" or "on Thu 15 Oct at 08:00". */
+function describeWhen(at: Date, now = new Date()): string {
+  const time = at.toLocaleTimeString("en-ZA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const dayStart = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((dayStart(at) - dayStart(now)) / 86_400_000);
+  if (days === 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  const date = at.toLocaleDateString("en-ZA", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+  return `on ${date} at ${time}`;
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+function localDay(d: Date): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * "Remind me": pick WHEN, instead of getting the notification at once. Choices
+ * that would arrive at or after the appointment are switched off, with the reason.
+ */
+function RemindMe({
+  appointment,
+  onSchedule,
+}: {
+  appointment: PatientAppointmentRow;
+  onSchedule: (at: Date) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [day, setDay] = useState("");
+  const [time, setTime] = useState("");
+  const [error, setError] = useState("");
+
+  // Days offered for a specific time: today up to the day of the appointment.
+  const days = (() => {
+    const now = new Date();
+    const start = appointmentStartInstant(appointment.dateTime, now);
+    const last = start ? localDay(start) : localDay(now);
+    const out: { value: string; label: string }[] = [];
+    for (let i = 0; i < 8; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+      out.push({
+        value: localDay(d),
+        label:
+          i === 0
+            ? "Today"
+            : i === 1
+              ? "Tomorrow"
+              : d.toLocaleDateString("en-ZA", {
+                  weekday: "short",
+                  day: "numeric",
+                  month: "short",
+                }),
+      });
+      if (localDay(d) >= last) break;
+    }
+    return out;
+  })();
+
+  const choose = async (choice: Parameters<typeof scheduleReminder>[1]) => {
+    const result = scheduleReminder(appointment.dateTime, choice);
+    if (!result.ok) {
+      setError(reminderRefusal(result.reason));
+      return;
+    }
+    setError("");
+    setBusy(true);
+    const done = await onSchedule(result.deliverAt);
+    setBusy(false);
+    if (done) setOpen(false);
+  };
+
+  const presetState = (hours: number) => {
+    const r = scheduleReminder(appointment.dateTime, { kind: "in", hours });
+    return r.ok ? null : reminderRefusal(r.reason);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) {
+          setError("");
+          setDay(days[0]?.value ?? "");
+          setTime("");
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-[oklch(0.97_0.05_245)]"
+          title="Choose when to be reminded"
+        >
+          <Bell size={12} /> Remind me
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        collisionPadding={8}
+        className="w-72 overflow-auto"
+        style={{ maxHeight: "var(--radix-popover-content-available-height)" }}
+      >
+        <p className="text-sm font-medium mb-2">Remind me about this</p>
+        <div className="space-y-1.5">
+          {REMINDER_PRESETS.map((p) => {
+            const refusal = presetState(p.hours);
+            return (
+              <button
+                key={p.hours}
+                type="button"
+                disabled={busy || !!refusal}
+                title={refusal ?? undefined}
+                onClick={() => choose({ kind: "in", hours: p.hours })}
+                className="w-full text-left text-sm border rounded-md px-3 py-1.5 hover:bg-secondary disabled:opacity-50 disabled:hover:bg-transparent"
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="text-xs font-medium text-muted-foreground mt-3 mb-1.5">
+          Or at a specific time
+        </p>
+        <div className="flex gap-2">
+          <select
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            aria-label="Day"
+            className="flex-1 min-w-0 border rounded-md px-2 py-1.5 text-sm bg-white"
+          >
+            {days.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            aria-label="Time"
+            className="border rounded-md px-2 py-1.5 text-sm"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={busy || !day || !time}
+          onClick={() =>
+            choose({ kind: "at", at: new Date(`${day}T${time}:00`) })
+          }
+          className="w-full mt-2 bg-[oklch(0.18_0.06_260)] text-white text-sm rounded-md py-1.5 hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
+        >
+          {busy ? "Setting…" : "Set reminder"}
+        </button>
+
+        {error && (
+          <p role="alert" className="text-xs text-destructive mt-2">
+            {error}
+          </p>
+        )}
+        <p className="text-[11px] text-muted-foreground mt-3">
+          It appears in your notifications at that time. We can't send it to
+          your phone yet.
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }

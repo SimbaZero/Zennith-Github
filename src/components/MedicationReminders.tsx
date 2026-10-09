@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Bell,
@@ -11,9 +11,7 @@ import {
 import { toast } from "sonner";
 import {
   logSelfReportedDose,
-  notifyReminderDue,
   saveReminderTimes,
-  todayIsoDate,
   undoSelfReportedDose,
   useTodayDoseStatus,
   type DoseSlotWrite,
@@ -47,27 +45,6 @@ const PRIMARY_BUTTON =
   "inline-flex items-center justify-center gap-1.5 rounded-md bg-[oklch(0.18_0.06_260)] px-4 py-2 text-sm font-medium text-white hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60";
 const SECONDARY_BUTTON =
   "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-secondary disabled:opacity-60";
-
-/** Remembers, in this browser, that today's reminder for this time already
- *  produced a bell notification — so coming back to the page doesn't send it
- *  (and mark it unread again) every time. */
-function notifiedKey(userId: number, time: string): string {
-  return `zennith:reminder-notified:${userId}:${todayIsoDate()}:${time}`;
-}
-function alreadyNotified(userId: number, time: string): boolean {
-  try {
-    return window.localStorage.getItem(notifiedKey(userId, time)) !== null;
-  } catch {
-    return false; // storage unavailable — the write itself is idempotent
-  }
-}
-function rememberNotified(userId: number, time: string): void {
-  try {
-    window.localStorage.setItem(notifiedKey(userId, time), "1");
-  } catch {
-    /* nothing to do */
-  }
-}
 
 export function MedicationReminders({
   patientId,
@@ -111,28 +88,15 @@ export function MedicationReminders({
   const takenCount = slots.filter((s) => s.state === "taken").length;
   const next = useMemo(() => nextReminder(times, now), [times, now]);
 
-  // Times that are due right now AND confirmed not-taken. Only these ever
-  // produce a bell notification.
-  const dueKey = known
-    ? slots
-        .filter((s) => s.state === "due")
-        .map((s) => s.time)
-        .join(",")
-    : "";
-  const sending = useRef<Set<string>>(new Set());
+  // The notification + toast for a due dose is NOT sent from here any more: this
+  // card only exists on the dashboard, so reminders went quiet on every other
+  // page. useMedicationReminderNotifier (run from the app shell) does that.
   useEffect(() => {
-    if (!dueKey || userId == null) return;
-    for (const time of dueKey.split(",")) {
-      if (alreadyNotified(userId, time) || sending.current.has(time)) continue;
-      sending.current.add(time);
-      notifyReminderDue(userId, med, time)
-        .then(() => rememberNotified(userId, time))
-        .catch((err) => {
-          sending.current.delete(time); // let a later visit try again
-          console.error("Reminder notification failed:", err);
-        });
-    }
-  }, [dueKey, userId, med]);
+    if (dose.loaded && dose.failed && times.length > 0)
+      console.warn(
+        "Medication reminders paused: today's dose log couldn't be read (see the 'Dose status listener failed' error above - usually a firestore.rules refusal).",
+      );
+  }, [dose.loaded, dose.failed, times.length]);
 
   const persist = async (nextTimes: string[]) => {
     const cleaned = cleanReminderTimes(nextTimes);
@@ -426,6 +390,25 @@ export function MedicationReminders({
               </p>
             )}
         </div>
+      )}
+
+      {/* Reminders go quiet if today's dose log can't be read, or if there is no
+          account to send the alert to. Both used to fail silently, which looks
+          exactly like "reminders stopped working". */}
+      {dose.loaded && dose.failed && times.length > 0 && (
+        <p
+          role="alert"
+          className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          We couldn't check today's doses, so reminders are paused. Reload the
+          page; if it keeps happening, tell the clinic.
+        </p>
+      )}
+      {userId == null && times.length > 0 && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          Reminders will show on this page, but they can't be added to your
+          alerts because your account isn't fully linked yet.
+        </p>
       )}
 
       {/* ---- add a reminder time ---- */}

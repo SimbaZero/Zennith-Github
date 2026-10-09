@@ -24,6 +24,7 @@ import {
   limit,
   getFirestore,
   updateDoc,
+  deleteField,
 } from "firebase/firestore";
 import { assertOnline } from "@/lib/offline";
 import { auth, db, firebaseConfig } from "@/firebase";
@@ -613,13 +614,20 @@ export async function removeUser(username: string): Promise<void> {
 
 /* ================= TWO-FACTOR (method + TOTP secret on the profile) ================= */
 
-export type TwoFactorMethod = "totp" | "sms";
+/** The authenticator app is the only second factor. */
+export type TwoFactorMethod = "totp";
 
 export interface TwoFactorProfile {
   role: Role;
   /** null until the first successful code: the user still has to enrol. */
   method: TwoFactorMethod | null;
   totpSecret: string | null;
+  /**
+   * True when this account used to sign in with text-message codes, which no
+   * longer exist. If it also has no authenticator secret it must enrol one, and
+   * the page says why.
+   */
+  smsRetired: boolean;
   /** The facility (clinic) the user is scoped to; null = platform-wide. */
   facilityId: string | null;
 }
@@ -629,27 +637,38 @@ export interface TwoFactorProfile {
  * never from the URL. Null when nobody is signed in or the account has no
  * valid profile.
  *
- * `twoFactorMethod` is only ever "sms" (written by the server after a verified
- * text-message code); authenticator accounts are recognised by their secret.
+ * Authenticator accounts are recognised by their secret. A profile still marked
+ * `twoFactorMethod: "sms"` (text-message codes were removed) is treated as not
+ * enrolled unless it also has a secret, and the stale marker is cleared on the
+ * way through so it doesn't linger. If that write is refused the account still
+ * works from its secret / enrols afresh; only the leftover field stays behind.
  *
- * Resetting 2FA (lost phone, new number) is done by an admin in the Firebase
- * console: delete profiles/{uid}.totpSecret and .twoFactorMethod.
+ * Resetting 2FA (lost phone) is done by an admin in the Firebase console:
+ * delete profiles/{uid}.totpSecret.
  */
 export async function fetchTwoFactorProfile(): Promise<TwoFactorProfile | null> {
   // After a page refresh Firebase restores the session asynchronously.
   await auth.authStateReady();
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
-  const snap = await getDoc(doc(db, USERS, uid));
+  const ref = doc(db, USERS, uid);
+  const snap = await getDoc(ref);
   if (!snap.exists()) return null;
   const d = snap.data();
   if (!ROLES.includes(d.role)) return null;
   const totpSecret: string | null =
     typeof d.totpSecret === "string" && d.totpSecret !== "" ? d.totpSecret : null;
+  const smsRetired = d.twoFactorMethod === "sms";
+  if (smsRetired) {
+    await updateDoc(ref, { twoFactorMethod: deleteField() }).catch((err) =>
+      console.warn("Couldn't clear the retired text-message marker:", err),
+    );
+  }
   return {
     role: d.role as Role,
-    method: d.twoFactorMethod === "sms" ? "sms" : totpSecret ? "totp" : null,
+    method: totpSecret ? "totp" : null,
     totpSecret,
+    smsRetired,
     // Empty or non-string facility = platform-wide, as the old URL param did.
     facilityId:
       typeof d.facilityId === "string" && d.facilityId !== "" ? d.facilityId : null,
@@ -667,7 +686,11 @@ export async function currentIdToken(): Promise<string> {
 export async function saveTotpSecret(secret: string): Promise<void> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Not signed in");
-  await updateDoc(doc(db, USERS, uid), { totpSecret: secret });
+  // Also drops any leftover text-message marker from before that method was removed.
+  await updateDoc(doc(db, USERS, uid), {
+    totpSecret: secret,
+    twoFactorMethod: deleteField(),
+  });
 }
 
 /* ================= SESSION (localStorage cache for route guards) ================= */

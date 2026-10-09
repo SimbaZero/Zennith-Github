@@ -10,7 +10,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { db } from "@/lib/firebase";
 import { isOffline } from "@/lib/offline";
 
@@ -30,10 +30,69 @@ export interface AppNotification {
   timeSent: string;
   isRead: boolean;
   link?: string;
+  /**
+   * Set on a notification scheduled for later (a reminder the patient asked
+   * for): an ISO instant before which it stays hidden.
+   */
+  deliverAt?: string;
+}
+
+/** Is this notification scheduled for a moment that hasn't arrived yet? */
+function isPending(n: { deliverAt?: string }, at: number): boolean {
+  if (!n.deliverAt) return false;
+  const t = Date.parse(n.deliverAt);
+  return Number.isFinite(t) && t > at;
+}
+
+/**
+ * Hides notifications scheduled for later (see `deliverAt`) until their time,
+ * then shows them - re-rendering at that moment, so a reminder the patient
+ * asked for "in 3 hours" appears in the bell by itself, not only after a reload.
+ *
+ * `onRelease` is called once for a scheduled notification that becomes due
+ * while this is mounted (not for ones already due when it first loads), so the
+ * caller can raise a toast.
+ */
+export function useReleaseWhenDue<
+  T extends { docId: string; deliverAt?: string },
+>(items: T[], onRelease?: (item: T) => void): T[] {
+  // Only used to wake this up; what's due is always judged by the real clock.
+  const [, wake] = useState(0);
+  const hidden = useRef(new Set<string>());
+  const onReleaseRef = useRef(onRelease);
+  onReleaseRef.current = onRelease;
+
+  useEffect(() => {
+    const nowMs = Date.now();
+    const later = items
+      .map((i) => (i.deliverAt ? Date.parse(i.deliverAt) : NaN))
+      .filter((t) => Number.isFinite(t) && t > nowMs);
+    if (later.length === 0) return;
+    // A little past the moment, and never beyond what setTimeout can hold.
+    const delay = Math.min(Math.min(...later) - nowMs + 250, 2 ** 31 - 1);
+    const id = setTimeout(() => wake((n) => n + 1), delay);
+    return () => clearTimeout(id);
+  }, [items]);
+
+  const nowMs = Date.now();
+  const visible = items.filter((i) => !isPending(i, nowMs));
+
+  useEffect(() => {
+    const t = Date.now();
+    for (const i of items) {
+      if (isPending(i, t)) hidden.current.add(i.docId);
+      else if (hidden.current.delete(i.docId)) onReleaseRef.current?.(i);
+    }
+  });
+
+  return visible;
 }
 
 /** Live notifications for any user, any role. */
-export function useNotifications(userId?: number | null): AppNotification[] {
+export function useNotifications(
+  userId?: number | null,
+  onRelease?: (n: AppNotification) => void,
+): AppNotification[] {
   const [items, setItems] = useState<AppNotification[]>([]);
 
   useEffect(() => {
@@ -59,6 +118,8 @@ export function useNotifications(userId?: number | null): AppNotification[] {
                 timeSent: n.timeSent ?? "",
                 isRead: !!n.isRead,
                 link: n.link,
+                deliverAt:
+                  typeof n.deliverAt === "string" ? n.deliverAt : undefined,
               };
             })
             .sort((a, b) => b.timeSent.localeCompare(a.timeSent)),
@@ -69,7 +130,7 @@ export function useNotifications(userId?: number | null): AppNotification[] {
     return () => unsub();
   }, [userId]);
 
-  return items;
+  return useReleaseWhenDue(items, onRelease);
 }
 
 /**
@@ -296,6 +357,8 @@ export function useNotificationsByProfile(
                 timeSent: n.timeSent ?? "",
                 isRead: !!n.isRead,
                 link: n.link,
+                deliverAt:
+                  typeof n.deliverAt === "string" ? n.deliverAt : undefined,
               };
             })
             .sort((a, b) => b.timeSent.localeCompare(a.timeSent)),
