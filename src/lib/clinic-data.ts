@@ -951,6 +951,94 @@ export async function findPatient(
   return toPatientSummary(snap.id, snap.data());
 }
 
+/**
+ * The lowercase words of a name, for searching: "Lerato Molefe" →
+ * ["lerato", "molefe"]. Split on whitespace AND hyphens, so a double-barrelled
+ * surname is found by either half ("Mkhabela-Ndlovu" → ["mkhabela", "ndlovu"]),
+ * and the same function splits what a person types, so typing the whole
+ * hyphenated form still matches. Empty pieces are dropped and repeats collapsed.
+ *
+ * This is what's stored as `nameTokensLower` on a patient document and what
+ * searchPatientsByName queries. Changing the rule means re-running
+ * scripts/backfill-patient-name-tokens.mjs, which carries its own copy — keep
+ * the two in step.
+ */
+export function nameTokens(fullName: string): string[] {
+  return [
+    ...new Set(
+      fullName
+        .toLowerCase()
+        .split(/[\s-]+/)
+        .map((t) => t.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/** How many documents one name query may return before the word filter runs. */
+const NAME_SEARCH_LIMIT = 50;
+
+/**
+ * Find patients by name, beyond the page fetchPatientPage loads.
+ *
+ * A patient's name isn't on their own `patients` document — toPatientSummary
+ * assembles it from the `users` document — so there was nothing here to query a
+ * name against. `nameTokensLower` (see nameTokens) is that: a lowercase word
+ * list written onto the patient when they register, sign up or have their name
+ * edited.
+ *
+ * Firestore's array-contains takes ONE value, so the query is by a single word
+ * and the rest are checked afterwards: every word typed must be among the
+ * patient's tokens. The word queried is the longest one typed, not the first —
+ * the result cap applies before the word check, and "john smith" queried by
+ * "john" could be cut off before "smith" is ever looked at, where "smith" is
+ * far more selective.
+ *
+ * Scoped to the clinic IN the query, one per form the clinicId can take (see
+ * clinicIdVariants), so another clinic's patient documents — chronicCondition
+ * included — are never fetched into reception's browser. That needs a composite
+ * index (clinicId + nameTokensLower); until it exists this throws, and the
+ * caller should say the search is unavailable rather than show "no matches".
+ */
+export async function searchPatientsByName(
+  term: string,
+  clinicId?: number | null,
+): Promise<PatientSummary[]> {
+  const words = nameTokens(term);
+  if (words.length === 0) return [];
+  const queryWord = words.reduce((a, b) => (b.length > a.length ? b : a));
+
+  const scopes: (number | string | null)[] =
+    clinicId == null ? [null] : clinicIdVariants(clinicId);
+  const snaps = await Promise.all(
+    scopes.map((scope) =>
+      getDocs(
+        query(
+          collection(db, "patients"),
+          ...(scope === null ? [] : [where("clinicId", "==", scope)]),
+          where("nameTokensLower", "array-contains", queryWord),
+          limit(NAME_SEARCH_LIMIT),
+        ),
+      ),
+    ),
+  );
+
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const snap of snaps) for (const d of snap.docs) byId.set(d.id, d.data());
+
+  const matching = [...byId.entries()].filter(([, data]) => {
+    const tokens = Array.isArray(data.nameTokensLower)
+      ? (data.nameTokensLower as string[])
+      : [];
+    return words.every((w) => tokens.includes(w));
+  });
+
+  const summaries = await Promise.all(
+    matching.map(([id, data]) => toPatientSummary(id, data)),
+  );
+  return summaries.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** The full clinical record, as shown to nurses and doctors (built in
  *  doctor-service.ts, rendered by PatientRecordView). Not used by reception —
  *  see ReceptionPatientRecord. */
@@ -1598,6 +1686,10 @@ export async function registerPatient(
       lastVisit: null,
       // Was previously omitted entirely — see #16 in db-issues.md.
       ...(input.clinicId != null ? { clinicId: input.clinicId } : {}),
+      // Query-only: lets reception search by name (searchPatientsByName). The
+      // name itself lives on the users document; there was nothing here to
+      // search it by.
+      nameTokensLower: nameTokens(input.fullName),
     }),
   ]);
 
@@ -1807,6 +1899,8 @@ export async function signUpPatient(
           insurancePolicyNumber: null,
           lastVisit: null,
           clinicId: input.clinicId,
+          // Query-only — see nameTokens / searchPatientsByName.
+          nameTokensLower: nameTokens(input.fullName),
         }),
       ),
       tag(
@@ -1911,6 +2005,13 @@ export interface PatientUpdateInput {
   /** A nurse or doctor's clinical judgement — see src/lib/fast-lane.ts. Never
    *  set by reception, which this interface is also used by. */
   fastLane?: boolean;
+  /**
+   * The patient's name as lowercase words, so a name can be searched (see
+   * nameTokens). Query-only: written by registration, self-signup and a name
+   * edit on reception's profile page — recompute it whenever a name changes —
+   * and never shown anywhere. The name itself lives on the users document.
+   */
+  nameTokensLower?: string[];
 }
 
 export interface UserUpdateInput {

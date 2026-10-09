@@ -13,6 +13,7 @@ import {
   updateUser,
   updateMedicalRecord,
   resolveCurrentReceptionist,
+  nameTokens,
   type ReceptionPatientRecord,
 } from "@/lib/clinic-data";
 import { logAction } from "@/lib/audit";
@@ -156,6 +157,11 @@ function PatientDetail() {
       const insurance =
         form.insurance !== "None" ? form.insurance.trim() : undefined;
       const insuranceChanged = form.insurance !== record.insurance;
+      // The name is saved on the users document above, but the patient list is
+      // searched by name through a copy of it on the patient document — so a
+      // renamed patient has to have that copy rewritten too, or they stay
+      // findable only under the old spelling.
+      const nameChanged = form.name.trim() !== record.name.trim();
 
       await Promise.all([
         updateUser(userId, {
@@ -181,6 +187,7 @@ function PatientDetail() {
               }
             : {}),
           ...(insuranceChanged ? { insurancePolicyNumber: insurance } : {}),
+          ...(nameChanged ? { nameTokensLower: nameTokens(form.name) } : {}),
         }),
         // Insurance is also mirrored to medicalRecords, where nurses and
         // doctors read it. This is a blind field write — reception never

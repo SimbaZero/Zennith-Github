@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchPatientPage,
   findPatient,
+  searchPatientsByName,
   resolveCurrentReceptionist,
   type PatientSummary,
 } from "@/lib/clinic-data";
@@ -12,6 +13,21 @@ import { useEffect, useMemo, useState } from "react";
 export const Route = createFileRoute("/receptionist/profiles")({
   component: Profiles,
 });
+
+/**
+ * Is this search text a name worth asking the database about — as opposed to a
+ * Patient ID (handled by the lookup below) or a bare number? The ID test is the
+ * exact one the ID lookup uses, not "starts with pat", so Patricia and Patrick
+ * still count as names.
+ */
+function isNameTerm(t: string): boolean {
+  return (
+    t.length >= 2 &&
+    !/^pat-?\d+$/i.test(t) &&
+    !/^\d+$/.test(t) &&
+    /\p{L}/u.test(t)
+  );
+}
 
 function Profiles() {
   const navigate = useNavigate();
@@ -56,6 +72,55 @@ function Profiles() {
     findPatient(normalized, receptionist?.clinicId).then((p) => setIdLookup(p));
   }, [q, all, idLookupTried]);
 
+  // Name search beyond the loaded page. The loaded list is capped, and a name
+  // isn't on the patient's own document, so the database is asked through a
+  // lowercase word list stored on it (see searchPatientsByName). Debounced, so
+  // it's one query per pause in typing rather than one per keystroke.
+  const nameTerm = useMemo(() => {
+    const t = q.trim();
+    return isNameTerm(t) ? t : "";
+  }, [q]);
+  const receptionistReady = receptionist !== undefined;
+  const receptionistClinicId = receptionist?.clinicId;
+  // The term each result set belongs to is kept with it, so results for "ler"
+  // are never shown as if they were for "lera" while the next search is pending.
+  const [nameResults, setNameResults] = useState<{
+    term: string;
+    rows: PatientSummary[];
+  }>({ term: "", rows: [] });
+  const [nameSearching, setNameSearching] = useState(false);
+  const [nameSearchFailed, setNameSearchFailed] = useState(false);
+
+  useEffect(() => {
+    if (!nameTerm || !receptionistReady) {
+      setNameSearching(false);
+      setNameSearchFailed(false);
+      return;
+    }
+    let cancelled = false;
+    setNameSearching(true);
+    setNameSearchFailed(false);
+    const timer = setTimeout(() => {
+      searchPatientsByName(nameTerm, receptionistClinicId)
+        .then((rows) => {
+          if (!cancelled) setNameResults({ term: nameTerm, rows });
+        })
+        .catch((err) => {
+          // Most likely the composite index (clinicId + nameTokensLower) hasn't
+          // been created yet. Say so rather than show "no matches".
+          console.error("Patient name search failed:", err);
+          if (!cancelled) setNameSearchFailed(true);
+        })
+        .finally(() => {
+          if (!cancelled) setNameSearching(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [nameTerm, receptionistReady, receptionistClinicId]);
+
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();
     if (!t) return all;
@@ -71,8 +136,17 @@ function Profiles() {
     ) {
       return [idLookup];
     }
+    // Loaded matches first, then anything the database found that isn't
+    // already among them — de-duplicated by patientId.
+    if (nameTerm && nameResults.term === nameTerm) {
+      const seen = new Set(local.map((p) => p.patientId));
+      return [
+        ...local,
+        ...nameResults.rows.filter((p) => !seen.has(p.patientId)),
+      ];
+    }
     return local;
-  }, [q, all, idLookup]);
+  }, [q, all, idLookup, nameTerm, nameResults]);
 
   return (
     <AppShell
@@ -136,7 +210,11 @@ function Profiles() {
                     colSpan={3}
                     className="px-5 py-6 text-center text-muted-foreground"
                   >
-                    No matching patients.
+                    {nameTerm && nameSearching
+                      ? "Searching this clinic…"
+                      : nameTerm && nameSearchFailed
+                        ? "Couldn't search beyond the loaded patients — try the exact Patient ID."
+                        : "No matching patients."}
                   </td>
                 </tr>
               )}
@@ -166,9 +244,20 @@ function Profiles() {
             </tbody>
           </table>
         </div>
+        {nameTerm && nameSearching && filtered.length > 0 && (
+          <div className="px-5 py-2 text-xs text-muted-foreground border-t">
+            Searching the rest of the clinic…
+          </div>
+        )}
+        {nameTerm && nameSearchFailed && filtered.length > 0 && (
+          <div className="px-5 py-2 text-xs text-amber-700 border-t">
+            Couldn't search beyond the loaded patients — try the exact Patient
+            ID.
+          </div>
+        )}
         <div className="px-5 py-3 text-xs text-muted-foreground border-t">
           Showing {all.length} patient{all.length === 1 ? "" : "s"} at this
-          clinic — search by exact Patient ID to look up anyone not listed.
+          clinic — search by name or Patient ID to find anyone not listed.
         </div>
       </div>
     </AppShell>
