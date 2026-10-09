@@ -24,7 +24,7 @@
 import { getReminderTargetsForAppointment } from "../lib/appointment-reminders";
 import { bookedText, isDocumentId, loadAppointmentContexts } from "../lib/appointment-sms";
 import { clinicWallClock } from "../lib/clinic-time";
-import { isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile } from "../lib/smsportal";
+import { formatPhoneForSms, isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile } from "../lib/smsportal";
 import type { BookingSmsResult } from "../lib/booking-sms";
 import { readEnv } from "./env";
 import { verifyIdToken } from "./firebase-auth";
@@ -96,7 +96,8 @@ export async function sendBookingSms(idToken: unknown, appointmentId: unknown, e
   const context = isDocumentId(patientId) ? (await loadAppointmentContexts(fs, [appointment])).get(id) : undefined;
   // Only South African mobiles: never a landline, a premium or toll-free
   // number, a short code or a foreign number someone typed into a record.
-  const phone = toSouthAfricanMobile(context?.phone);
+  // Read the way reminders read it, so "Cell: 082 123 4567" counts too.
+  const phone = toSouthAfricanMobile(formatPhoneForSms(context?.phone));
   if (!context || !phone) return { sent: false, reason: "no-phone" };
 
   // Claim the appointment, pinned to the version read so only one call can,
