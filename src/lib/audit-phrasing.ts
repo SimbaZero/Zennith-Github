@@ -107,6 +107,16 @@ export function phraseStaffLog(log: SystemLog): PhrasedEvent {
       if (m) return { text: `Failed sign-in attempt for "${m[1]}" (${m[2]})` };
       break;
     }
+    case "auth.login_dev_bypass": {
+      // The developer 2FA shortcut (see two-factor.tsx). Spelled out in full so
+      // it can't be mistaken for an ordinary sign-in.
+      const m = /^"([^"]+)" signed in as (\w+) with the DEV 2FA bypass/.exec(d);
+      if (m)
+        return {
+          text: `"${m[1]}" signed in as ${roleWithArticle(m[2])} using the developer 2FA bypass — no code was entered`,
+        };
+      break;
+    }
     case "auth.login_success": {
       const m = /^"([^"]+)" signed in as (\w+)$/.exec(d);
       if (m) return { text: `"${m[1]}" signed in as ${roleWithArticle(m[2])}` };

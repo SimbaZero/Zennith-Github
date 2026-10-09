@@ -144,8 +144,12 @@ function SuperAdminAudit() {
 
   const now = Date.now();
   const dayAgo = (iso: string) => now - new Date(iso).getTime() < 86_400_000;
+  // A sign-in made with the developer 2FA bypass is still a sign-in.
   const signIns24h = logs.filter(
-    (l) => l.action_type === "auth.login_success" && dayAgo(l.timestamp),
+    (l) =>
+      (l.action_type === "auth.login_success" ||
+        l.action_type === "auth.login_dev_bypass") &&
+      dayAgo(l.timestamp),
   ).length;
   const failed24h = logs.filter(
     (l) => l.action_type === "auth.login_failed" && dayAgo(l.timestamp),
@@ -325,7 +329,12 @@ function LoginHistoryRow({ entry }: { entry: LoginHistoryEntry }) {
         when: e.timestamp,
         text: phraseStaffLog(e).text,
         detail: [],
-        emphasis: e.action_type === "auth.login_failed" ? "warn" : undefined,
+        emphasis:
+          e.action_type === "auth.login_failed"
+            ? "warn"
+            : e.action_type === "auth.login_dev_bypass"
+              ? "critical"
+              : undefined,
       })),
     [entry.events],
   );
@@ -353,6 +362,13 @@ function LoginHistoryRow({ entry }: { entry: LoginHistoryEntry }) {
               ? `Last signed in ${whenLabel(entry.lastSignIn)}`
               : "No successful sign-in in this window"}
           </p>
+          {entry.bypasses > 0 && (
+            <p className="text-xs font-medium text-red-700 mt-0.5">
+              ⚠ Signed in{" "}
+              {entry.bypasses === 1 ? "once" : `${entry.bypasses} times`} with
+              the developer 2FA bypass — no code was entered
+            </p>
+          )}
         </div>
         <span
           className={`shrink-0 text-xs font-medium px-2.5 py-1 rounded-full border ${

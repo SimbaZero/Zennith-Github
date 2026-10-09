@@ -34,6 +34,60 @@ export const Route = createFileRoute("/two-factor")({
 
 const EMPTY = ["", "", "", "", "", ""];
 
+// ---------------------------------------------------------------------------
+// DEVELOPER SHORTCUT — local testing only.
+//
+// When VITE_DEV_2FA_BYPASS is "true", this screen shows a "Skip (dev only)"
+// button that signs in without a code. It skips only this client-side step: the
+// password has already been verified by Firebase Auth, the role and facility
+// still come from the signed-in user's own profile, and nothing in
+// firestore.rules or on the server is relaxed.
+//
+// It is never silent: a bypass is logged as auth.login_dev_bypass (deliberately
+// not auth.login_success), and a red banner is shown for as long as it's active.
+//
+// The variable is read at BUILD time, and Vite reads .env for production builds
+// too — so a .env on the machine that builds the deployed bundle would bake it
+// in. To make that harmless, the bypass is also refused unless the page is being
+// served from this machine or a private network address. A deployed site is
+// never on one, so a flag that slips into a production build does nothing there.
+// ---------------------------------------------------------------------------
+const DEV_2FA_BYPASS_FLAG = import.meta.env.VITE_DEV_2FA_BYPASS === "true";
+
+/** localhost, loopback, *.local, and the private IPv4 ranges (a phone on the LAN). */
+function isLocalAddress(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local"))
+    return true;
+  if (h === "[::1]" || h === "::1") return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(h);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return (
+    a === 127 ||
+    a === 10 ||
+    (a === 192 && b === 168) ||
+    (a === 172 && b >= 16 && b <= 31)
+  );
+}
+
+/** Is the bypass on? Decided after mount, since it depends on the address bar. */
+function useDevBypass(): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    if (!DEV_2FA_BYPASS_FLAG) return;
+    if (isLocalAddress(window.location.hostname)) {
+      setOn(true);
+    } else {
+      console.warn(
+        "VITE_DEV_2FA_BYPASS is set in this build but is being ignored: " +
+          "this page isn't served from a local or private address.",
+      );
+    }
+  }, []);
+  return on;
+}
+
 const PRIMARY_BUTTON =
   "w-full bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60";
 
@@ -57,14 +111,22 @@ function TwoFactor() {
   const [choice, setChoice] = useState<TwoFactorMethod | null>(null);
 
   // The role and facility come from the profile, never from the URL.
-  const finish = (p: TwoFactorProfile) => {
+  const devBypass = useDevBypass();
+  const finish = (p: TwoFactorProfile, opts?: { devBypass?: boolean }) => {
     setAuth(p.role, u, p.facilityId);
-    // A completed login: password/SMS code and second factor both accepted.
+    // A completed login: password/SMS code and second factor both accepted —
+    // or, for the developer shortcut, skipped. A bypass is recorded as its own
+    // action type and NOT as a success, so it can never pass for a normal login
+    // in the audit log.
     logAction({
       clinicId: null,
       actor_id: u || "unknown",
-      action_type: "auth.login_success",
-      description: `"${u || "unknown"}" signed in as ${p.role}`,
+      action_type: opts?.devBypass
+        ? "auth.login_dev_bypass"
+        : "auth.login_success",
+      description: opts?.devBypass
+        ? `"${u || "unknown"}" signed in as ${p.role} with the DEV 2FA bypass — no code was entered`
+        : `"${u || "unknown"}" signed in as ${p.role}`,
     });
     // super_admin lives at /super-admin (the role id uses an underscore)
     (navigate as any)({ to: `/${p.role.replace("_", "-")}` });
@@ -92,6 +154,14 @@ function TwoFactor() {
 
   return (
     <AuthBackground>
+      {devBypass && (
+        <div
+          role="alert"
+          className="fixed inset-x-0 top-0 z-50 bg-red-600 px-4 py-2.5 text-center text-sm font-bold text-white shadow-lg"
+        >
+          ⚠ DEV BYPASS ACTIVE — never enable this in a deployed environment
+        </div>
+      )}
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8 animate-fade-up">
         <div className="flex flex-col items-center mb-6">
           <ZennithStar size={64} spin />
@@ -138,6 +208,16 @@ function TwoFactor() {
             account={u}
             onVerified={() => finish(profile)}
           />
+        )}
+
+        {devBypass && profile && (
+          <button
+            type="button"
+            onClick={() => finish(profile, { devBypass: true })}
+            className="w-full mt-4 rounded-md border-2 border-dashed border-red-500 bg-red-50 py-2.5 font-semibold text-red-700 hover:bg-red-100"
+          >
+            Skip (dev only)
+          </button>
         )}
 
         {enrolling && profile.role === "patient" && method !== null && (

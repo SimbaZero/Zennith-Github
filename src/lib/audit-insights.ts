@@ -267,12 +267,15 @@ export function buildStats(queueEvents: QueueAuditEvent[]) {
 export interface LoginHistoryEntry {
   /** The login name, normalised (trimmed, lower-cased). */
   actor: string;
-  /** Most recent successful sign-in, ISO, or null if none in the loaded window. */
+  /** Most recent successful sign-in, ISO, or null if none in the loaded window.
+   *  A sign-in made with the developer 2FA bypass counts: it did get them in. */
   lastSignIn: string | null;
   /** The role of that sign-in, from its record. */
   lastRole: string | null;
   lastFailure: string | null;
   signIns: number;
+  /** How many of those sign-ins used the developer 2FA bypass (no code entered). */
+  bypasses: number;
   failed: number;
   failed24h: number;
   /** Every sign-in event for this person in the window, newest first. */
@@ -292,7 +295,8 @@ export function buildLoginHistory(
   for (const l of logs) {
     if (
       l.action_type !== "auth.login_success" &&
-      l.action_type !== "auth.login_failed"
+      l.action_type !== "auth.login_failed" &&
+      l.action_type !== "auth.login_dev_bypass"
     )
       continue;
     const actor = normalizeActor(l.actor_id);
@@ -304,8 +308,12 @@ export function buildLoginHistory(
   const out: LoginHistoryEntry[] = [];
   for (const [actor, list] of byActor) {
     const events = [...list].sort((a, b) => time(b) - time(a));
+    // A developer-bypass login is still a sign-in — it got the person in — so it
+    // counts here, and is also tallied on its own so it can never hide among them.
     const successes = events.filter(
-      (e) => e.action_type === "auth.login_success",
+      (e) =>
+        e.action_type === "auth.login_success" ||
+        e.action_type === "auth.login_dev_bypass",
     );
     const failures = events.filter(
       (e) => e.action_type === "auth.login_failed",
@@ -314,10 +322,12 @@ export function buildLoginHistory(
       actor,
       lastSignIn: successes[0]?.timestamp ?? null,
       lastRole:
-        /signed in as (\w+)$/.exec(successes[0]?.description ?? "")?.[1] ??
-        null,
+        /signed in as (\w+)/.exec(successes[0]?.description ?? "")?.[1] ?? null,
       lastFailure: failures[0]?.timestamp ?? null,
       signIns: successes.length,
+      bypasses: successes.filter(
+        (e) => e.action_type === "auth.login_dev_bypass",
+      ).length,
       failed: failures.length,
       failed24h: failures.filter((e) => now - time(e) < 86_400_000).length,
       events,
