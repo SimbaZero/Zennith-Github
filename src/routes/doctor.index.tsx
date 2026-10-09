@@ -1,6 +1,6 @@
 ﻿import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, StatusBadge } from "@/components/AppShell";
-import { useDoctorDashboard, useCurrentDoctor } from "@/lib/doctor-service";
+import { useDoctorDashboard } from "@/lib/doctor-service";
 import { FileText, CalendarPlus, CalendarDays } from "lucide-react";
 
 export const Route = createFileRoute("/doctor/")({
@@ -8,7 +8,6 @@ export const Route = createFileRoute("/doctor/")({
 });
 
 function DoctorDashboard() {
-  const { doctor } = useCurrentDoctor();
   const { data, loading, error } = useDoctorDashboard();
 
   const today = new Date().toISOString().slice(0, 10);
@@ -18,12 +17,7 @@ function DoctorDashboard() {
       : `Schedule · ${data.scheduleDate}`;
 
   return (
-    <AppShell
-      role="doctor"
-      title="Doctor Dashboard"
-      showBack={false}
-      staffNameOverride={doctor?.fullName}
-    >
+    <AppShell role="doctor" title="Doctor Dashboard" showBack={false}>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat
           label="APPOINTMENTS"

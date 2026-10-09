@@ -16,11 +16,7 @@ function DoctorPatients() {
   const { doctor } = useCurrentDoctor();
   const realClinic = useRealActiveClinic(doctor?.clinicIds, "doctor");
   return (
-    <AppShell
-      role="doctor"
-      title="Patient Files"
-      staffNameOverride={doctor?.fullName}
-    >
+    <AppShell role="doctor" title="Patient Files">
       <DoctorPatientFilesTable clinicId={realClinic.activeClinicId} />
     </AppShell>
   );

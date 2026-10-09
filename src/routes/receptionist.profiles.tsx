@@ -153,7 +153,6 @@ function Profiles() {
       role="receptionist"
       title="Patient Profiles"
       clinicNameOverride={receptionist?.clinicName}
-      staffNameOverride={receptionist?.name}
     >
       <div className="bg-white rounded-xl border">
         <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-b">

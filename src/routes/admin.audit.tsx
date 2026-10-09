@@ -168,7 +168,6 @@ function AdminAudit() {
     <AppShell
       role="admin"
       title="Audit Logs"
-      staffNameOverride={admin?.fullName}
       clinicNameOverride={admin?.clinicName}
     >
       <StatsStrip flags={flags} stats={stats} />

@@ -1,7 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { useSuperAdminDashboard } from "@/lib/super-admin-service";
-import { useCurrentAdmin } from "@/lib/auth";
 import { Building2, Activity, ClipboardList, Users } from "lucide-react";
 
 export const Route = createFileRoute("/super-admin/")({
@@ -12,15 +11,9 @@ function SuperAdminDashboard() {
   const { data, loading, error } = useSuperAdminDashboard();
   // The signed-in profile's own name for the sidebar, rather than whatever was
   // typed into the login box (an email address, for some people).
-  const { admin } = useCurrentAdmin();
 
   return (
-    <AppShell
-      role="super_admin"
-      title="Platform Overview"
-      showBack={false}
-      staffNameOverride={admin?.fullName}
-    >
+    <AppShell role="super_admin" title="Platform Overview" showBack={false}>
       {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <Stat

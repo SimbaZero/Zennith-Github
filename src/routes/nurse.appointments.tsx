@@ -175,7 +175,6 @@ function NurseAppointments() {
     <AppShell
       role="nurse"
       title="Schedule Appointments"
-      staffNameOverride={nurse?.fullName}
       clinicNameOverride={nurse?.clinicName}
     >
       {nurseError && (

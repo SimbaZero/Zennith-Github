@@ -120,7 +120,6 @@ function ReceptionAppointments() {
       role="receptionist"
       title="Appointments"
       clinicNameOverride={receptionist?.clinicName}
-      staffNameOverride={receptionist?.name}
     >
       <div className="bg-white rounded-xl border">
         <div className="flex items-center justify-between p-5 border-b">

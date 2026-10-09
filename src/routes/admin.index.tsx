@@ -39,7 +39,6 @@ function AdminDashboard() {
       role="admin"
       title="Admin Dashboard"
       showBack={false}
-      staffNameOverride={admin?.fullName}
       clinicNameOverride={admin?.clinicName}
     >
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">

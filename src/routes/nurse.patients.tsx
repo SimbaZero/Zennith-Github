@@ -92,7 +92,6 @@ function NursePatients() {
     <AppShell
       role="nurse"
       title="Patient Files"
-      staffNameOverride={nurse?.fullName}
       clinicNameOverride={nurse?.clinicName}
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">

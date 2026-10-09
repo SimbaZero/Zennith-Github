@@ -250,7 +250,6 @@ function CreateUser() {
     <AppShell
       role="admin"
       title="Create User"
-      staffNameOverride={admin?.fullName}
       clinicNameOverride={admin?.clinicName}
     >
       <div className="max-w-2xl mx-auto bg-white rounded-xl border p-6">

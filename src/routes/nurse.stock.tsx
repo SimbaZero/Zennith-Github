@@ -64,12 +64,7 @@ function NurseStock() {
   );
 
   return (
-    <AppShell
-      role="nurse"
-      title="Stock"
-      staffNameOverride={nurse?.fullName}
-      clinicNameOverride={nurse?.clinicName}
-    >
+    <AppShell role="nurse" title="Stock" clinicNameOverride={nurse?.clinicName}>
       {/* Deliveries waiting to be checked in — the whole point of this page,
           so it sits at the top and can't be missed. */}
       <div className="bg-white rounded-xl border p-5 mb-6">

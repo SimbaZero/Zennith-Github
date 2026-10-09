@@ -203,7 +203,6 @@ function ReceptionDashboard() {
       title="Reception Dashboard"
       showBack={false}
       clinicNameOverride={receptionist?.clinicName}
-      staffNameOverride={receptionist?.name}
     >
       {/* Stats Row */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">

@@ -43,7 +43,6 @@ function NurseDashboard() {
       role="nurse"
       title="Nurse Dashboard"
       showBack={false}
-      staffNameOverride={nurse?.fullName}
       clinicNameOverride={nurse?.clinicName}
     >
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">

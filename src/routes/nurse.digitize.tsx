@@ -183,7 +183,6 @@ function Digitize() {
     <AppShell
       role="nurse"
       title="Digitize Patient Files"
-      staffNameOverride={nurse?.fullName}
       clinicNameOverride={nurse?.clinicName}
     >
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

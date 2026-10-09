@@ -218,7 +218,6 @@ function Registration() {
       role="receptionist"
       title="Patient Registration"
       clinicNameOverride={receptionist?.clinicName}
-      staffNameOverride={receptionist?.name}
     >
       <form onSubmit={submit} className="space-y-6">
         <div className="rounded-xl bg-[oklch(0.18_0.06_260)] text-white p-6 flex items-start justify-between">

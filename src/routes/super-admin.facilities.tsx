@@ -7,7 +7,7 @@ import {
   deleteClinicIfEmpty,
   type ClinicRecord,
 } from "@/lib/clinic-data";
-import { getUsers, removeUser, useCurrentAdmin } from "@/lib/auth";
+import { getUsers, removeUser } from "@/lib/auth";
 import { assignClinicAdmin } from "@/lib/super-admin-service";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -25,7 +25,6 @@ export const Route = createFileRoute("/super-admin/facilities")({
 
 function SuperFacilities() {
   const queryClient = useQueryClient();
-  const { admin } = useCurrentAdmin();
   const { data: clinics = [], isLoading } = useQuery({
     queryKey: ["clinics"],
     queryFn: listClinics,
@@ -104,11 +103,7 @@ function SuperFacilities() {
   });
 
   return (
-    <AppShell
-      role="super_admin"
-      title="Facilities"
-      staffNameOverride={admin?.fullName}
-    >
+    <AppShell role="super_admin" title="Facilities">
       {pending.length > 0 && (
         <Link
           to="/super-admin/applications"

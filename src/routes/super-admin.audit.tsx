@@ -19,7 +19,6 @@ import {
   buildLoginHistory,
   type LoginHistoryEntry,
 } from "@/lib/audit-insights";
-import { useCurrentAdmin } from "@/lib/auth";
 import { useClinics } from "@/lib/super-admin-service";
 
 export const Route = createFileRoute("/super-admin/audit")({
@@ -60,7 +59,6 @@ function whenLabel(iso: string): string {
 }
 
 function SuperAdminAudit() {
-  const { admin } = useCurrentAdmin();
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
   const [onlyFailed, setOnlyFailed] = useState(false);
@@ -171,11 +169,7 @@ function SuperAdminAudit() {
     filter === "all" || filter === "logins" || filter === "removals";
 
   return (
-    <AppShell
-      role="super_admin"
-      title="Security & Audit"
-      staffNameOverride={admin?.fullName}
-    >
+    <AppShell role="super_admin" title="Security & Audit">
       <div className="mb-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
         <AuditMiniStat
           label="WORTH A LOOK"

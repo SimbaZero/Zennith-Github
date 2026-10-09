@@ -109,7 +109,6 @@ function Staff() {
     <AppShell
       role="admin"
       title="All Staff"
-      staffNameOverride={admin?.fullName}
       clinicNameOverride={admin?.clinicName}
     >
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">

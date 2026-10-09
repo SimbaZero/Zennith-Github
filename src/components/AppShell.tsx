@@ -33,6 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
+import { useSignedInName } from "@/lib/signed-in-name";
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { waitForPendingWrites } from "firebase/firestore";
 import { db } from "@/firebase";
@@ -224,7 +225,6 @@ export function AppShell({
   showBack = true,
   children,
   clinicNameOverride,
-  staffNameOverride,
 }: {
   role: Role;
   title: string;
@@ -238,12 +238,6 @@ export function AppShell({
   // using the switchable fake system for now; this is scoped to fixing
   // the receptionist disconnect without touching modules not yet audited.
   clinicNameOverride?: string | null;
-  // Real staff name resolved from Firestore (e.g. via
-  // resolveCurrentReceptionist().name). Without this the sidebar falls back
-  // to capitalizing the LOGIN USERNAME, which is meaningless when the
-  // username is generic/shared (e.g. "receptionist") rather than a real
-  // person's name.
-  staffNameOverride?: string | null;
 }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -258,11 +252,10 @@ export function AppShell({
   };
 
   const username = typeof window !== "undefined" ? getUsername() : "";
-  const { patient: sidebarPatient, loading: patientLoading } =
-    useCurrentPatient();
+  const { patient: sidebarPatient } = useCurrentPatient();
   // Real pharmacist data. clinicIds/fullName are undefined for every other
   // role, so this does no Firestore reads when not relevant.
-  const { pharmacist, loading: pharmacistLoading } = useCurrentPharmacist();
+  const { pharmacist } = useCurrentPharmacist();
   const realPharmacistClinic = useRealActiveClinic(
     pharmacist?.clinicIds,
     "pharmacist",
@@ -270,38 +263,36 @@ export function AppShell({
   // Real doctor data — same idea, just for Doctor's own clinicIds.
   const { doctor } = useCurrentDoctor();
   const realDoctorClinic = useRealActiveClinic(doctor?.clinicIds, "doctor");
-  const display =
-    role === "patient" && sidebarPatient?.fullName
-      ? sidebarPatient.fullName
-      : role === "pharmacist" && pharmacist?.fullName
-        ? pharmacist.fullName
-        : (staffNameOverride ?? displayNameFor(role, username));
-  // A patient's or pharmacist's name comes from an async hook. Until it lands,
-  // `display` above is the login identifier — an email address, for anyone who
-  // signs in with one — so show a placeholder instead of flashing it.
-  //
-  // useCurrentPatient also builds a first, provisional record whose fullName is
-  // just the patient id ("Pat-5") before the users document arrives, so that
-  // counts as "not loaded yet" too.
+  // The name in the sidebar comes from ONE place for every role and every page:
+  // `fullName` on the signed-in user's profile, read once per session (see
+  // signed-in-name.ts). Pages used to pass their own — from five different
+  // lookups, each falling back differently while it loaded — so the same person
+  // was shown differently from page to page.
+  const { name: profileName, loading: profileNameLoading } = useSignedInName();
+  // The one exception is a patient, whose own record is the authoritative copy of
+  // their name: when reception corrects it, that record changes and the profile
+  // copy does not (reception can't write another person's profile). The record
+  // hook also builds a provisional entry whose fullName is just the patient id
+  // ("Pat-5") before the real one arrives, which doesn't count as a name.
   const patientNameReady =
     !!sidebarPatient?.fullName &&
     sidebarPatient.fullName !== sidebarPatient.patientId;
-  const patientNamePending =
-    role === "patient" &&
-    !patientNameReady &&
-    (patientLoading || !!sidebarPatient);
-  const pharmacistNamePending =
-    role === "pharmacist" && pharmacistLoading && !pharmacist?.fullName;
-  // Waiting is capped: useCurrentPatient never stops "loading" if the patient
-  // document doesn't exist, and a placeholder that never goes away is worse
-  // than the fallback it was hiding.
+  const resolvedName =
+    (role === "patient" && patientNameReady
+      ? sidebarPatient?.fullName
+      : null) ?? profileName;
+  // Only a profile with no usable name falls back to a generic label for the role
+  // ("Nurse", "Reception") — never an ID or an email address.
+  const display = resolvedName ?? displayNameFor(role, username);
+  // While the name is still being read, show a placeholder rather than flashing
+  // that generic fallback. Waiting is capped so a lookup that never answers
+  // can't leave the placeholder up for good.
   const [nameWaitOver, setNameWaitOver] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setNameWaitOver(true), NAME_WAIT_MS);
     return () => clearTimeout(t);
   }, []);
-  const nameLoading =
-    !nameWaitOver && (patientNamePending || pharmacistNamePending);
+  const nameLoading = !nameWaitOver && !resolvedName && profileNameLoading;
   const initial = nameLoading ? "" : display.charAt(0).toUpperCase();
   const canSwitch = !!staffCanSwitch[role];
   const siteLabel =

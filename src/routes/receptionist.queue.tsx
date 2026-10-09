@@ -580,7 +580,6 @@ function QueuePage() {
         role="receptionist"
         title="Acute Care Queue"
         clinicNameOverride={receptionist?.clinicName}
-        staffNameOverride={receptionist?.name}
       >
         <div className="flex items-center justify-center h-64">
           <p className="text-muted-foreground">Loading queue system...</p>
@@ -909,7 +908,6 @@ function QueuePage() {
       role="receptionist"
       title="Acute Care Queue"
       clinicNameOverride={receptionist?.clinicName}
-      staffNameOverride={receptionist?.name}
     >
       {stalled.length > 0 && (
         <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex items-center gap-3">

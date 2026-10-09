@@ -165,11 +165,7 @@ function DoctorAppointments() {
   ];
 
   return (
-    <AppShell
-      role="doctor"
-      title="Appointments"
-      staffNameOverride={doctor?.fullName}
-    >
+    <AppShell role="doctor" title="Appointments">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <button
