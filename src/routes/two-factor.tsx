@@ -155,11 +155,13 @@ function TwoFactor() {
   return (
     <AuthBackground>
       {devBypass && (
+        // role="status", not "alert": this is a notice that a mode is on, not an
+        // error, and should be announced as politely as it looks.
         <div
-          role="alert"
-          className="fixed inset-x-0 top-0 z-50 bg-red-600 px-4 py-2.5 text-center text-sm font-bold text-white shadow-lg"
+          role="status"
+          className="fixed inset-x-0 top-0 z-50 border-b border-amber-200 bg-amber-100 px-4 py-2 text-center text-sm font-medium text-stone-800"
         >
-          ⚠ DEV BYPASS ACTIVE — never enable this in a deployed environment
+          Demo mode — skip verification for testing purposes.
         </div>
       )}
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8 animate-fade-up">
@@ -214,9 +216,9 @@ function TwoFactor() {
           <button
             type="button"
             onClick={() => finish(profile, { devBypass: true })}
-            className="w-full mt-4 rounded-md border-2 border-dashed border-red-500 bg-red-50 py-2.5 font-semibold text-red-700 hover:bg-red-100"
+            className="w-full mt-4 rounded-md border border-gray-300 bg-white py-2.5 font-medium text-gray-700 hover:bg-gray-50"
           >
-            Skip (dev only)
+            Continue without a code (demo)
           </button>
         )}
 
