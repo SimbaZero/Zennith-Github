@@ -244,6 +244,9 @@ service cloud.firestore {
     match /smsGlobalLimits/{id} {
       allow read, write: if false;
     }
+    match /smsBookingLimits/{id} {
+      allow read, write: if false;
+    }
 
     match /doctors/{id} {
       allow read: if signedIn();

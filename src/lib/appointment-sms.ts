@@ -60,6 +60,15 @@ export function reminderText(c: AppointmentContext): string {
   ].join("\n");
 }
 
+/** Sent when the appointment is booked. The last line is left out if no reminder is still to come. */
+export function bookedText(c: AppointmentContext, reminderToCome: boolean): string {
+  return [
+    `Hello ${c.firstName ?? "Patient"},`,
+    `Your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when} is booked.`,
+    ...(reminderToCome ? ["We'll send you a reminder before your appointment."] : []),
+  ].join("\n");
+}
+
 export function confirmedText(c: AppointmentContext): string {
   return `Thank you. Your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when} is confirmed.`;
 }
