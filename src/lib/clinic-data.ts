@@ -49,6 +49,7 @@ import {
   isPastDay,
   isUpcomingAppointmentStrict,
 } from "@/lib/appointment-time";
+import { textBookingConfirmation } from "@/lib/booking-sms";
 import { resolvePrivacy, gate } from "@/lib/privacy";
 import type { PrivacySettings } from "@/lib/patient-service";
 import { getAuth, getUsername } from "@/lib/auth";
@@ -1318,6 +1319,23 @@ export async function setAppointmentStatus(
   });
 }
 
+/** Asks the server to text the patient about a new booking (see src/server/booking-sms.ts). */
+async function textPatientAboutBooking(appointmentId: string): Promise<void> {
+  try {
+    const idToken = await auth.currentUser?.getIdToken();
+    if (!idToken) return;
+    const res = await textBookingConfirmation({
+      data: { idToken, appointmentId },
+    });
+    if (!res.sent)
+      console.info(
+        `Booking text for appointment ${appointmentId} not sent: ${res.reason}`,
+      );
+  } catch (err) {
+    console.warn("Booking text request failed:", err);
+  }
+}
+
 export async function createAppointment(input: {
   patientId: string;
   date: string;
@@ -1402,6 +1420,10 @@ export async function createAppointment(input: {
       ? { clinicId: patient.data()?.clinicId }
       : {}),
   });
+
+  // Text the patient that it's booked. Runs in the background and never
+  // holds up or fails the booking.
+  void textPatientAboutBooking(String(nextId));
 
   // Audit trail. Shared by doctor, nurse and receptionist booking, so every
   // role that books is covered from this one place. clinicId is the

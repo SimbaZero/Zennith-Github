@@ -190,6 +190,27 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() || role() == "admin";
     }
 
+    // Text-message sign-in codes (hashed) and send counters. Only the server
+    // touches these, as the service account; no browser may read a code hash
+    // or reset a counter.
+    match /smsChallenges/{uid} {
+      allow read, write: if false;
+    }
+    match /smsPhoneLimits/{phone} {
+      allow read, write: if false;
+    }
+    match /smsVerifiedPhones/{phone} {
+      allow read, write: if false;
+    }
+    match /smsVerifiedPhoneDays/{id} {
+      allow read, write: if false;
+    }
+    match /smsGlobalLimits/{id} {
+      allow read, write: if false;
+    }
+    match /smsBookingLimits/{id} {
+      allow read, write: if false;
+    }
     match /doctors/{id} {
       allow read: if signedIn();
       allow write: if role() == "admin" || isSuperAdmin();

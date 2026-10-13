@@ -14,6 +14,16 @@ const pad = (n: number) => String(n).padStart(2, "0");
 // than allowed to fail the batched read for everyone.
 const USER_ID = /^\d{1,20}$/;
 
+// Clinic and patient records can be created by anyone (see firestore.rules),
+// so a name that is overlong or looks like a link isn't put into a text; the
+// generic wording ("your clinic") is used instead.
+const LINK_LIKE = /:\/\/|www\.|[a-z0-9-]\.[a-z]{2,}(?:\/|\b)/i;
+
+function safeName(value: string, maxLength: number): string | null {
+  const name = value.replace(/\s+/g, " ").trim();
+  return name && name.length <= maxLength && !LINK_LIKE.test(name) ? name : null;
+}
+
 /** Whether a string can be used as a Firestore document ID. */
 export function isDocumentId(id: string): boolean {
   return id.length > 0 && id.length <= 1500 && !id.includes("/") && id !== "." && id !== ".." && !/^__.*__$/.test(id);
@@ -57,6 +67,15 @@ export function reminderText(c: AppointmentContext): string {
     `Please confirm your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when}`,
     "Reply 1: Yes",
     "2: No",
+  ].join("\n");
+}
+
+/** Sent when the appointment is booked. The last line is left out if no reminder is still to come. */
+export function bookedText(c: AppointmentContext, reminderToCome: boolean): string {
+  return [
+    `Hello ${c.firstName ?? "Patient"},`,
+    `Your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when} is booked.`,
+    ...(reminderToCome ? ["We'll send you a reminder before your appointment."] : []),
   ].join("\n");
 }
 
@@ -114,16 +133,19 @@ export async function loadAppointmentContexts(
     const clinicianId = str(a.data.clinician);
     const clinicianUserId = userIdOf(clinicianDoc(clinicianId));
     const clinicianUser = clinicianUserId ? users.get(clinicianUserId) : undefined;
-    const clinicianFull = [clinicianUser?.data.names, clinicianUser?.data.surname].filter(Boolean).join(" ").trim();
+    const clinicianFull = safeName(
+      [clinicianUser?.data.names, clinicianUser?.data.surname].filter(Boolean).join(" "),
+      60,
+    );
 
-    const firstName = str(patientUser?.data.names).trim().split(/\s+/)[0] || null;
+    const firstName = safeName(str(patientUser?.data.names).trim().split(/\s+/)[0] ?? "", 30);
     const appointDateTime = new Date(str(a.data.appointDateTime));
 
     contexts.set(a.id, {
       firstName,
       phone: patientUser ? str(patientUser.data.contactNum) || null : null,
       userId: patientUserId ? Number(patientUserId) : null,
-      clinicName: str(clinics.get(str(a.data.clinicId))?.data.clinicName) || null,
+      clinicName: safeName(str(clinics.get(str(a.data.clinicId))?.data.clinicName), 60),
       // Same convention as the app's clinicianNames(): "Dr." for doctors.
       clinicianName: clinicianFull ? (clinicianId.startsWith("Nur") ? clinicianFull : `Dr. ${clinicianFull}`) : null,
       when: Number.isNaN(appointDateTime.getTime()) ? "" : formatAppointmentWhen(appointDateTime),
