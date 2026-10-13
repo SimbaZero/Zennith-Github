@@ -126,7 +126,6 @@ const navByRole: Record<Role, NavItem[]> = {
     { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
     { to: "/admin/users", label: "Create User", icon: UserPlus },
     { to: "/admin/staff", label: "All Staff", icon: ShieldCheck },
-    { to: "/admin/requests", label: "Clinic Requests", icon: ClipboardList },
     { to: "/admin/audit", label: "Audit Logs", icon: Activity },
   ],
   super_admin: [
@@ -135,11 +134,6 @@ const navByRole: Record<Role, NavItem[]> = {
     {
       to: "/super-admin/applications",
       label: "Clinic Applications",
-      icon: ClipboardList,
-    },
-    {
-      to: "/super-admin/requests",
-      label: "Clinic Requests",
       icon: ClipboardList,
     },
     { to: "/super-admin/audit", label: "Security & Audit", icon: ShieldCheck },
@@ -693,9 +687,9 @@ function NotificationsButton({ role }: { role: Role }) {
               className="w-full rounded-md py-1.5 text-center text-xs font-medium text-[oklch(0.4_0.15_245)] hover:bg-secondary"
               onClick={() => {
                 setOpen(false);
-                (
-                  navigate as unknown as (opts: { to: string }) => void
-                )({ to: "/notifications" });
+                (navigate as unknown as (opts: { to: string }) => void)({
+                  to: "/notifications",
+                });
               }}
             >
               View all notifications

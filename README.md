@@ -166,9 +166,10 @@ the browser bundle. In production set them with `wrangler secret put NAME`.
 **Several clinics, with approval.** A doctor or pharmacist can work at more than one
 clinic and switch between them from the clinic name in the header. Adding a clinic from
 the admin's All Staff page is a *request*: it creates a pending record in
-`clinicAssignmentRequests`, notifies every admin and super admin, and takes effect only
-when one of them approves it on the Clinic Requests page (taking a clinic away applies at
-once). There is one global admin role, so any admin can decide any request.
+`clinicAssignmentRequests`, notifies every admin, and takes effect only when one of them
+approves it in the collapsed "Clinic requests" section of the All Staff page (taking a clinic away applies at once). There is
+one global admin role, so any admin can decide any request. Super admins have no part in
+this: the page, its nav entry and its notifications are admin-only.
 
 **Stock Deliveries** is laid out as labelled zones, because two different actions used to
 read as one. *Order from supplier* is the pharmacy replenishing itself (stock goes up only

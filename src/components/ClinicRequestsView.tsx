@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ClipboardList, X } from "lucide-react";
 import { toast } from "sonner";
 import { Loading, Spinner } from "@/components/Loading";
 import { useCurrentAdmin } from "@/lib/auth";
+import { OPEN_SECTION_EVENT } from "@/lib/jump-to-section";
 import {
   approveClinicRequest,
   denyClinicRequest,
@@ -25,12 +26,97 @@ const when = (iso: string) => {
 };
 
 /**
- * Requests to add a doctor or pharmacist to a clinic, waiting for an admin.
- * Each one says who it is for, where they work now, who asked and when - so the
- * decision is made with the context in front of the approver.
+ * The "Clinic requests" part of the All Staff page: requests to add a doctor or
+ * pharmacist to a clinic, waiting for an admin. Closed by default behind a small
+ * toggle, so it isn't prominent until there is something to look at (the count
+ * in the toggle says so).
+ *
+ * It opens by itself when the page is reached from a clinic-request
+ * notification (`openRequested`, from the page's `?requests=1`), and when a
+ * notification link jumps to it while the page is already open.
  */
-export function ClinicRequestsView() {
+export function ClinicRequestsSection({
+  openRequested = false,
+}: {
+  openRequested?: boolean;
+}) {
   const { requests, loading, error } = useClinicAssignmentRequests();
+  const pendingCount = requests.filter((r) => r.status === "pending").length;
+  const [open, setOpen] = useState(openRequested);
+  const ref = useRef<HTMLElement>(null);
+
+  // Arriving from a notification.
+  useEffect(() => {
+    if (openRequested) setOpen(true);
+  }, [openRequested]);
+
+  // A notification link that jumps here while the page is already showing.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const expand = () => setOpen(true);
+    el.addEventListener(OPEN_SECTION_EVENT, expand);
+    return () => el.removeEventListener(OPEN_SECTION_EVENT, expand);
+  }, []);
+
+  return (
+    <section
+      id="clinic-requests"
+      ref={ref}
+      aria-label="Clinic requests"
+      className="mb-4 rounded-lg"
+      data-testid="clinic-requests-section"
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="clinic-requests-body"
+        className="flex min-h-[36px] w-full items-center gap-2 px-1 text-left text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ClipboardList size={14} aria-hidden />
+        <span className="font-medium">Clinic requests</span>
+        {pendingCount > 0 && (
+          <span
+            className="text-xs font-medium text-amber-800"
+            data-testid="clinic-requests-count"
+          >
+            {pendingCount} waiting
+          </span>
+        )}
+        <ChevronDown
+          size={14}
+          aria-hidden
+          className={`ml-auto transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div id="clinic-requests-body" className="mt-2">
+          <ClinicRequestsView
+            requests={requests}
+            loading={loading}
+            error={error}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The requests themselves. Each one says who it is for, where they work now,
+ * who asked and when - so the decision is made with the context in front of the
+ * approver.
+ */
+function ClinicRequestsView({
+  requests,
+  loading,
+  error,
+}: {
+  requests: ClinicAssignmentRequest[];
+  loading: boolean;
+  error: boolean;
+}) {
   const { admin } = useCurrentAdmin();
   const by = admin?.fullName || admin?.username || "admin";
   const pending = requests.filter((r) => r.status === "pending");
@@ -38,14 +124,14 @@ export function ClinicRequestsView() {
   const [showDecided, setShowDecided] = useState(false);
 
   return (
-    <div className="max-w-3xl space-y-6" data-testid="clinic-requests">
-      <div>
-        <h2 className="text-lg font-semibold">Clinic assignment requests</h2>
-        <p className="text-sm text-muted-foreground">
-          Adding a doctor or pharmacist to another clinic waits here for an
-          admin to approve it. Nothing changes for them until you do.
-        </p>
-      </div>
+    <div
+      className="space-y-5 rounded-xl border bg-white p-4"
+      data-testid="clinic-requests"
+    >
+      <p className="text-sm text-muted-foreground">
+        Adding a doctor or pharmacist to another clinic waits here for an admin
+        to approve it. Nothing changes for them until you do.
+      </p>
 
       {loading ? (
         <p className="text-sm text-muted-foreground">

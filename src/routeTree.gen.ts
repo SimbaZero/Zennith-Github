@@ -31,7 +31,6 @@ import { Route as PatientIndexRouteImport } from './routes/patient.index'
 import { Route as NurseIndexRouteImport } from './routes/nurse.index'
 import { Route as DoctorIndexRouteImport } from './routes/doctor.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
-import { Route as SuperAdminRequestsRouteImport } from './routes/super-admin.requests'
 import { Route as SuperAdminFacilitiesRouteImport } from './routes/super-admin.facilities'
 import { Route as SuperAdminAuditRouteImport } from './routes/super-admin.audit'
 import { Route as SuperAdminApplicationsRouteImport } from './routes/super-admin.applications'
@@ -55,7 +54,6 @@ import { Route as DoctorPatientsRouteImport } from './routes/doctor.patients'
 import { Route as DoctorAppointmentsRouteImport } from './routes/doctor.appointments'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
-import { Route as AdminRequestsRouteImport } from './routes/admin.requests'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
 import { Route as ReceptionistProfilesPidRouteImport } from './routes/receptionist.profiles_.$pid'
 import { Route as NursePatientRecordPidRouteImport } from './routes/nurse.patient-record.$pid'
@@ -171,11 +169,6 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminRoute,
-} as any)
-const SuperAdminRequestsRoute = SuperAdminRequestsRouteImport.update({
-  id: '/requests',
-  path: '/requests',
-  getParentRoute: () => SuperAdminRoute,
 } as any)
 const SuperAdminFacilitiesRoute = SuperAdminFacilitiesRouteImport.update({
   id: '/facilities',
@@ -294,11 +287,6 @@ const AdminStaffRoute = AdminStaffRouteImport.update({
   path: '/staff',
   getParentRoute: () => AdminRoute,
 } as any)
-const AdminRequestsRoute = AdminRequestsRouteImport.update({
-  id: '/requests',
-  path: '/requests',
-  getParentRoute: () => AdminRoute,
-} as any)
 const AdminAuditRoute = AdminAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
@@ -342,7 +330,6 @@ export interface FileRoutesByFullPath {
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
-  '/admin/requests': typeof AdminRequestsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -366,7 +353,6 @@ export interface FileRoutesByFullPath {
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
-  '/super-admin/requests': typeof SuperAdminRequestsRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
   '/nurse/': typeof NurseIndexRoute
@@ -389,7 +375,6 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
-  '/admin/requests': typeof AdminRequestsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -413,7 +398,6 @@ export interface FileRoutesByTo {
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
-  '/super-admin/requests': typeof SuperAdminRequestsRoute
   '/admin': typeof AdminIndexRoute
   '/doctor': typeof DoctorIndexRoute
   '/nurse': typeof NurseIndexRoute
@@ -444,7 +428,6 @@ export interface FileRoutesById {
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
-  '/admin/requests': typeof AdminRequestsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -468,7 +451,6 @@ export interface FileRoutesById {
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
-  '/super-admin/requests': typeof SuperAdminRequestsRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
   '/nurse/': typeof NurseIndexRoute
@@ -500,7 +482,6 @@ export interface FileRouteTypes {
     | '/super-admin'
     | '/two-factor'
     | '/admin/audit'
-    | '/admin/requests'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -524,7 +505,6 @@ export interface FileRouteTypes {
     | '/super-admin/applications'
     | '/super-admin/audit'
     | '/super-admin/facilities'
-    | '/super-admin/requests'
     | '/admin/'
     | '/doctor/'
     | '/nurse/'
@@ -547,7 +527,6 @@ export interface FileRouteTypes {
     | '/signup'
     | '/two-factor'
     | '/admin/audit'
-    | '/admin/requests'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -571,7 +550,6 @@ export interface FileRouteTypes {
     | '/super-admin/applications'
     | '/super-admin/audit'
     | '/super-admin/facilities'
-    | '/super-admin/requests'
     | '/admin'
     | '/doctor'
     | '/nurse'
@@ -601,7 +579,6 @@ export interface FileRouteTypes {
     | '/super-admin'
     | '/two-factor'
     | '/admin/audit'
-    | '/admin/requests'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -625,7 +602,6 @@ export interface FileRouteTypes {
     | '/super-admin/applications'
     | '/super-admin/audit'
     | '/super-admin/facilities'
-    | '/super-admin/requests'
     | '/admin/'
     | '/doctor/'
     | '/nurse/'
@@ -813,13 +789,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/super-admin/requests': {
-      id: '/super-admin/requests'
-      path: '/requests'
-      fullPath: '/super-admin/requests'
-      preLoaderRoute: typeof SuperAdminRequestsRouteImport
-      parentRoute: typeof SuperAdminRoute
-    }
     '/super-admin/facilities': {
       id: '/super-admin/facilities'
       path: '/facilities'
@@ -981,13 +950,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminStaffRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/admin/requests': {
-      id: '/admin/requests'
-      path: '/requests'
-      fullPath: '/admin/requests'
-      preLoaderRoute: typeof AdminRequestsRouteImport
-      parentRoute: typeof AdminRoute
-    }
     '/admin/audit': {
       id: '/admin/audit'
       path: '/audit'
@@ -1028,7 +990,6 @@ declare module '@tanstack/react-router' {
 
 interface AdminRouteChildren {
   AdminAuditRoute: typeof AdminAuditRoute
-  AdminRequestsRoute: typeof AdminRequestsRoute
   AdminStaffRoute: typeof AdminStaffRoute
   AdminUsersRoute: typeof AdminUsersRoute
   AdminIndexRoute: typeof AdminIndexRoute
@@ -1036,7 +997,6 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditRoute: AdminAuditRoute,
-  AdminRequestsRoute: AdminRequestsRoute,
   AdminStaffRoute: AdminStaffRoute,
   AdminUsersRoute: AdminUsersRoute,
   AdminIndexRoute: AdminIndexRoute,
@@ -1148,7 +1108,6 @@ interface SuperAdminRouteChildren {
   SuperAdminApplicationsRoute: typeof SuperAdminApplicationsRoute
   SuperAdminAuditRoute: typeof SuperAdminAuditRoute
   SuperAdminFacilitiesRoute: typeof SuperAdminFacilitiesRoute
-  SuperAdminRequestsRoute: typeof SuperAdminRequestsRoute
   SuperAdminIndexRoute: typeof SuperAdminIndexRoute
 }
 
@@ -1156,7 +1115,6 @@ const SuperAdminRouteChildren: SuperAdminRouteChildren = {
   SuperAdminApplicationsRoute: SuperAdminApplicationsRoute,
   SuperAdminAuditRoute: SuperAdminAuditRoute,
   SuperAdminFacilitiesRoute: SuperAdminFacilitiesRoute,
-  SuperAdminRequestsRoute: SuperAdminRequestsRoute,
   SuperAdminIndexRoute: SuperAdminIndexRoute,
 }
 

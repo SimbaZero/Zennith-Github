@@ -21,7 +21,12 @@ export function parseNotificationLink(
   link: string | undefined | null,
 ): LinkTarget | null {
   if (typeof link !== "string") return null;
-  const raw = link.trim();
+  // A clinic request used to have a page of its own; notifications written
+  // then still point there. It is now a section of All Staff.
+  const raw =
+    link.trim() === "/admin/requests"
+      ? "/admin/staff?requests=1#clinic-requests"
+      : link.trim();
   // One leading slash only: "//host" and "https://host" would leave the app.
   if (!raw.startsWith("/") || raw.startsWith("//") || /[\\\s]/.test(raw)) {
     return null;
@@ -49,6 +54,8 @@ export function describeLinkTarget(link: string | undefined | null): string {
   const target = parseNotificationLink(link);
   if (!target) return "";
   const { to, hash } = target;
+  if (to === "/admin/staff" && hash === "clinic-requests")
+    return "Review clinic requests";
   if (/\/appointments$/.test(to)) return "View appointment";
   if (to === "/patient/medical-record") return "View medical record";
   if (to === "/patient/alerts") return "Open alerts";

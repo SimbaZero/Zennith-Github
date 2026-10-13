@@ -326,47 +326,36 @@ export async function notifyClinicAdmins(input: {
 }
 
 /**
- * Notify everyone with admin access: every admin profile (whichever clinic they
- * administer) and every super admin. There is one global admin role rather than
- * per-clinic admins, so a request that needs "an admin" goes to all of them.
- *
- * `link` is the admin page; super admins have their own copy of it, so a
- * `superAdminLink` can be given for them.
+ * Notify every admin profile, whichever clinic they administer. There is one
+ * global admin role rather than per-clinic admins, so something that needs "an
+ * admin" goes to all of them. (Super admins are not included: what they are told
+ * is a separate decision.)
  */
 export async function notifyAllAdmins(input: {
   title: string;
   message: string;
   link?: string;
-  superAdminLink?: string;
   dedupeKey?: string;
 }): Promise<void> {
   try {
-    const [admins, supers] = await Promise.all([
-      getDocs(query(collection(db, "profiles"), where("role", "==", "admin"))),
-      getDocs(
-        query(collection(db, "profiles"), where("role", "==", "super_admin")),
-      ),
-    ]);
-    const targets = [
-      ...admins.docs.map((d) => ({ id: d.id, link: input.link })),
-      ...supers.docs.map((d) => ({
-        id: d.id,
-        link: input.superAdminLink ?? input.link,
-      })),
-    ];
+    const admins = await getDocs(
+      query(collection(db, "profiles"), where("role", "==", "admin")),
+    );
     await Promise.all(
-      targets.map((t) =>
+      admins.docs.map((d) =>
         writeNotification(
           {
             notifId: Date.now(),
-            profileId: t.id,
+            // Admins are addressed by their profile document id, since they
+            // have no numeric users.userId.
+            profileId: d.id,
             title: input.title,
             message: input.message,
             isRead: false,
             timeSent: new Date().toISOString(),
-            ...(t.link ? { link: t.link } : {}),
+            ...(input.link ? { link: input.link } : {}),
           },
-          input.dedupeKey ? `${input.dedupeKey}-${t.id}` : undefined,
+          input.dedupeKey ? `${input.dedupeKey}-${d.id}` : undefined,
         ),
       ),
     );

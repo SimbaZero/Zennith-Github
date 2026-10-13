@@ -11,6 +11,13 @@
 // than giving up after one try.
 // ---------------------------------------------------------------------------
 
+/**
+ * Fired at the element a jump lands on. A collapsible section listens for it on
+ * itself and opens, so a notification that points at a closed section lands on
+ * its contents rather than on a toggle.
+ */
+export const OPEN_SECTION_EVENT = "zennith:open-section";
+
 /** A ring that fades in and out. Written out in full so Tailwind sees it. */
 const FLASH_CLASSES = ["ring-4", "ring-amber-300", "ring-offset-2"];
 
@@ -29,13 +36,19 @@ export function jumpToSection(
     if (cancelled) return;
     const el = document.getElementById(id);
     if (el) {
-      if (typeof el.scrollIntoView === "function") {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-      el.classList.add(...FLASH_CLASSES);
-      timer = setTimeout(() => {
-        el.classList.remove(...FLASH_CLASSES);
-      }, flashMs);
+      el.dispatchEvent(new CustomEvent(OPEN_SECTION_EVENT));
+      // Scroll a moment later, so a section that just opened has its contents.
+      const reveal = () => {
+        if (cancelled) return;
+        if (typeof el.scrollIntoView === "function") {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        el.classList.add(...FLASH_CLASSES);
+        timer = setTimeout(() => {
+          el.classList.remove(...FLASH_CLASSES);
+        }, flashMs);
+      };
+      timer = setTimeout(reveal, 30);
       return;
     }
     attempts += 1;

@@ -10,6 +10,7 @@ import {
 } from "@/lib/auth";
 import { fetchClinicStaff, type ClinicStaffMember } from "@/lib/clinic-data";
 import { StaffClinicsPanel } from "@/components/StaffClinicsPanel";
+import { ClinicRequestsSection } from "@/components/ClinicRequestsView";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -27,7 +28,12 @@ import {
   Building2,
 } from "lucide-react";
 
-export const Route = createFileRoute("/admin/staff")({ component: Staff });
+export const Route = createFileRoute("/admin/staff")({
+  // ?requests=1 opens the Clinic requests section (a notification links here).
+  validateSearch: (s: Record<string, unknown>): { requests?: "1" } =>
+    s.requests === "1" || s.requests === 1 ? { requests: "1" } : {},
+  component: Staff,
+});
 
 type Role = ClinicStaffMember["role"];
 
@@ -46,6 +52,7 @@ const ROLE_TONE: Record<Role, string> = {
 };
 
 function Staff() {
+  const { requests: openRequests } = Route.useSearch();
   const queryClient = useQueryClient();
   const { admin } = useCurrentAdmin();
 
@@ -226,6 +233,8 @@ function Staff() {
           }}
         />
       )}
+
+      <ClinicRequestsSection openRequested={openRequests === "1"} />
 
       <div className="bg-white rounded-xl border">
         <div className="p-5 border-b flex items-center gap-2">

@@ -50,15 +50,13 @@ export function useMyNotifications(
               ? receptionist?.userId
               : undefined;
 
-  // Admins and super admins have no users record, so they are addressed by
-  // their profile id.
-  const byProfileRole = role === "admin" || role === "super_admin";
+  // Admins have no users record, so they are addressed by their profile id.
   const byUserId = useNotifications(
-    byProfileRole ? undefined : userId,
+    role === "admin" ? undefined : userId,
     onRelease,
   );
   const byProfile = useNotificationsByProfile(
-    byProfileRole ? admin?.profileId : undefined,
+    role === "admin" ? admin?.profileId : undefined,
   );
-  return byProfileRole ? byProfile : byUserId;
+  return role === "admin" ? byProfile : byUserId;
 }

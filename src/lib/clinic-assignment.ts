@@ -24,7 +24,7 @@ import {
 // approves, not something that takes effect the moment it is clicked.
 //
 //   request  -> a `clinicAssignmentRequests` document (status "pending"), one per
-//               clinic asked for, and a notification to everyone with admin access
+//               clinic asked for, and a notification to every admin (not super admins)
 //   approve  -> the clinic is added to the person's clinicIds (setStaffClinics),
 //               then the request is marked approved
 //   deny     -> the request is closed; nothing about the person changes
@@ -186,8 +186,8 @@ export async function requestClinicAssignments(input: {
         staffName: input.staffName,
         clinicName,
       }),
-      link: "/admin/requests",
-      superAdminLink: "/super-admin/requests",
+      // All Staff, with its Clinic requests section already open.
+      link: "/admin/staff?requests=1#clinic-requests",
     });
   }
   return {
