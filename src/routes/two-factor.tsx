@@ -27,6 +27,7 @@ import {
   type SmsCodeFailure,
 } from "@/lib/sms-otp";
 import { logAction } from "@/lib/audit";
+import { getDemoMode } from "@/lib/demo-mode";
 
 export const Route = createFileRoute("/two-factor")({
   // Only the username travels in the URL, for display and the authenticator
@@ -41,57 +42,39 @@ export const Route = createFileRoute("/two-factor")({
 const EMPTY = ["", "", "", "", "", ""];
 
 // ---------------------------------------------------------------------------
-// DEVELOPER SHORTCUT — local testing only.
+// DEMO MODE - for presentations.
 //
-// When VITE_DEV_2FA_BYPASS is "true", this screen shows a "Skip (dev only)"
-// button that signs in without a code. It skips only this client-side step: the
-// password has already been verified by Firebase Auth, the role and facility
-// still come from the signed-in user's own profile, and nothing in
-// firestore.rules or on the server is relaxed.
+// When the server's DEMO_MODE environment variable is exactly "true", this screen
+// shows a "Skip (demo mode)" button that signs in without a code. It skips only
+// this client-side step: the password has already been verified by Firebase
+// Auth, the role and facility still come from the signed-in user's own profile,
+// and nothing in firestore.rules or on the server is relaxed.
 //
-// It is never silent: a bypass is logged as auth.login_dev_bypass (deliberately
-// not auth.login_success), and a red banner is shown for as long as it's active.
+// Off by default and absent when off: no button, no banner, and 2FA behaves
+// exactly as it always does. The flag is read from the SERVER at run time (see
+// src/lib/demo-mode.ts), not baked into the bundle, so a production build can't
+// carry it - and the button asks again when pressed, so it stops working the
+// moment the flag is cleared. NEVER set DEMO_MODE in production.
 //
-// The variable is read at BUILD time, and Vite reads .env for production builds
-// too — so a .env on the machine that builds the deployed bundle would bake it
-// in. To make that harmless, the bypass is also refused unless the page is being
-// served from this machine or a private network address. A deployed site is
-// never on one, so a flag that slips into a production build does nothing there.
+// It is never silent: a skip is logged as auth.login_dev_bypass (deliberately
+// not auth.login_success, so it can't pass for a normal sign-in in the audit
+// log, where super admins see it flagged), and a banner is shown for as long as
+// the mode is on.
+//
+// (This replaces the earlier build-time VITE_DEV_2FA_BYPASS flag, which was
+// restricted to local addresses and so could not be used on a deployed demo.)
 // ---------------------------------------------------------------------------
-const DEV_2FA_BYPASS_FLAG = import.meta.env.VITE_DEV_2FA_BYPASS === "true";
 
-/** localhost, loopback, *.local, and the private IPv4 ranges (a phone on the LAN). */
-function isLocalAddress(host: string): boolean {
-  const h = host.toLowerCase();
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local"))
-    return true;
-  if (h === "[::1]" || h === "::1") return true;
-  const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(h);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return (
-    a === 127 ||
-    a === 10 ||
-    (a === 192 && b === 168) ||
-    (a === 172 && b >= 16 && b <= 31)
-  );
-}
-
-/** Is the bypass on? Decided after mount, since it depends on the address bar. */
-function useDevBypass(): boolean {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    if (!DEV_2FA_BYPASS_FLAG) return;
-    if (isLocalAddress(window.location.hostname)) {
-      setOn(true);
-    } else {
-      console.warn(
-        "VITE_DEV_2FA_BYPASS is set in this build but is being ignored: " +
-          "this page isn't served from a local or private address.",
-      );
-    }
-  }, []);
-  return on;
+/** Is demo mode on? false until the server says so, and false if it can't be asked. */
+function useDemoMode(): boolean {
+  const { data } = useQuery({
+    queryKey: ["demo-mode"],
+    queryFn: () => getDemoMode(),
+    // Settled for the session: it is a deployment setting, not live data.
+    staleTime: Infinity,
+    retry: false,
+  });
+  return data?.enabled === true;
 }
 
 const PRIMARY_BUTTON =
@@ -114,7 +97,7 @@ function TwoFactor() {
     gcTime: 0,
   });
   // The role and facility come from the profile, never from the URL.
-  const devBypass = useDevBypass();
+  const devBypass = useDemoMode();
   const finish = (p: TwoFactorProfile, opts?: { devBypass?: boolean }) => {
     setAuth(p.role, u, p.facilityId);
     // A completed login: password/SMS code and second factor both accepted —
@@ -179,9 +162,10 @@ function TwoFactor() {
         // error, and should be announced as politely as it looks.
         <div
           role="status"
+          data-testid="demo-mode-banner"
           className="fixed inset-x-0 top-0 z-50 border-b border-amber-200 bg-amber-100 px-4 py-2 text-center text-sm font-medium text-stone-800"
         >
-          Demo mode — skip verification for testing purposes.
+          Demo mode — two-factor verification can be skipped on this screen.
         </div>
       )}
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8 animate-fade-up">
@@ -281,10 +265,16 @@ function TwoFactor() {
         {devBypass && profile && (
           <button
             type="button"
-            onClick={() => finish(profile, { devBypass: true })}
+            data-testid="demo-skip"
+            onClick={async () => {
+              // Ask the server again: the button must stop working the moment
+              // the flag is cleared, not only after the page is reloaded.
+              const now = await getDemoMode().catch(() => ({ enabled: false }));
+              if (now.enabled === true) finish(profile, { devBypass: true });
+            }}
             className="w-full mt-4 rounded-md border border-gray-300 bg-white py-2.5 font-medium text-gray-700 hover:bg-gray-50"
           >
-            Continue without a code (demo)
+            Skip (demo mode)
           </button>
         )}
 

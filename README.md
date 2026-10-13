@@ -200,6 +200,14 @@ test mode, in which no account is created and nothing is sent. Once live, the sc
 "If this number/email is reachable, a link … has been sent" whether or not delivery
 succeeds; real failures are in the server log.
 
+**Demo mode (2FA skip).** For presentations, set `DEMO_MODE=true` on the server and the
+two-factor screen shows a "Skip (demo mode)" button under a "Demo mode" banner. It is read
+by the server at run time (restart the dev server after editing `.env`; no rebuild is
+needed), only the exact string `true` turns it on, and with it unset there is no button,
+no banner and no other trace. A skip is audited as `auth.login_dev_bypass`, which the super
+admin's audit page flags. **Never set it in production.** It replaces the older build-time
+`VITE_DEV_2FA_BYPASS`, which only worked on a local address.
+
 Two things that cost people an afternoon:
 
 - **Plain `KEY=value` lines only.** Pasting the JavaScript config object out of the
