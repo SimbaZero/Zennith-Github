@@ -19,8 +19,15 @@ export type StockSearchResult =
     };
 
 export const searchMyClinicStock = createServerFn({ method: "POST" })
-  .inputValidator((d: { idToken: string; term: string }) => d)
+  .inputValidator(
+    (d: { idToken: string; term: string; categories?: string[] }) => d,
+  )
   .handler(async ({ data }): Promise<StockSearchResult> => {
     const { searchClinicStock } = await import("../server/stock-search");
-    return searchClinicStock(data?.idToken, data?.term);
+    return searchClinicStock(
+      data?.idToken,
+      data?.term,
+      undefined,
+      data?.categories,
+    );
   });

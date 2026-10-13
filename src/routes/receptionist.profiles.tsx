@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell } from "@/components/AppShell";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -159,7 +160,9 @@ function Profiles() {
           <div>
             <h3 className="font-semibold">All Patient Profiles</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {receptionist?.clinicName ?? "Loading clinic…"}
+              {receptionist?.clinicName ?? (
+                <Loading label="Loading clinic" size={12} />
+              )}
             </p>
           </div>
           <input
@@ -189,7 +192,7 @@ function Profiles() {
                     colSpan={3}
                     className="px-5 py-6 text-center text-muted-foreground"
                   >
-                    Loading...
+                    <Loading label="Loading patients" />
                   </td>
                 </tr>
               )}

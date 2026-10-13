@@ -1,4 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { ClinicMiniMap } from "@/components/ClinicMiniMap";
+import { parseCoordinates } from "@/lib/geo";
+import { Loading } from "@/components/Loading";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Github } from "lucide-react";
@@ -915,11 +918,11 @@ function Contact() {
 
           <div className="mt-8 space-y-4 text-[15px]">
             <a
-              href="mailto:hello@zennith.co.za"
+              href="mailto:Cmutizwa@gmail.com"
               className="flex items-center gap-3 hover:text-[oklch(0.45_0.15_245)]"
             >
               <Mail size={17} className="text-[oklch(0.55_0.04_260)]" />
-              hello@zennith.co.za
+              Cmutizwa@gmail.com
             </a>
             <p className="flex items-center gap-3 text-[oklch(0.45_0.03_260)]">
               <MapPin size={17} className="text-[oklch(0.55_0.04_260)]" />
@@ -976,14 +979,10 @@ function PublicQueue() {
   const clinicId = selected ?? nearest ?? active[0]?.clinicId ?? null;
   const summary = usePublicQueueSummary(clinicId);
 
-  // Coordinates are stored as "26.1946 S, 28.0473 E" — parse to numbers.
+  // Coordinates are stored as "26.1946 S, 28.0473 E"; see parseCoordinates.
   const parseCoords = (raw?: string): [number, number] | null => {
-    if (!raw) return null;
-    const m = raw.match(/([\d.]+)\s*([NS])\s*,\s*([\d.]+)\s*([EW])/i);
-    if (!m) return null;
-    const lat = Number(m[1]) * (m[2].toUpperCase() === "S" ? -1 : 1);
-    const lng = Number(m[3]) * (m[4].toUpperCase() === "W" ? -1 : 1);
-    return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+    const p = parseCoordinates(raw);
+    return p ? [p.lat, p.lng] : null;
   };
 
   const findNearest = () => {
@@ -1058,8 +1057,40 @@ function PublicQueue() {
       </select>
       {locError && <p className="text-xs text-white/50 mt-2">{locError}</p>}
 
+      {/* Where the selected clinic is. The location comes from the same clinic
+          record the picker uses; a clinic with only a street address shows the
+          address, and a map that can't load shows the same, never a blank. */}
+      {clinicId != null && (
+        <div className="mt-4 flex flex-wrap items-start gap-3">
+          <ClinicMiniMap
+            key={clinicId}
+            coordinates={active.find((c) => c.clinicId === clinicId)?.address}
+            name={
+              active.find((c) => c.clinicId === clinicId)?.clinicName ??
+              "this clinic"
+            }
+            width={280}
+            height={176}
+          />
+          <p className="text-xs text-white/55">
+            Map ©{" "}
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-white/80"
+            >
+              OpenStreetMap contributors
+            </a>
+            .
+          </p>
+        </div>
+      )}
+
       {summary.loading ? (
-        <p className="text-sm text-white/60 py-14 text-center">Loading…</p>
+        <p className="text-sm text-white/60 py-14 text-center">
+          <Loading label="Loading" className="!text-white/60" />
+        </p>
       ) : (
         <>
           <div className="mt-6">

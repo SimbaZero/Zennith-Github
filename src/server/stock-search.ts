@@ -33,10 +33,21 @@ function adminOrNull(env: unknown): FirestoreAdmin | null {
   }
 }
 
+/** Category aliases from the symptom lookup: a handful of short lower-case words, nothing else. */
+function cleanCategories(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((c): c is string => typeof c === "string")
+    .map((c) => c.trim().toLowerCase().slice(0, 40))
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
 export async function searchClinicStock(
   idToken: unknown,
   rawTerm: unknown,
   env?: unknown,
+  rawCategories?: unknown,
 ): Promise<StockSearchResult> {
   if (normaliseTerm(rawTerm).length < MIN_TERM)
     return { ok: true, clinicLinked: true, items: [] };
@@ -47,7 +58,7 @@ export async function searchClinicStock(
   const uid = await verifyIdToken(idToken, fs.projectId);
   if (!uid) return { ok: false, reason: "unauthenticated" };
 
-  return findClinicStock(fs, uid, rawTerm);
+  return findClinicStock(fs, uid, rawTerm, rawCategories);
 }
 
 function normaliseTerm(raw: unknown): string {
@@ -61,8 +72,10 @@ export async function findClinicStock(
   fs: Pick<FirestoreAdmin, "get" | "query">,
   uid: string,
   rawTerm: unknown,
+  rawCategories?: unknown,
 ): Promise<StockSearchResult> {
   const term = normaliseTerm(rawTerm);
+  const categories = cleanCategories(rawCategories);
   if (term.length < MIN_TERM)
     return { ok: true, clinicLinked: true, items: [] };
 
@@ -92,7 +105,13 @@ export async function findClinicStock(
     .filter((r) => {
       const name = String(r.data.medName ?? "").toLowerCase();
       const category = String(r.data.category ?? "").toLowerCase();
-      return name.includes(term) || category.includes(term);
+      // The ordinary name/category match, plus (when the patient typed a
+      // symptom word) the stock categories that word points at.
+      return (
+        name.includes(term) ||
+        category.includes(term) ||
+        categories.some((c) => category.includes(c))
+      );
     })
     .slice(0, MAX_RESULTS)
     .map((r) => ({

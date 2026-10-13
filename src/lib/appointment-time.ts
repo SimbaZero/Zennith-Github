@@ -106,3 +106,37 @@ export function isUpcomingAppointmentStrict(
   const t = new Date(iso).getTime();
   return !Number.isNaN(t) && t > clinicWallClock(now).getTime();
 }
+
+/**
+ * Has this appointment's whole DAY gone by, by the clinic's calendar? Anything on
+ * an earlier day is closed: its status can no longer be changed from the doctor
+ * and nurse pages. (Later today, even if the time has passed, is not "past day":
+ * the clinic is still working that day.) An unreadable date is not locked.
+ */
+export function isPastDay(dateOrIso: string, now = new Date()): boolean {
+  const day = dateOrIso.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  return day < clinicWallClock(now).toISOString().slice(0, 10);
+}
+
+/**
+ * Why an appointment can't be BOOKED for this date and time, or null if it can.
+ *
+ * Booking at a time that has already gone by (by the clinic's clock) is refused:
+ * at 2 PM, a same-day 1 PM slot can't be booked. A later time today, and any
+ * future day, are unaffected. The same rule the reschedule flow applies.
+ */
+export function bookingTimeProblem(
+  date: string,
+  time: string,
+  now = new Date(),
+): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time))
+    return null; // an incomplete form is the form's own problem, not this rule's
+  if (isUpcomingAppointmentStrict(appointmentStart(date, time), now))
+    return null;
+  // "Now" itself is also past: an appointment must start after the current minute.
+  return isPastDay(date, now)
+    ? "That date has already passed. Choose today or a later day."
+    : "That time has already passed today. Choose a later time.";
+}

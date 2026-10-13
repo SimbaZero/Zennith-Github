@@ -1,18 +1,35 @@
 ﻿import { createFileRoute } from "@tanstack/react-router";
+import { DateField } from "@/components/DateField";
+import { Loading } from "@/components/Loading";
 import { useEffect, useMemo, useState } from "react";
 import {
   AppShell,
   StatusBadge,
   type AppointmentStatus,
 } from "@/components/AppShell";
-import { useCurrentDoctor, useDoctorAppointments } from "@/lib/doctor-service";
+import {
+  useCurrentDoctor,
+  useDoctorAppointments,
+  useDoctorScopeClinic,
+} from "@/lib/doctor-service";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 import { setAppointmentStatus, createAppointment } from "@/lib/clinic-data";
-import { OUTCOME_STATUSES, isOutcomeLocked } from "@/lib/appointment-time";
+import {
+  OUTCOME_STATUSES,
+  bookingTimeProblem,
+  isOutcomeLocked,
+  isPastDay,
+} from "@/lib/appointment-time";
+import { useClinicianReschedules } from "@/lib/reschedule";
+import { RescheduleRequests } from "@/components/RescheduleRequests";
+import { PatientPicker } from "@/components/PatientPicker";
+import { UpcomingAppointmentAlert } from "@/components/UpcomingAppointmentAlert";
 import {
   Plus,
   Check,
   Clock,
   X,
+  Lock,
   AlertCircle,
   ChevronLeft,
   ChevronRight,
@@ -68,10 +85,27 @@ const DAY_LABEL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function DoctorAppointments() {
   const { date: searchDate } = Route.useSearch();
   const { doctor } = useCurrentDoctor();
-  const { appointments, loading } = useDoctorAppointments(doctor?.doctorId);
+  // A doctor at several clinics sees the appointments of the clinic chosen in
+  // the header switcher; at one clinic, everything addressed to them.
+  const scopeClinic = useDoctorScopeClinic(doctor);
+  const { activeClinicId } = useRealActiveClinic(doctor?.clinicIds, "doctor");
+  const { appointments, loading } = useDoctorAppointments(
+    doctor?.doctorId,
+    scopeClinic,
+  );
+  const reschedules = useClinicianReschedules(doctor?.doctorId);
+  const patientNames = useMemo(
+    () =>
+      Object.fromEntries(appointments.map((a) => [a.patientId, a.patientName])),
+    [appointments],
+  );
 
   const today = toIso(new Date());
   const [selected, setSelected] = useState(searchDate ?? today);
+  // Already on this page when a notification links to another day.
+  useEffect(() => {
+    if (searchDate) setSelected(searchDate);
+  }, [searchDate]);
   const weekDates = useMemo(() => weekDatesFor(selected), [selected]);
 
   const apptsByDate = useMemo(() => {
@@ -101,6 +135,9 @@ function DoctorAppointments() {
   const outcomeLocked = (a: { date: string; time: string }, status: string) =>
     OUTCOME_STATUSES.includes(status) && isOutcomeLocked(a.date, a.time, clock);
 
+  // Once an appointment's day has passed it is closed: no status changes at all.
+  const dayClosed = (a: { date: string }) => isPastDay(a.date, clock);
+
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [staged, setStaged] = useState<Record<string, AppointmentStatus>>({});
@@ -122,6 +159,10 @@ function DoctorAppointments() {
     const status = staged[docId];
     if (!status) return;
     const appt = appointments.find((x) => x.docId === docId);
+    if (appt && dayClosed(appt)) {
+      toast.error("That appointment's day has passed, so it can't be changed");
+      return;
+    }
     if (appt && outcomeLocked(appt, status)) {
       toast.error(`That can't be recorded before ${appt.time}`);
       return;
@@ -151,12 +192,19 @@ function DoctorAppointments() {
     type: "Follow-up",
   });
 
+  // Re-checked every half minute (the clock above), so a slot that was fine
+  // when the form was opened is refused once its time has passed.
+  const timeProblem = bookingTimeProblem(draft.date, draft.time, clock);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!draft.patientId.trim())
-      return toast.error("Patient ID is required (e.g. Pat-828)");
+      return toast.error(
+        "Choose a patient: enter their Patient ID (e.g. Pat-828) or search by name",
+      );
     if (!draft.date || !draft.time)
       return toast.error("Date and time are required");
+    if (timeProblem) return toast.error(timeProblem);
 
     setSaving(true);
     try {
@@ -200,6 +248,18 @@ function DoctorAppointments() {
 
   return (
     <AppShell role="doctor" title="Appointments">
+      <UpcomingAppointmentAlert
+        appointments={appointments}
+        clinicianId={doctor?.doctorId}
+        actorId={doctor?.doctorId ?? ""}
+        onStart={(docId) => setAppointmentStatus(docId, "In-progress")}
+        onNoShow={(docId) => setAppointmentStatus(docId, "No-show")}
+      />
+      <RescheduleRequests
+        requests={reschedules}
+        patientNames={patientNames}
+        actorId={doctor?.doctorId ?? ""}
+      />
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <button
@@ -260,7 +320,7 @@ function DoctorAppointments() {
 
       {loading && (
         <p className="text-sm text-muted-foreground mb-2">
-          Loading appointments…
+          <Loading label="Loading appointments" />
         </p>
       )}
 
@@ -320,24 +380,33 @@ function DoctorAppointments() {
             onSubmit={submit}
             className="p-5 border-b bg-secondary/40 grid grid-cols-1 md:grid-cols-4 gap-3"
           >
-            <Field
-              label="Patient ID"
+            <PatientPicker
               value={draft.patientId}
               onChange={(v) => setDraft({ ...draft, patientId: v })}
-              placeholder="e.g. Pat-828"
+              clinicId={activeClinicId ?? doctor?.clinicId}
             />
-            <Field
+            <DateField
               label="Date"
-              type="date"
               value={draft.date}
               onChange={(v) => setDraft({ ...draft, date: v })}
             />
-            <Field
-              label="Time"
-              type="time"
-              value={draft.time}
-              onChange={(v) => setDraft({ ...draft, time: v })}
-            />
+            <div>
+              <Field
+                label="Time"
+                type="time"
+                value={draft.time}
+                onChange={(v) => setDraft({ ...draft, time: v })}
+              />
+              {timeProblem && (
+                <p
+                  role="alert"
+                  data-testid="booking-time-problem"
+                  className="mt-1 text-xs text-destructive"
+                >
+                  {timeProblem}
+                </p>
+              )}
+            </div>
             <Field
               label="Type"
               value={draft.type}
@@ -353,7 +422,7 @@ function DoctorAppointments() {
               </button>
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || !!timeProblem}
                 className="bg-[oklch(0.55_0.18_245)] text-white px-3 py-1.5 rounded-md text-sm disabled:opacity-60"
               >
                 {saving ? "Saving…" : "Save appointment"}
@@ -391,42 +460,62 @@ function DoctorAppointments() {
                     <td className="px-5 py-3.5">{a.type}</td>
                     <td className="px-5 py-3.5">
                       <StatusBadge status={a.status} />
+                      {reschedules.some(
+                        (r) =>
+                          r.appointmentId === a.docId && r.status === "pending",
+                      ) && (
+                        <span className="ml-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-900">
+                          Reschedule requested
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        {actions.map(({ status, icon: Icon, cls }) => {
-                          const isCurrent = a.status === status;
-                          const isStaged = staged[a.docId] === status;
-                          const locked = outcomeLocked(a, status);
-                          return (
-                            <button
-                              key={status}
-                              disabled={isPending || locked}
-                              onClick={() =>
-                                stageStatus(a.docId, status, a.status)
-                              }
-                              title={
-                                locked
-                                  ? `Available once the appointment time (${a.time}) has arrived`
-                                  : isCurrent
-                                    ? `Currently ${status}`
-                                    : `Stage: ${status}`
-                              }
-                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed ${
-                                isStaged
-                                  ? cls +
-                                    " ring-2 ring-offset-1 ring-[oklch(0.55_0.18_245)]"
-                                  : isCurrent
-                                    ? cls + " opacity-60"
-                                    : "border bg-white hover:bg-secondary text-foreground"
-                              }`}
-                            >
-                              <Icon size={12} />
-                              <span className="hidden xl:inline">{status}</span>
-                            </button>
-                          );
-                        })}
-                        {staged[a.docId] && (
+                        {(dayClosed(a) ? [] : actions).map(
+                          ({ status, icon: Icon, cls }) => {
+                            const isCurrent = a.status === status;
+                            const isStaged = staged[a.docId] === status;
+                            const locked = outcomeLocked(a, status);
+                            return (
+                              <button
+                                key={status}
+                                disabled={isPending || locked}
+                                onClick={() =>
+                                  stageStatus(a.docId, status, a.status)
+                                }
+                                title={
+                                  locked
+                                    ? `Available once the appointment time (${a.time}) has arrived`
+                                    : isCurrent
+                                      ? `Currently ${status}`
+                                      : `Stage: ${status}`
+                                }
+                                className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                                  isStaged
+                                    ? cls +
+                                      " ring-2 ring-offset-1 ring-[oklch(0.55_0.18_245)]"
+                                    : isCurrent
+                                      ? cls + " opacity-60"
+                                      : "border bg-white hover:bg-secondary text-foreground"
+                                }`}
+                              >
+                                <Icon size={12} />
+                                <span className="hidden xl:inline">
+                                  {status}
+                                </span>
+                              </button>
+                            );
+                          },
+                        )}
+                        {dayClosed(a) && (
+                          <span
+                            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+                            title="This appointment's day has passed, so its status can no longer be changed"
+                          >
+                            <Lock size={12} /> Locked · day has passed
+                          </span>
+                        )}
+                        {staged[a.docId] && !dayClosed(a) && (
                           <button
                             onClick={() => confirmStatus(a.docId)}
                             disabled={isPending}

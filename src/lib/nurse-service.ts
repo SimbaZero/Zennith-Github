@@ -27,6 +27,7 @@ import { auth, db } from "@/lib/firebase";
 // pharmacist-service.ts. Imported rather than reimplemented so a nurse
 // dispense and a pharmacist handover raise reorders on identical rules.
 import { maybeRaiseReorder } from "@/lib/pharmacist-service";
+import { cleanDosingNote, dispensedNotice } from "@/lib/dispense-notice";
 
 // Reused, not duplicated — these were previously private to doctor-service.ts.
 // See doctor-service.ts for what each one actually does; the comments there
@@ -853,6 +854,12 @@ export interface DispenseInput {
   unitsGiven: number;
   nurseId: string;
   note?: string;
+  /**
+   * How the patient should take it ("Take twice daily"). Sent to the patient in
+   * the "medication dispensed" notification and kept on the dispensing record.
+   * Separate from `note`, which is context for staff and never sent.
+   */
+  dosingNote?: string;
   /** When provided, also stamps this patient's Last Visit as today —
    *  getting medication is a real visit, not just a Digitize scan. */
   medicalRecordNo?: number;
@@ -909,6 +916,7 @@ export async function dispenseMedication(input: DispenseInput): Promise<void> {
       unitsGiven: input.unitsGiven,
       nurseId: input.nurseId,
       note: input.note || null,
+      dosingNote: cleanDosingNote(input.dosingNote) || null,
       createdAt: serverTimestamp(),
     });
     if (input.medicalRecordNo != null) {
@@ -929,13 +937,20 @@ export async function dispenseMedication(input: DispenseInput): Promise<void> {
     // Real notification for the patient — same collection/shape Receptionist's
     // callPatient() already writes to, not a new mechanism.
     if (patientUserId != null && !Number.isNaN(patientUserId)) {
+      const notice = dispensedNotice({
+        unitsGiven: input.unitsGiven,
+        medName: input.medName,
+        dosingNote: input.dosingNote,
+      });
       tx.set(doc(collection(db, "notifications")), {
         notifId: Date.now(),
         userId: patientUserId,
-        title: "Medication dispensed",
-        message: `You were given ${input.unitsGiven}× ${input.medName}.`,
+        title: notice.title,
+        message: notice.message,
         isRead: false,
         timeSent: new Date().toISOString(),
+        // Where the prescription and dosage live.
+        link: "/patient/medical-record",
       });
     }
   });

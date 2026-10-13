@@ -97,7 +97,7 @@ const pharmacistIndex: SearchEntry[] = [
     keywords: ["medications", "inventory", "units"],
   },
   {
-    label: "Fast Lane Handover",
+    label: "Stable Patient Handover",
     section: "Pharmacy",
     path: "/pharmacist/diagnostics",
     // "prescription" and "dispense" kept deliberately: the page was called
@@ -109,7 +109,8 @@ const pharmacistIndex: SearchEntry[] = [
       "dispense",
       "handover",
       "hand over",
-      "fast lane",
+      "stable patient",
+      "ccmdd",
       "collect",
       "patients",
     ],

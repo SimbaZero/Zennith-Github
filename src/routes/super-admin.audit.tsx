@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useMemo, useState } from "react";
 import { ChevronDown, KeyRound, Search, Users } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
@@ -269,7 +270,9 @@ function SuperAdminAudit() {
               </label>
             </div>
             {loading ? (
-              <AuditEmptyLine>Loading…</AuditEmptyLine>
+              <AuditEmptyLine>
+                <Loading label="Loading" />
+              </AuditEmptyLine>
             ) : visibleHistory.length === 0 ? (
               <AuditEmptyLine>
                 {needle || onlyFailed
@@ -294,7 +297,9 @@ function SuperAdminAudit() {
             hint="Logins revoked, at any clinic"
           >
             {loading ? (
-              <AuditEmptyLine>Loading…</AuditEmptyLine>
+              <AuditEmptyLine>
+                <Loading label="Loading" />
+              </AuditEmptyLine>
             ) : (
               <AuditEventList
                 rows={removedRows}

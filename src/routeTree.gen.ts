@@ -12,10 +12,12 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as TwoFactorRouteImport } from './routes/two-factor'
 import { Route as SuperAdminRouteImport } from './routes/super-admin'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as SetPasswordRouteImport } from './routes/set-password'
 import { Route as ReceptionistRouteImport } from './routes/receptionist'
 import { Route as PharmacistRouteImport } from './routes/pharmacist'
 import { Route as PatientRouteImport } from './routes/patient'
 import { Route as NurseRouteImport } from './routes/nurse'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as DoctorRouteImport } from './routes/doctor'
@@ -29,6 +31,7 @@ import { Route as PatientIndexRouteImport } from './routes/patient.index'
 import { Route as NurseIndexRouteImport } from './routes/nurse.index'
 import { Route as DoctorIndexRouteImport } from './routes/doctor.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as SuperAdminRequestsRouteImport } from './routes/super-admin.requests'
 import { Route as SuperAdminFacilitiesRouteImport } from './routes/super-admin.facilities'
 import { Route as SuperAdminAuditRouteImport } from './routes/super-admin.audit'
 import { Route as SuperAdminApplicationsRouteImport } from './routes/super-admin.applications'
@@ -52,6 +55,7 @@ import { Route as DoctorPatientsRouteImport } from './routes/doctor.patients'
 import { Route as DoctorAppointmentsRouteImport } from './routes/doctor.appointments'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
+import { Route as AdminRequestsRouteImport } from './routes/admin.requests'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
 import { Route as ReceptionistProfilesPidRouteImport } from './routes/receptionist.profiles_.$pid'
 import { Route as NursePatientRecordPidRouteImport } from './routes/nurse.patient-record.$pid'
@@ -73,6 +77,11 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SetPasswordRoute = SetPasswordRouteImport.update({
+  id: '/set-password',
+  path: '/set-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ReceptionistRoute = ReceptionistRouteImport.update({
   id: '/receptionist',
   path: '/receptionist',
@@ -91,6 +100,11 @@ const PatientRoute = PatientRouteImport.update({
 const NurseRoute = NurseRouteImport.update({
   id: '/nurse',
   path: '/nurse',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -157,6 +171,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminRoute,
+} as any)
+const SuperAdminRequestsRoute = SuperAdminRequestsRouteImport.update({
+  id: '/requests',
+  path: '/requests',
+  getParentRoute: () => SuperAdminRoute,
 } as any)
 const SuperAdminFacilitiesRoute = SuperAdminFacilitiesRouteImport.update({
   id: '/facilities',
@@ -275,6 +294,11 @@ const AdminStaffRoute = AdminStaffRouteImport.update({
   path: '/staff',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminRequestsRoute = AdminRequestsRouteImport.update({
+  id: '/requests',
+  path: '/requests',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminAuditRoute = AdminAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
@@ -308,14 +332,17 @@ export interface FileRoutesByFullPath {
   '/doctor': typeof DoctorRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/nurse': typeof NurseRouteWithChildren
   '/patient': typeof PatientRouteWithChildren
   '/pharmacist': typeof PharmacistRouteWithChildren
   '/receptionist': typeof ReceptionistRouteWithChildren
+  '/set-password': typeof SetPasswordRoute
   '/signup': typeof SignupRoute
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/requests': typeof AdminRequestsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -339,6 +366,7 @@ export interface FileRoutesByFullPath {
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
+  '/super-admin/requests': typeof SuperAdminRequestsRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
   '/nurse/': typeof NurseIndexRoute
@@ -356,9 +384,12 @@ export interface FileRoutesByTo {
   '/clinic-signup': typeof ClinicSignupRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
+  '/set-password': typeof SetPasswordRoute
   '/signup': typeof SignupRoute
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/requests': typeof AdminRequestsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -382,6 +413,7 @@ export interface FileRoutesByTo {
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
+  '/super-admin/requests': typeof SuperAdminRequestsRoute
   '/admin': typeof AdminIndexRoute
   '/doctor': typeof DoctorIndexRoute
   '/nurse': typeof NurseIndexRoute
@@ -402,14 +434,17 @@ export interface FileRoutesById {
   '/doctor': typeof DoctorRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/nurse': typeof NurseRouteWithChildren
   '/patient': typeof PatientRouteWithChildren
   '/pharmacist': typeof PharmacistRouteWithChildren
   '/receptionist': typeof ReceptionistRouteWithChildren
+  '/set-password': typeof SetPasswordRoute
   '/signup': typeof SignupRoute
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/requests': typeof AdminRequestsRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -433,6 +468,7 @@ export interface FileRoutesById {
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
+  '/super-admin/requests': typeof SuperAdminRequestsRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
   '/nurse/': typeof NurseIndexRoute
@@ -454,14 +490,17 @@ export interface FileRouteTypes {
     | '/doctor'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
     | '/nurse'
     | '/patient'
     | '/pharmacist'
     | '/receptionist'
+    | '/set-password'
     | '/signup'
     | '/super-admin'
     | '/two-factor'
     | '/admin/audit'
+    | '/admin/requests'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -485,6 +524,7 @@ export interface FileRouteTypes {
     | '/super-admin/applications'
     | '/super-admin/audit'
     | '/super-admin/facilities'
+    | '/super-admin/requests'
     | '/admin/'
     | '/doctor/'
     | '/nurse/'
@@ -502,9 +542,12 @@ export interface FileRouteTypes {
     | '/clinic-signup'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
+    | '/set-password'
     | '/signup'
     | '/two-factor'
     | '/admin/audit'
+    | '/admin/requests'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -528,6 +571,7 @@ export interface FileRouteTypes {
     | '/super-admin/applications'
     | '/super-admin/audit'
     | '/super-admin/facilities'
+    | '/super-admin/requests'
     | '/admin'
     | '/doctor'
     | '/nurse'
@@ -547,14 +591,17 @@ export interface FileRouteTypes {
     | '/doctor'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
     | '/nurse'
     | '/patient'
     | '/pharmacist'
     | '/receptionist'
+    | '/set-password'
     | '/signup'
     | '/super-admin'
     | '/two-factor'
     | '/admin/audit'
+    | '/admin/requests'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -578,6 +625,7 @@ export interface FileRouteTypes {
     | '/super-admin/applications'
     | '/super-admin/audit'
     | '/super-admin/facilities'
+    | '/super-admin/requests'
     | '/admin/'
     | '/doctor/'
     | '/nurse/'
@@ -598,10 +646,12 @@ export interface RootRouteChildren {
   DoctorRoute: typeof DoctorRouteWithChildren
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
+  NotificationsRoute: typeof NotificationsRoute
   NurseRoute: typeof NurseRouteWithChildren
   PatientRoute: typeof PatientRouteWithChildren
   PharmacistRoute: typeof PharmacistRouteWithChildren
   ReceptionistRoute: typeof ReceptionistRouteWithChildren
+  SetPasswordRoute: typeof SetPasswordRoute
   SignupRoute: typeof SignupRoute
   SuperAdminRoute: typeof SuperAdminRouteWithChildren
   TwoFactorRoute: typeof TwoFactorRoute
@@ -630,6 +680,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/set-password': {
+      id: '/set-password'
+      path: '/set-password'
+      fullPath: '/set-password'
+      preLoaderRoute: typeof SetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/receptionist': {
       id: '/receptionist'
       path: '/receptionist'
@@ -656,6 +713,13 @@ declare module '@tanstack/react-router' {
       path: '/nurse'
       fullPath: '/nurse'
       preLoaderRoute: typeof NurseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -748,6 +812,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/super-admin/requests': {
+      id: '/super-admin/requests'
+      path: '/requests'
+      fullPath: '/super-admin/requests'
+      preLoaderRoute: typeof SuperAdminRequestsRouteImport
+      parentRoute: typeof SuperAdminRoute
     }
     '/super-admin/facilities': {
       id: '/super-admin/facilities'
@@ -910,6 +981,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminStaffRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/requests': {
+      id: '/admin/requests'
+      path: '/requests'
+      fullPath: '/admin/requests'
+      preLoaderRoute: typeof AdminRequestsRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/audit': {
       id: '/admin/audit'
       path: '/audit'
@@ -950,6 +1028,7 @@ declare module '@tanstack/react-router' {
 
 interface AdminRouteChildren {
   AdminAuditRoute: typeof AdminAuditRoute
+  AdminRequestsRoute: typeof AdminRequestsRoute
   AdminStaffRoute: typeof AdminStaffRoute
   AdminUsersRoute: typeof AdminUsersRoute
   AdminIndexRoute: typeof AdminIndexRoute
@@ -957,6 +1036,7 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditRoute: AdminAuditRoute,
+  AdminRequestsRoute: AdminRequestsRoute,
   AdminStaffRoute: AdminStaffRoute,
   AdminUsersRoute: AdminUsersRoute,
   AdminIndexRoute: AdminIndexRoute,
@@ -1068,6 +1148,7 @@ interface SuperAdminRouteChildren {
   SuperAdminApplicationsRoute: typeof SuperAdminApplicationsRoute
   SuperAdminAuditRoute: typeof SuperAdminAuditRoute
   SuperAdminFacilitiesRoute: typeof SuperAdminFacilitiesRoute
+  SuperAdminRequestsRoute: typeof SuperAdminRequestsRoute
   SuperAdminIndexRoute: typeof SuperAdminIndexRoute
 }
 
@@ -1075,6 +1156,7 @@ const SuperAdminRouteChildren: SuperAdminRouteChildren = {
   SuperAdminApplicationsRoute: SuperAdminApplicationsRoute,
   SuperAdminAuditRoute: SuperAdminAuditRoute,
   SuperAdminFacilitiesRoute: SuperAdminFacilitiesRoute,
+  SuperAdminRequestsRoute: SuperAdminRequestsRoute,
   SuperAdminIndexRoute: SuperAdminIndexRoute,
 }
 
@@ -1089,10 +1171,12 @@ const rootRouteChildren: RootRouteChildren = {
   DoctorRoute: DoctorRouteWithChildren,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
+  NotificationsRoute: NotificationsRoute,
   NurseRoute: NurseRouteWithChildren,
   PatientRoute: PatientRouteWithChildren,
   PharmacistRoute: PharmacistRouteWithChildren,
   ReceptionistRoute: ReceptionistRouteWithChildren,
+  SetPasswordRoute: SetPasswordRoute,
   SignupRoute: SignupRoute,
   SuperAdminRoute: SuperAdminRouteWithChildren,
   TwoFactorRoute: TwoFactorRoute,

@@ -1,5 +1,9 @@
 import type { QueueAuditEvent } from "@/lib/clinic-data";
 import type { SystemLog } from "@/lib/audit";
+import {
+  LEGACY_FAST_LANE_AUDIT_ACTION,
+  STABLE_PATIENT_AUDIT_ACTION,
+} from "@/lib/stable-patient";
 
 // Turns raw audit records into a sentence a person can read, e.g.
 //   "Reception updated Pat-204's personal details"
@@ -231,10 +235,12 @@ export function phraseStaffLog(log: SystemLog): PhrasedEvent {
     }
   }
 
-  // Fast Lane changes and pharmacy handovers are already written as sentences
-  // by the code that records them, so they are shown as recorded.
+  // Stable-patient changes and pharmacy handovers are already written as
+  // sentences by the code that records them, so they are shown as recorded.
+  // (Entries made before the rename carry the old action type.)
   if (
-    log.action_type === "patient.fast_lane_changed" ||
+    log.action_type === STABLE_PATIENT_AUDIT_ACTION ||
+    log.action_type === LEGACY_FAST_LANE_AUDIT_ACTION ||
     log.action_type === "pharmacist.medication_handover"
   ) {
     return { text: d.replace(/\.$/, "") };

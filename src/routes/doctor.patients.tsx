@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
@@ -59,15 +60,17 @@ function DoctorPatientFilesTable({ clinicId }: { clinicId?: number }) {
           <p
             className={`text-xs mt-0.5 ${pageError ? "text-destructive" : "text-muted-foreground"}`}
           >
-            {pageError
-              ? `Could not load patients: ${pageError}`
-              : pageLoading
-                ? "Loading patients…"
-                : idQuery
-                  ? "Looking up Patient ID"
-                  : isSearching
-                    ? `${page.length}${hasMore ? "+" : ""} match${page.length === 1 && !hasMore ? "" : "es"} — searching by name (start of first name or surname)`
-                    : `Showing ${page.length}${hasMore ? "+" : ""} patients — search by name or exact Patient ID`}
+            {pageError ? (
+              `Could not load patients: ${pageError}`
+            ) : pageLoading ? (
+              <Loading label="Loading patients" size={12} />
+            ) : idQuery ? (
+              "Looking up Patient ID"
+            ) : isSearching ? (
+              `${page.length}${hasMore ? "+" : ""} match${page.length === 1 && !hasMore ? "" : "es"} — searching by name (start of first name or surname)`
+            ) : (
+              `Showing ${page.length}${hasMore ? "+" : ""} patients — search by name or exact Patient ID`
+            )}
           </p>
         </div>
         <input
@@ -133,7 +136,11 @@ function DoctorPatientFilesTable({ clinicId }: { clinicId?: number }) {
             disabled={loadingMore}
             className="border px-4 py-1.5 rounded-md text-sm hover:bg-secondary disabled:opacity-50"
           >
-            {loadingMore ? "Loading…" : "Load more"}
+            {loadingMore ? (
+              <Loading label="Loading" size={14} className="!text-inherit" />
+            ) : (
+              "Load more"
+            )}
           </button>
         </div>
       )}

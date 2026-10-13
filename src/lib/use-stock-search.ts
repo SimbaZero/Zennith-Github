@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { auth } from "@/firebase";
 import { searchMyClinicStock, type StockSearchItem } from "@/lib/stock-search";
+import { matchSymptom, type SymptomMatch } from "@/lib/symptom-categories";
 
 export const STOCK_SEARCH_MIN_CHARS = 2;
 const DEBOUNCE_MS = 250;
@@ -8,7 +9,13 @@ const DEBOUNCE_MS = 250;
 export type StockSearchState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "done"; items: StockSearchItem[]; clinicLinked: boolean }
+  | {
+      status: "done";
+      items: StockSearchItem[];
+      clinicLinked: boolean;
+      /** Set when the typed words were read as a symptom (a category match). */
+      symptom: SymptomMatch | null;
+    }
   // `unavailable`: the lookup couldn't be completed (server not configured,
   // offline, signed out). Never a reason to stop the person typing.
   | { status: "unavailable" };
@@ -20,12 +27,17 @@ export type StockSearchState =
  * for "par" can't overwrite the answer for "paracetamol", and a failure leaves
  * the input alone - the caller never needs to disable it.
  */
-export function useStockSearch(term: string): StockSearchState {
+export function useStockSearch(
+  term: string,
+): StockSearchState & { symptom: SymptomMatch | null } {
   const [state, setState] = useState<StockSearchState>({ status: "idle" });
   const latest = useRef(0);
 
   useEffect(() => {
     const t = term.trim();
+    // A symptom word is read first; if there isn't one this is exactly the
+    // ordinary name/category search.
+    const symptom = matchSymptom(t);
     const mine = ++latest.current;
     if (t.length < STOCK_SEARCH_MIN_CHARS) {
       setState({ status: "idle" });
@@ -36,7 +48,13 @@ export function useStockSearch(term: string): StockSearchState {
       try {
         const idToken = await auth.currentUser?.getIdToken();
         if (!idToken) throw new Error("not signed in");
-        const res = await searchMyClinicStock({ data: { idToken, term: t } });
+        const res = await searchMyClinicStock({
+          data: {
+            idToken,
+            term: t,
+            categories: symptom ? symptom.categories : undefined,
+          },
+        });
         if (mine !== latest.current) return;
         setState(
           res.ok
@@ -44,6 +62,7 @@ export function useStockSearch(term: string): StockSearchState {
                 status: "done",
                 items: res.items,
                 clinicLinked: res.clinicLinked,
+                symptom,
               }
             : { status: "unavailable" },
         );
@@ -56,5 +75,6 @@ export function useStockSearch(term: string): StockSearchState {
     return () => clearTimeout(timer);
   }, [term]);
 
-  return state;
+  // Known as soon as it is typed, so the notice doesn't wait on the network.
+  return { ...state, symptom: matchSymptom(term.trim()) };
 }

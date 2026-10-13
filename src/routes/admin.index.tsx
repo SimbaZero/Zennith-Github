@@ -1,7 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { STAFF_ROLES, useCurrentAdmin } from "@/lib/auth";
-import { fetchClinicStaff, useDatabaseReachable } from "@/lib/clinic-data";
+import {
+  fetchClinicStaff,
+  useDatabaseReachable,
+  type DatabaseState,
+} from "@/lib/clinic-data";
+import { DUPLICATE_TAB_MESSAGE } from "@/lib/tab-presence";
 import { useQuery } from "@tanstack/react-query";
 import { UserPlus, ShieldCheck, Users } from "lucide-react";
 
@@ -96,7 +101,7 @@ function AdminDashboard() {
   );
 }
 
-function DbStat({ state }: { state: "checking" | "online" | "offline" }) {
+function DbStat({ state }: { state: DatabaseState }) {
   const cfg = {
     checking: {
       dot: "bg-[oklch(0.7_0.02_260)]",
@@ -112,6 +117,18 @@ function DbStat({ state }: { state: "checking" | "online" | "offline" }) {
       dot: "bg-[oklch(0.6_0.22_25)]",
       text: "Offline",
       sub: "Can't reach the database",
+    },
+    // Reachable-or-not is only part of what can go wrong; saying "offline" for
+    // an error that isn't a connection problem sends people to the wrong fix.
+    error: {
+      dot: "bg-[oklch(0.75_0.15_70)]",
+      text: "Check failed",
+      sub: "The database answered with an error — the connection itself looks fine",
+    },
+    "other-tab": {
+      dot: "bg-[oklch(0.75_0.15_70)]",
+      text: "Another tab",
+      sub: DUPLICATE_TAB_MESSAGE,
     },
   }[state];
   return (

@@ -41,11 +41,18 @@ points and suggested order quantities, calculated from what has actually been ha
 patients over the last 30 days — not from invented demand figures. When a
 pharmacist-set threshold is crossed, a reorder notification is raised automatically.
 
-**Fast Lane.** A nurse or doctor can mark a stable chronic patient as able to collect
-their repeat medication straight from the pharmacist, without queuing through a nurse
-first. This is the clinician's own judgement and nothing else: the patient's dose-taking
-history is shown as evidence to weigh, the way a blood-pressure reading is evidence. No
-score decides it, and nothing sets the flag automatically.
+**Stable patient (CCMDD-eligible).** A nurse or doctor can mark a stable chronic patient
+as a stable patient: stable enough that the clinic could consider fewer in-person visits,
+with repeat medicine collected from an alternative pickup point under South Africa's CCMDD
+programme (Central Chronic Medicines Dispensing and Distribution, also called
+"dablapmeds"). It is not queue priority and not an official CCMDD assessment, and it is
+labelled that way wherever it is shown ("Internal estimate only — not an official CCMDD
+assessment"). It is the clinician's own judgement and nothing else: the patient's
+dose-taking history is shown as evidence to weigh, the way a blood-pressure reading is
+evidence. No score decides it, and nothing sets the flag automatically. Within the clinic,
+a stable patient can also have repeat medication handed over directly by the pharmacist
+(Pharmacist → Stable Patient Handover). This was called "Fast Lane" before it was renamed;
+patients already marked keep their status.
 
 **Notifications for every role, not just patients.** Overdue triage alerts to reception,
 stock and reorder alerts to pharmacy and clinic admins, appointment reminders to patients
@@ -155,6 +162,43 @@ appointment reminders, `VITE_GEMINI_API_KEY` for OCR on the Digitize Files page.
 server-side ones have no `VITE_` prefix on purpose — that prefix would publish them in
 the browser bundle. In production set them with `wrangler secret put NAME`.
 
+**Several clinics, with approval.** A doctor or pharmacist can work at more than one
+clinic and switch between them from the clinic name in the header. Adding a clinic from
+the admin's All Staff page is a *request*: it creates a pending record in
+`clinicAssignmentRequests`, notifies every admin and super admin, and takes effect only
+when one of them approves it on the Clinic Requests page (taking a clinic away applies at
+once). There is one global admin role, so any admin can decide any request.
+
+**Stock Deliveries** is laid out as labelled zones, because two different actions used to
+read as one. *Order from supplier* is the pharmacy replenishing itself (stock goes up only
+when a delivery is confirmed as arrived, with the amount typed in). *Send to clinic* is
+the pharmacy's own stock going out to a clinic (the clinic gains it when a nurse confirms).
+Each has a "Suggested" version, driven by low-stock detection, and a "Manual" one;
+completed deliveries sit behind a collapsed, searchable history.
+
+**Login links after registration.** Reception can send a newly registered patient a link
+to set their own password.
+
+- **E-mail** (a patient with a real address on their record) uses Firebase Auth's own
+  password-reset e-mail: the patient's account is created up front, linked to the patient
+  record, and Firebase sends the e-mail from its own sender. No mail domain needs
+  verifying and no `RESEND_*` setting is involved. (Firebase's shared sender tends to land
+  in spam; custom sender settings are in the Firebase console, under Authentication →
+  Templates.)
+- **Text message** (and any patient with no e-mail) uses our own one-time link, because
+  Firebase has no SMS equivalent. Following it creates the account, or sets the password
+  on the one the e-mail path already made.
+- **Signing in with the Patient ID instead** (an address another login owns) has no real
+  address for Firebase to write to, so its e-mail still goes through Resend and needs
+  `RESEND_API_KEY` and a verified `RESEND_FROM`.
+
+Each channel is reported as *test mode* (and only recorded on the server) until it is
+really on: text messages are live only when `SMSPORTAL_CLIENT_ID`/`SMSPORTAL_API_SECRET`
+are set and `SMSPORTAL_TEST_MODE` is not `true`; `EMAIL_TEST_MODE=true` forces e-mail into
+test mode, in which no account is created and nothing is sent. Once live, the screen says
+"If this number/email is reachable, a link … has been sent" whether or not delivery
+succeeds; real failures are in the server log.
+
 Two things that cost people an afternoon:
 
 - **Plain `KEY=value` lines only.** Pasting the JavaScript config object out of the
@@ -257,9 +301,13 @@ is what you want for testing anything cross-clinic.
 > After the password step, the **first** login for each account shows a QR code. Scan it
 > with Google Authenticator, Authy or Microsoft Authenticator and enter the 6-digit code
 > to enrol. Every login after that needs the current rotating code — typing random digits
-> does not work. The authenticator app is the only second factor, for every role. (Text-message
-> codes for patients were removed; a patient who used them is asked to set up an authenticator
-> app at their next sign-in.)
+> does not work. Staff use the authenticator app. **Patients can use either** the authenticator
+> app **or a text-message code** (sent by the server to the mobile number on their record), and
+> can switch between them on the sign-in screen themselves. Text messages need SMSPortal set up:
+> see `SMSPORTAL_CLIENT_ID` / `SMSPORTAL_API_SECRET` in `.env.example`. Where they aren't set,
+> the screen says "SMS isn't configured right now" and offers the authenticator instead. For
+> local testing, `SMSPORTAL_TEST_MODE=true` logs the code in the server console instead of
+> texting it.
 >
 > To reset an account's 2FA, an admin deletes the `totpSecret` field from its document in
 > the Firestore `profiles` collection.
@@ -358,7 +406,7 @@ data comes from `src/lib/`.
 `doctor-service.ts`, `pharmacist-service.ts`, `super-admin-service.ts`), plus
 `clinic-data.ts`, which is the shared Firestore layer for queue, patients, appointments
 and registration. Cross-cutting concerns live in their own small modules: `auth.ts`,
-`notify.ts`, `audit.ts`, `offline.ts`, `sa-id.ts`, `reminders.ts`, `fast-lane.ts`,
+`notify.ts`, `audit.ts`, `offline.ts`, `sa-id.ts`, `reminders.ts`, `stable-patient.ts`,
 `clinic-time.ts`. **`clinic-data.ts` is 2,600 lines and `pharmacist-service.ts` 1,800 —
 grep before adding a function, the one you want often already exists.**
 

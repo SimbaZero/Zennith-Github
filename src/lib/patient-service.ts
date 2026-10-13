@@ -7,6 +7,7 @@ import {
   getDocs,
   setDoc,
   serverTimestamp,
+  deleteField,
   onSnapshot,
   query,
   updateDoc,
@@ -22,11 +23,14 @@ import {
   adherenceDocId,
   cleanReminderTimes,
   formatTime12h,
+  takenAtKey,
+  undoTimeLeftMs,
   type AdherenceLogEntry,
 } from "@/lib/reminders";
-import { notifyUser, useReleaseWhenDue } from "@/lib/notify";
+import { notifyUser, userIdForStaff, useReleaseWhenDue } from "@/lib/notify";
 import { appointmentDateLabel, appointmentTime } from "@/lib/appointment-time";
 import { registerSessionCache } from "@/lib/session-caches";
+import { isStablePatient } from "@/lib/stable-patient";
 
 // ---------------------------------------------------------------------------
 // AUTH RACE FIX — same pattern as doctor-service.ts. On a hard reload our
@@ -77,10 +81,9 @@ export interface CurrentPatient {
   /** Times (24h "HH:MM") the patient asked to be reminded to take their
    *  medication. Empty/absent means no reminders set. */
   reminderTimes?: string[];
-  /** Set by a nurse or doctor, not by the patient (see nurse/doctor-service).
-   *  Only fast-lane patients may collect medication without queuing at the
-   *  pharmacy. */
-  fastLane?: boolean;
+  /** Stable patient (CCMDD-eligible). Set by a nurse or doctor, not by the
+   *  patient (see src/lib/stable-patient.ts). */
+  stablePatient?: boolean;
 }
 
 /**
@@ -268,7 +271,7 @@ export function useCurrentPatient(): {
       reminderTimes: Array.isArray(patientBase.reminderTimes)
         ? patientBase.reminderTimes
         : [],
-      fastLane: patientBase.fastLane === true,
+      stablePatient: isStablePatient(patientBase),
     });
     setLoading(false);
   }, [patientId, patientBase, userData, mrData, clinicData]);
@@ -547,6 +550,47 @@ export async function markAllNotificationsRead(
   await Promise.all(docIds.map((id) => markNotificationRead(id)));
 }
 
+/** The text a clinician is shown when a patient cancels with a reason. */
+export function cancellationNoticeText(
+  appt: { type: string; dateTime: string },
+  patientId: string,
+  reason: string,
+): string {
+  const when = `${appointmentDateLabel(appt.dateTime, { day: "numeric", month: "short" })} at ${appointmentTime(appt.dateTime)}`;
+  return `${patientId} cancelled their ${appt.type} appointment on ${when}. Reason: ${reason.trim().slice(0, 300)}`;
+}
+
+/**
+ * Tells the clinician WHY a patient cancelled, when the patient said.
+ *
+ * It travels as a notification, not on the appointment: a patient's rules let
+ * them change an appointment's status and nothing else, so adding a reason field
+ * there would be refused and take the cancellation down with it. The cancellation
+ * itself has already happened by the time this runs, and this never throws.
+ */
+export async function notifyCancellationReason(
+  appt: { type: string; dateTime: string; clinicianId: string; docId?: string },
+  patientId: string,
+  reason: string,
+): Promise<void> {
+  const text = reason.trim();
+  if (!text || !appt.clinicianId) return;
+  try {
+    const col = /^doc/i.test(appt.clinicianId) ? "doctors" : "nurses";
+    const staffUserId = await userIdForStaff(col, appt.clinicianId);
+    if (staffUserId == null) return;
+    await notifyUser({
+      userId: staffUserId,
+      title: "Appointment cancelled by patient",
+      message: cancellationNoticeText(appt, patientId, text),
+      // That day, with the cancelled appointment highlighted.
+      link: `${col === "doctors" ? "/doctor/appointments" : "/nurse/appointments"}?date=${appt.dateTime.slice(0, 10)}${appt.docId ? `#appt-${appt.docId}` : ""}`,
+    });
+  } catch (err) {
+    console.error("Couldn't pass on the cancellation reason:", err);
+  }
+}
+
 /**
  * Schedules a reminder about an appointment for `deliverAt`.
  *
@@ -583,7 +627,7 @@ export async function requestAppointmentReminder(
       // Ordered in the list by when it arrives, not when it was asked for.
       timeSent: deliverAt.toISOString(),
       deliverAt: deliverAt.toISOString(),
-      link: "/patient/appointments",
+      link: `/patient/appointments#appt-${appt.docId}`,
     },
   );
   // Offline the promise waits for the server; the write is queued and sent on
@@ -643,6 +687,11 @@ export interface DoseStatus {
   takenTimes: string[] | null;
   /** Who recorded it. The patient may only undo their own claim. */
   source: "patient" | "nurse" | null;
+  /** When the patient confirmed each reminder time's dose (ISO instant), keyed
+   *  by takenAtKey("08:00"). Empty for a nurse's log or an older one. */
+  takenAtByTime: Record<string, string>;
+  /** When the patient confirmed a day-level dose (no reminder times set). */
+  takenAt: string | null;
   /** The lookup itself failed (e.g. the database is over its daily limit),
    *  so "not taken" would be a guess, not a fact. */
   failed: boolean;
@@ -653,8 +702,18 @@ const DOSE_UNKNOWN: DoseStatus = {
   taken: false,
   takenTimes: null,
   source: null,
+  takenAtByTime: {},
+  takenAt: null,
   failed: false,
 };
+
+function cleanTakenAt(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === "object")
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>))
+      if (typeof v === "string") out[k] = v;
+  return out;
+}
 
 /** Live status of today's dose, by anyone (patient or nurse) — so a dose a
  *  nurse witnessed silences the reminder too. */
@@ -688,6 +747,8 @@ export function useTodayDoseStatus(
             ? cleanReminderTimes(x.takenTimes)
             : null,
           source: x ? (x.source === "patient" ? "patient" : "nurse") : null,
+          takenAtByTime: cleanTakenAt(x?.takenAtByTime),
+          takenAt: typeof x?.takenAt === "string" ? x.takenAt : null,
         });
       },
       (err) => {
@@ -698,6 +759,8 @@ export function useTodayDoseStatus(
           taken: false,
           takenTimes: null,
           source: null,
+          takenAtByTime: {},
+          takenAt: null,
         });
       },
     );
@@ -749,13 +812,21 @@ export interface DoseSlotWrite {
 
 /** The patient marking their own dose as taken. Tagged source: "patient" so
  *  it is never mistaken for a dose a nurse witnessed. With `slot`, only that
- *  reminder time's dose is marked; without it, the day's single dose is. */
+ *  reminder time's dose is marked; without it, the day's single dose is.
+ *
+ *  The moment they confirmed is recorded with it (the ACTUAL time, which can
+ *  differ from the reminder time), and starts the short window in which they
+ *  can undo it. */
 export async function logSelfReportedDose(
   patientId: string,
   med: string,
   slot?: DoseSlotWrite,
 ): Promise<void> {
+  // Already marked (a double tap, or two tabs): leave the first confirmation,
+  // and its time, alone.
+  if (slot && slot.takenTimes.includes(slot.time)) return;
   const date = todayIsoDate();
+  const takenAt = new Date().toISOString();
   await setDoc(
     doc(db, "patients", patientId, "adherenceLogs", adherenceDocId(date, med)),
     {
@@ -768,22 +839,35 @@ export async function logSelfReportedDose(
         ? {
             takenTimes: cleanReminderTimes([...slot.takenTimes, slot.time]),
             expected: slot.expected,
+            takenAtByTime: { [takenAtKey(slot.time)]: takenAt },
           }
-        : {}),
+        : { takenAt }),
     },
     { merge: true },
   );
 }
 
-/** Takes back the patient's OWN "I took it" (a mis-tap, or a demo being
- *  repeated). With `slot`, only that reminder time's dose is taken back and
- *  the others stay marked. A dose a nurse witnessed can't be undone here — the
- *  security rules refuse it, and the UI doesn't offer it. */
+/** Thrown when someone tries to undo a dose after the undo window has closed. */
+export class UndoWindowClosedError extends Error {
+  override name = "UndoWindowClosedError";
+  constructor() {
+    super("The time to undo this has passed.");
+  }
+}
+
+/** Takes back the patient's OWN "I took it", but only for a few minutes after
+ *  they confirmed it (see UNDO_WINDOW_MS) - `takenAt` is when that was. With
+ *  `slot`, only that reminder time's dose is taken back and the others stay
+ *  marked. A dose a nurse witnessed can't be undone here - the security rules
+ *  refuse it, and the UI doesn't offer it. */
 export async function undoSelfReportedDose(
   patientId: string,
   med: string,
-  slot?: DoseSlotWrite,
+  slot: DoseSlotWrite | undefined,
+  takenAt: string | null | undefined,
 ): Promise<void> {
+  if (undoTimeLeftMs(takenAt, new Date()) <= 0)
+    throw new UndoWindowClosedError();
   const date = todayIsoDate();
   const remaining = slot
     ? cleanReminderTimes(slot.takenTimes.filter((t) => t !== slot.time))
@@ -797,14 +881,20 @@ export async function undoSelfReportedDose(
       source: "patient",
       updatedAt: serverTimestamp(),
       takenTimes: remaining,
-      ...(slot ? { expected: slot.expected } : {}),
+      ...(slot
+        ? {
+            expected: slot.expected,
+            takenAtByTime: { [takenAtKey(slot.time)]: deleteField() },
+          }
+        : { takenAt: deleteField() }),
     },
     { merge: true },
   );
 }
 
 /** The last `days` days of dose logs for one medication, oldest first —
- *  fast-lane evidence for a clinician to weigh (see reminders.ts). Logs with
+ *  evidence for a clinician weighing whether a patient is stable (see
+ *  reminders.ts and stable-patient.ts). Logs with
  *  no `source` predate this feature and are treated as nurse-witnessed,
  *  which is what they were at the time. */
 export async function fetchAdherenceHistory(

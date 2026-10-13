@@ -1,5 +1,9 @@
+import type { ReactNode } from "react";
+import { PatientPicker } from "@/components/PatientPicker";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell, StatusBadge } from "@/components/AppShell";
+import { statusEdgeColour } from "@/lib/appointment-status";
 import {
   useCurrentNurse,
   useNurseDashboard,
@@ -49,7 +53,13 @@ function NurseDashboard() {
         <Stat
           label="APPOINTMENTS"
           value={data ? String(data.stats.dayTotal) : "—"}
-          sub={data ? `${data.stats.dayCompleted} completed` : "loading…"}
+          sub={
+            data ? (
+              `${data.stats.dayCompleted} completed`
+            ) : (
+              <Loading label="Loading" size={11} />
+            )
+          }
         />
         <Stat
           label="PATIENTS THIS WEEK"
@@ -77,7 +87,7 @@ function NurseDashboard() {
           <div className="space-y-2">
             {loading && (
               <p className="text-sm text-muted-foreground py-6 text-center">
-                Loading appointments…
+                <Loading label="Loading appointments" />
               </p>
             )}
             {error && (
@@ -89,7 +99,8 @@ function NurseDashboard() {
               // was key={a.id} — DoctorAppointment (reused type) uses docId, not id
               <div
                 key={a.docId}
-                className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md"
+                className={`flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2 ${a.status === "Cancelled" ? "opacity-60" : ""}`}
+                style={{ borderColor: statusEdgeColour(a.status) }}
               >
                 <div className="font-mono text-sm font-semibold w-12">
                   {a.time}
@@ -312,12 +323,13 @@ function HandoverLog() {
         onSubmit={submit}
         className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2 mb-4"
       >
-        <input
+        <PatientPicker
           value={patient}
-          onChange={(e) => setPatient(e.target.value)}
-          placeholder="Patient ID (optional)"
+          onChange={setPatient}
+          clinicId={nurse?.clinicId}
+          label="Patient (optional)"
+          placeholder="Patient ID or name (optional)"
           disabled={finalized}
-          className="px-3 py-2 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] disabled:opacity-50"
         />
         <input
           value={note}
@@ -335,7 +347,9 @@ function HandoverLog() {
       </form>
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="text-sm text-muted-foreground">
+          <Loading label="Loading handover entries" />
+        </p>
       ) : entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No handover entries yet.
@@ -386,7 +400,7 @@ function Stat({
 }: {
   label: string;
   value: string;
-  sub: string;
+  sub: ReactNode;
 }) {
   return (
     <div className="bg-white rounded-xl border p-5">

@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
@@ -66,7 +67,9 @@ function MedicalRecord() {
   if (loading) {
     return (
       <AppShell role="patient" title="My Medical Record">
-        <p className="text-sm text-muted-foreground">Loading...</p>
+        <p className="text-sm text-muted-foreground">
+          <Loading label="Loading your record" />
+        </p>
       </AppShell>
     );
   }

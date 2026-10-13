@@ -6,6 +6,7 @@ import {
   usePatientAppointments,
   updateAppointmentStatus,
   requestAppointmentReminder,
+  notifyCancellationReason,
   type PatientAppointmentRow,
 } from "@/lib/patient-service";
 import { isOffline } from "@/lib/offline";
@@ -14,7 +15,7 @@ import {
   appointmentTime,
   hasAppointmentPassed,
 } from "@/lib/appointment-time";
-import { Check, X, Bell, Lock } from "lucide-react";
+import { Check, X, Bell, Lock, CalendarClock } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -26,7 +27,28 @@ import {
   reminderRefusal,
   scheduleReminder,
 } from "@/lib/reminder-schedule";
+import {
+  MAX_REASON_LENGTH,
+  requestReschedule,
+  usePatientReschedules,
+  withdrawReschedule,
+  type RescheduleRequest,
+} from "@/lib/reschedule";
 import { toast } from "sonner";
+import {
+  patientStatusView,
+  type PatientStatusTone,
+} from "@/lib/patient-appointment-status";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export const Route = createFileRoute("/patient/appointments")({
   component: PatientAppointments,
@@ -35,16 +57,32 @@ export const Route = createFileRoute("/patient/appointments")({
   }),
 });
 
-function AppointmentStatusBadge({ status }: { status: string }) {
-  const color =
-    status === "Cancelled"
-      ? "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]"
-      : status === "Confirmed" || status === "Completed"
-        ? "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]"
-        : "bg-[oklch(0.96_0.05_245)] text-[oklch(0.4_0.15_245)]"; // Scheduled / default
+const TONE_STYLE: Record<PatientStatusTone, string> = {
+  // Two different words AND two different colours: a missed visit and a
+  // cancelled one are not the same thing and shouldn't read as if they were.
+  cancelled: "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]",
+  missed: "bg-[oklch(0.95_0.09_85)] text-[oklch(0.38_0.12_70)]",
+  completed: "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]",
+  progress: "bg-[oklch(0.94_0.05_200)] text-[oklch(0.35_0.1_200)]",
+  open: "bg-[oklch(0.96_0.05_245)] text-[oklch(0.4_0.15_245)]",
+};
+
+function AppointmentStatusBadge({
+  status,
+  dateTime,
+}: {
+  status: string;
+  dateTime: string;
+}) {
+  const { label, tone } = patientStatusView(status, dateTime);
+  // "Confirmed" keeps its green; the rest come from the tone.
+  const style =
+    tone === "open" && /confirm/i.test(label)
+      ? TONE_STYLE.completed
+      : TONE_STYLE[tone];
   return (
-    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${color}`}>
-      {status}
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${style}`}>
+      {label}
     </span>
   );
 }
@@ -70,6 +108,7 @@ function PatientAppointments() {
   const { confirm } = useSearch({ from: "/patient/appointments" });
   const { patient } = useCurrentPatient();
   const appointments = usePatientAppointments(patient?.patientId);
+  const reschedules = usePatientReschedules();
 
   // If opened via an SMS-style confirm link (?confirm=<docId>), write the
   // real confirmation to Firestore once. The ref guards against re-firing
@@ -108,10 +147,20 @@ function PatientAppointments() {
   // Clicking the ALREADY-ACTIVE button undoes it back to "Scheduled" instead
   // of doing nothing — so patients aren't locked into a choice. Clicking the
   // other (inactive) button switches straight to that status as before.
+  // Cancelling asks first, with an optional reason; undoing a cancellation (or
+  // confirming) goes straight through as it always did.
+  const [cancelFor, setCancelFor] = useState<PatientAppointmentRow | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const askCancel = (a: PatientAppointmentRow) => {
+    setCancelReason("");
+    setCancelFor(a);
+  };
+
   const toggleStatus = async (
     docId: string,
     currentStatus: string,
     target: "Confirmed" | "Cancelled",
+    reason = "",
   ) => {
     const nextStatus = currentStatus === target ? "Scheduled" : target;
     try {
@@ -131,6 +180,12 @@ function PatientAppointments() {
               ? "Appointment confirmed"
               : "Appointment cancelled — clinic will be notified",
       );
+      // Only when the patient actually wrote one: no reason, no extra step.
+      if (nextStatus === "Cancelled" && reason.trim()) {
+        const appt = appointments.find((x) => x.docId === docId);
+        if (appt && patient?.patientId)
+          void notifyCancellationReason(appt, patient.patientId, reason);
+      }
     } catch (err) {
       console.error(err);
       // The Firebase code tells "the rules refused this" (permission-denied)
@@ -139,6 +194,51 @@ function PatientAppointments() {
       toast.error("Failed to update appointment. Please try again.", {
         description: code ? `Reason: ${code}` : undefined,
       });
+    }
+  };
+
+  const askReschedule = async (
+    a: PatientAppointmentRow,
+    detail: { reason: string; preferredDay?: string; preferredTime?: string },
+  ): Promise<boolean> => {
+    if (!patient?.patientId) {
+      toast.error("Can't send a request — your record isn't loaded yet.");
+      return false;
+    }
+    try {
+      await requestReschedule({
+        appointment: {
+          docId: a.docId,
+          dateTime: a.dateTime,
+          type: a.type,
+          clinician: a.clinicianId,
+        },
+        patientId: patient.patientId,
+        patientUserId: patient.userId,
+        ...detail,
+      });
+      toast.success("Reschedule request sent", {
+        description:
+          "Your appointment stays as it is until the clinic answers. You'll get a notification.",
+      });
+      return true;
+    } catch (err) {
+      console.error(err);
+      const code = (err as { code?: string })?.code;
+      toast.error("Couldn't send the request. Please try again.", {
+        description: code ? `Reason: ${code}` : undefined,
+      });
+      return false;
+    }
+  };
+
+  const withdraw = async (r: RescheduleRequest) => {
+    try {
+      await withdrawReschedule(r.id);
+      toast.success("Request withdrawn — your appointment is unchanged");
+    } catch (err) {
+      console.error(err);
+      toast.error("Couldn't withdraw the request. Please try again.");
     }
   };
 
@@ -201,8 +301,15 @@ function PatientAppointments() {
               {upcoming.map((a, i) => {
                 const isNext = i === 0;
                 const pending = a.status !== "Confirmed";
+                const asks = reschedules.filter(
+                  (r) => r.appointmentId === a.docId,
+                );
+                const openAsk = asks.find((r) => r.status === "pending");
+                const declined =
+                  !openAsk && asks[0]?.status === "declined" ? asks[0] : null;
                 return (
                   <tr
+                    id={`appt-${a.docId}`}
                     key={a.docId}
                     className={`border-t ${isNext ? "bg-[oklch(0.97_0.05_245)]" : ""}`}
                   >
@@ -218,13 +325,27 @@ function PatientAppointments() {
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <AppointmentStatusBadge status={a.status} />
+                        <AppointmentStatusBadge status={a.status} dateTime={a.dateTime} />
                         {isNext && pending && (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[oklch(0.94_0.1_75)] text-[oklch(0.4_0.15_75)]">
                             Next · pending confirmation
                           </span>
                         )}
+                        {openAsk && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[oklch(0.95_0.07_85)] text-[oklch(0.4_0.12_70)]">
+                            Reschedule requested · waiting for the clinic
+                          </span>
+                        )}
                       </div>
+                      {declined && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Reschedule declined
+                          {declined.declineReason
+                            ? `: ${declined.declineReason}`
+                            : "."}{" "}
+                          Your appointment stays as it was.
+                        </p>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex gap-2 flex-wrap">
@@ -250,7 +371,9 @@ function PatientAppointments() {
                         <button
                           disabled={a.status === "Confirmed"}
                           onClick={() =>
-                            toggleStatus(a.docId, a.status, "Cancelled")
+                            a.status === "Cancelled"
+                              ? toggleStatus(a.docId, a.status, "Cancelled")
+                              : askCancel(a)
                           }
                           className={`flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md disabled:opacity-40 ${
                             a.status === "Cancelled"
@@ -272,6 +395,22 @@ function PatientAppointments() {
                             onSchedule={(at) => scheduleReminderFor(a, at)}
                           />
                         )}
+                        {a.status !== "Cancelled" &&
+                          (openAsk ? (
+                            <button
+                              type="button"
+                              onClick={() => withdraw(openAsk)}
+                              className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-secondary"
+                              title="Take your reschedule request back"
+                            >
+                              <CalendarClock size={12} /> Withdraw request
+                            </button>
+                          ) : (
+                            <RequestReschedule
+                              appointment={a}
+                              onSubmit={(detail) => askReschedule(a, detail)}
+                            />
+                          ))}
                       </div>
                     </td>
                   </tr>
@@ -315,7 +454,11 @@ function PatientAppointments() {
                   so this shows the most recent few rather than everything. */}
               {past.slice(0, pastLimit).map((a) => {
                 return (
-                  <tr key={a.docId} className="border-t text-muted-foreground">
+                  <tr
+                    id={`appt-${a.docId}`}
+                    key={a.docId}
+                    className="border-t text-muted-foreground"
+                  >
                     <td className="px-5 py-3.5 font-medium">
                       <div>{formatDate(a.dateTime)}</div>
                       <div className="text-xs font-mono">
@@ -328,7 +471,7 @@ function PatientAppointments() {
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1.5">
-                        <AppointmentStatusBadge status={a.status} />
+                        <AppointmentStatusBadge status={a.status} dateTime={a.dateTime} />
                         <Lock size={12} />
                       </div>
                     </td>
@@ -359,6 +502,53 @@ function PatientAppointments() {
           )}
         </div>
       </div>
+      <AlertDialog
+        open={cancelFor !== null}
+        onOpenChange={(o) => {
+          if (!o) setCancelFor(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cancelFor
+                ? `${cancelFor.type} · ${formatDate(cancelFor.dateTime)}, ${formatTime(cancelFor.dateTime)}. The clinic will be told.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div>
+            <label
+              htmlFor="cancel-reason"
+              className="text-sm font-medium block mb-1"
+            >
+              Reason <span className="font-normal text-muted-foreground">(optional)</span>
+            </label>
+            <textarea
+              id="cancel-reason"
+              value={cancelReason}
+              onChange={(e) =>
+                setCancelReason(e.target.value.slice(0, MAX_REASON_LENGTH))
+              }
+              rows={3}
+              placeholder="You can leave this blank"
+              className="w-full resize-none rounded-md border px-3 py-2 text-sm"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep appointment</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const a = cancelFor;
+                if (a) toggleStatus(a.docId, a.status, "Cancelled", cancelReason);
+                setCancelFor(null);
+              }}
+            >
+              Cancel appointment
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }
@@ -541,6 +731,145 @@ function RemindMe({
           It appears in your notifications at that time. We can't send it to
           your phone yet.
         </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * "Request reschedule": asks the clinic to move this appointment. Nothing about
+ * the appointment changes until a doctor or nurse accepts - so it can't be used
+ * to lose a slot by accident, which is why this isn't a "move it" button.
+ */
+function RequestReschedule({
+  appointment,
+  onSubmit,
+}: {
+  appointment: PatientAppointmentRow;
+  onSubmit: (detail: {
+    reason: string;
+    preferredDay?: string;
+    preferredTime?: string;
+  }) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState("");
+  const [day, setDay] = useState("");
+  const [time, setTime] = useState("");
+
+  const days = (() => {
+    const now = new Date();
+    return Array.from({ length: 21 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+      return {
+        value: localDay(d),
+        label:
+          i === 0
+            ? "Today"
+            : i === 1
+              ? "Tomorrow"
+              : d.toLocaleDateString("en-ZA", {
+                  weekday: "short",
+                  day: "numeric",
+                  month: "short",
+                }),
+      };
+    });
+  })();
+
+  const submit = async () => {
+    setBusy(true);
+    const done = await onSubmit({
+      reason,
+      preferredDay: day || undefined,
+      preferredTime: time || undefined,
+    });
+    setBusy(false);
+    if (done) setOpen(false);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) {
+          setReason("");
+          setDay("");
+          setTime("");
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex items-center gap-1 text-xs border px-2.5 py-1 rounded-md hover:bg-secondary"
+          title="Ask the clinic to move this appointment"
+        >
+          <CalendarClock size={12} /> Request reschedule
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        collisionPadding={8}
+        className="w-80 overflow-auto"
+        style={{ maxHeight: "var(--radix-popover-content-available-height)" }}
+      >
+        <p className="text-sm font-medium">Ask to reschedule</p>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-3">
+          {appointment.type} · {formatDate(appointment.dateTime)},{" "}
+          {formatTime(appointment.dateTime)}. Your appointment stays exactly as
+          it is until the clinic accepts a new time.
+        </p>
+
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
+          Why? (optional)
+        </label>
+        <textarea
+          value={reason}
+          onChange={(e) =>
+            setReason(e.target.value.slice(0, MAX_REASON_LENGTH))
+          }
+          rows={3}
+          className="w-full border rounded-md px-2 py-1.5 text-sm resize-none"
+          placeholder="e.g. I'm at work that day"
+        />
+
+        <p className="text-xs font-medium text-muted-foreground mt-3 mb-1">
+          Would another time suit you? (optional)
+        </p>
+        <div className="flex gap-2">
+          <select
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+            aria-label="Preferred day"
+            className="flex-1 min-w-0 border rounded-md px-2 py-1.5 text-sm bg-white"
+          >
+            <option value="">Any day</option>
+            {days.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            aria-label="Preferred time"
+            className="border rounded-md px-2 py-1.5 text-sm"
+          />
+        </div>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={submit}
+          className="w-full mt-3 bg-[oklch(0.18_0.06_260)] text-white text-sm rounded-md py-1.5 hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
+        >
+          {busy ? "Sending…" : "Send request"}
+        </button>
       </PopoverContent>
     </Popover>
   );

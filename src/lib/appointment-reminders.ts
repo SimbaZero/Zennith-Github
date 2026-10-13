@@ -306,7 +306,7 @@ export async function processHourBeforeNotifications(now = new Date(), env?: unk
             isRead: false,
             timeSent: new Date().toISOString(),
             source: "hour-before-reminder",
-            link: "/patient/appointments",
+            link: `/patient/appointments#appt-${appointmentId}`,
           },
         },
         { update: ["appointments", appointmentId], data: {}, appendToArrays: { reminderLog: ["hour-before"] } },

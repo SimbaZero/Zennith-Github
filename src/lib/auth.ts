@@ -24,9 +24,11 @@ import {
   limit,
   getFirestore,
   updateDoc,
-  deleteField,
 } from "firebase/firestore";
 import { assertOnline } from "@/lib/offline";
+import { loginCandidates } from "@/lib/login-identifier";
+import { resolveLoginCandidates } from "@/lib/login-lookup";
+import { releaseLoginAccount } from "@/lib/login-admin";
 import { auth, db, firebaseConfig } from "@/firebase";
 import { logAction } from "./audit";
 import { clearSessionCaches } from "@/lib/session-caches";
@@ -179,22 +181,67 @@ const USERS = "profiles";
 
 /* ================= CREDENTIALS (Firebase Auth) ================= */
 
-/** Verifies the password with Firebase Auth, then reads the role (and assigned
- *  facility, if any) from the user's Firestore profile. */
+/** Longest the sign-in waits for the username/e-mail lookup before using what it has. */
+const LOOKUP_TIMEOUT_MS = 5000;
+
+/**
+ * Verifies the password with Firebase Auth, then reads the role (and assigned
+ * facility, if any) from the user's Firestore profile.
+ *
+ * `identifier` is a username OR an e-mail address. Which Firebase Auth e-mail an
+ * account actually signs in under varies (see login-identifier.ts), so the
+ * server is asked which e-mail(s) that identifier could be, and they are tried
+ * in order. If that lookup isn't available the plain reading is used - an e-mail
+ * as typed, a username as "<username>@zennith.test" - which is what this did
+ * before, so a lookup problem can never lock anyone out who could sign in before.
+ */
 export async function checkCredentials(
-  username: string,
+  identifier: string,
   password: string,
 ): Promise<{
   role: Role;
   facilityId?: string | null;
   legacyUserId?: number | null;
 } | null> {
+  let candidates = loginCandidates(identifier);
+  if (candidates.length === 0) return null;
   try {
-    const cred = await signInWithEmailAndPassword(
-      auth,
-      toEmail(username),
-      password,
-    );
+    const looked = await Promise.race([
+      resolveLoginCandidates({ data: { identifier } }),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), LOOKUP_TIMEOUT_MS),
+      ),
+    ]);
+    if (looked && looked.candidates.length > 0) candidates = looked.candidates;
+  } catch (err) {
+    console.warn("Sign-in lookup unavailable, using the typed value:", err);
+  }
+
+  try {
+    let cred: Awaited<ReturnType<typeof signInWithEmailAndPassword>> | null =
+      null;
+    for (const email of candidates) {
+      try {
+        cred = await signInWithEmailAndPassword(auth, email, password);
+        break;
+      } catch (err: any) {
+        // "No such account" / "wrong password" just means try the next address;
+        // anything else (rate limiting, network) is not going to change by trying again.
+        const code = String(err?.code ?? "");
+        if (
+          code === "auth/user-not-found" ||
+          code === "auth/invalid-credential" ||
+          code === "auth/wrong-password" ||
+          code === "auth/invalid-email"
+        )
+          continue;
+        throw err;
+      }
+    }
+    if (!cred) {
+      console.error("Login failed: no matching account/password");
+      return null;
+    }
     const snap = await getDoc(doc(db, USERS, cred.user.uid));
     if (!snap.exists()) {
       console.warn("Auth OK but no Firestore profile for uid:", cred.user.uid);
@@ -275,6 +322,44 @@ export async function idNumberExists(
       (d.data().username as string | undefined)?.toLowerCase() !==
       excludeUsername?.trim().toLowerCase(),
   );
+}
+
+/**
+ * Creates a Firebase Auth login on `app` (a throwaway secondary instance, so the
+ * admin's own session isn't replaced).
+ *
+ * If the address already belongs to a login, that login might be what an
+ * earlier revoke left behind - revoking used to delete only the profile, so the
+ * login stayed and blocked the address forever. Such a login has no profile, so
+ * the server is asked to clear it (it refuses anything still in use, anything
+ * brand new, and anything that isn't the admin's to remove), and creation is
+ * tried once more. A login that really is in use fails as it always did, with
+ * `auth/email-already-in-use`.
+ */
+export async function createLoginReclaimingLeftover(
+  app: ReturnType<typeof initializeApp>,
+  email: string,
+  password: string,
+) {
+  try {
+    return await createUserWithEmailAndPassword(
+      getFbAuth(app),
+      email,
+      password,
+    );
+  } catch (err: any) {
+    if (err?.code !== "auth/email-already-in-use") throw err;
+    const idToken = await auth.currentUser?.getIdToken();
+    const released = await releaseLoginAccount({
+      data: { idToken: idToken ?? "", email },
+    }).catch(() => null);
+    if (!released?.ok || !released.deleted) throw err;
+    return await createUserWithEmailAndPassword(
+      getFbAuth(app),
+      email,
+      password,
+    );
+  }
 }
 
 // Creates the account on a throwaway secondary app instance: Firebase signs in
@@ -359,8 +444,8 @@ export async function addUser(u: {
   let createdUser: FbUser | null = null;
   let profileWritten = false;
   try {
-    const cred = await createUserWithEmailAndPassword(
-      getFbAuth(secondary),
+    const cred = await createLoginReclaimingLeftover(
+      secondary,
       u.email.trim().toLowerCase(),
       throwawayPassword,
     );
@@ -559,9 +644,10 @@ export async function addUser(u: {
   }
 }
 
-// Deletes the Firestore profile (blocks login role lookup).
-// NOTE: the Firebase Auth record itself can only be deleted from the
-// console or an Admin SDK backend — client apps can't delete other users.
+// Revokes someone's access: deletes their profile (which blocks the sign-in
+// role lookup) and then asks the server to delete the Firebase Auth login
+// itself, so the e-mail address is free to be granted again. A browser can't
+// delete another person's Auth account; the server can.
 export async function removeUser(username: string): Promise<void> {
   // Revoking someone's access is a security action: it has to be true on the
   // server, now. "Removed" that actually means "removed once this laptop
@@ -593,6 +679,30 @@ export async function removeUser(username: string): Promise<void> {
       );
     }
     await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+    // The profile id IS the Auth uid. Best effort: access is already gone with
+    // the profile, so a failure here doesn't undo the revoke - and re-granting
+    // the address still works, because creating a login clears a leftover
+    // account that has no profile (see addUser).
+    for (const d of snap.docs) {
+      try {
+        const idToken = await auth.currentUser?.getIdToken();
+        const released = await releaseLoginAccount({
+          data: {
+            idToken: idToken ?? "",
+            uid: d.id,
+            email: String(d.data().email ?? ""),
+          },
+        });
+        if (!released.ok) {
+          console.warn(
+            "removeUser: the login itself wasn't deleted:",
+            released.reason,
+          );
+        }
+      } catch (releaseErr) {
+        console.warn("removeUser: couldn't delete the login:", releaseErr);
+      }
+    }
     // Logged only AFTER the delete succeeded, so the platform log never
     // records a removal that didn't happen.
     logAction({
@@ -614,20 +724,23 @@ export async function removeUser(username: string): Promise<void> {
 
 /* ================= TWO-FACTOR (method + TOTP secret on the profile) ================= */
 
-/** The authenticator app is the only second factor. */
-export type TwoFactorMethod = "totp";
+export type TwoFactorMethod = "totp" | "sms";
 
 export interface TwoFactorProfile {
   role: Role;
-  /** null until the first successful code: the user still has to enrol. */
+  /**
+   * The method to offer first: the one this account last used and was
+   * remembered for ("sms" only counts for a patient), else the authenticator
+   * if one is set up. null = nothing set up yet, so they choose.
+   *
+   * This is a DEFAULT, not a restriction. A patient can switch to the other
+   * method on the sign-in screen at any time; what they can't do is pick a
+   * method that isn't available (no number on record, SMS not configured).
+   */
   method: TwoFactorMethod | null;
   totpSecret: string | null;
-  /**
-   * True when this account used to sign in with text-message codes, which no
-   * longer exist. If it also has no authenticator secret it must enrol one, and
-   * the page says why.
-   */
-  smsRetired: boolean;
+  /** Text-message codes are a patient option; staff use the authenticator only. */
+  canUseSms: boolean;
   /** The facility (clinic) the user is scoped to; null = platform-wide. */
   facilityId: string | null;
 }
@@ -637,11 +750,10 @@ export interface TwoFactorProfile {
  * never from the URL. Null when nobody is signed in or the account has no
  * valid profile.
  *
- * Authenticator accounts are recognised by their secret. A profile still marked
- * `twoFactorMethod: "sms"` (text-message codes were removed) is treated as not
- * enrolled unless it also has a secret, and the stale marker is cleared on the
- * way through so it doesn't linger. If that write is refused the account still
- * works from its secret / enrols afresh; only the leftover field stays behind.
+ * `twoFactorMethod` on the profile is just the remembered preference:
+ * "sms" (written by the server after a verified text-message code) or "totp".
+ * Whether an authenticator is set up is told by the secret itself, so an
+ * account is never stuck behind a stale or missing flag.
  *
  * Resetting 2FA (lost phone) is done by an admin in the Firebase console:
  * delete profiles/{uid}.totpSecret.
@@ -651,28 +763,49 @@ export async function fetchTwoFactorProfile(): Promise<TwoFactorProfile | null> 
   await auth.authStateReady();
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
-  const ref = doc(db, USERS, uid);
-  const snap = await getDoc(ref);
+  const snap = await getDoc(doc(db, USERS, uid));
   if (!snap.exists()) return null;
   const d = snap.data();
   if (!ROLES.includes(d.role)) return null;
   const totpSecret: string | null =
-    typeof d.totpSecret === "string" && d.totpSecret !== "" ? d.totpSecret : null;
-  const smsRetired = d.twoFactorMethod === "sms";
-  if (smsRetired) {
-    await updateDoc(ref, { twoFactorMethod: deleteField() }).catch((err) =>
-      console.warn("Couldn't clear the retired text-message marker:", err),
-    );
-  }
+    typeof d.totpSecret === "string" && d.totpSecret !== ""
+      ? d.totpSecret
+      : null;
+  const canUseSms = d.role === "patient";
+  const method: TwoFactorMethod | null =
+    canUseSms && d.twoFactorMethod === "sms"
+      ? "sms"
+      : totpSecret
+        ? "totp"
+        : null;
   return {
     role: d.role as Role,
-    method: totpSecret ? "totp" : null,
+    method,
     totpSecret,
-    smsRetired,
+    canUseSms,
     // Empty or non-string facility = platform-wide, as the old URL param did.
     facilityId:
-      typeof d.facilityId === "string" && d.facilityId !== "" ? d.facilityId : null,
+      typeof d.facilityId === "string" && d.facilityId !== ""
+        ? d.facilityId
+        : null,
   };
+}
+
+/**
+ * Remembers which method this person last signed in with, so it is the one
+ * offered first next time. Best effort and never blocks a sign-in: if the
+ * database refuses the write, the default simply stays as it was.
+ */
+export async function rememberTwoFactorMethod(
+  method: TwoFactorMethod,
+): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
+  try {
+    await updateDoc(doc(db, USERS, uid), { twoFactorMethod: method });
+  } catch (err) {
+    console.warn("Couldn't remember the sign-in method:", err);
+  }
 }
 
 /** Fresh ID token for server functions to verify who is calling. */
@@ -686,11 +819,7 @@ export async function currentIdToken(): Promise<string> {
 export async function saveTotpSecret(secret: string): Promise<void> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Not signed in");
-  // Also drops any leftover text-message marker from before that method was removed.
-  await updateDoc(doc(db, USERS, uid), {
-    totpSecret: secret,
-    twoFactorMethod: deleteField(),
-  });
+  await updateDoc(doc(db, USERS, uid), { totpSecret: secret });
 }
 
 /* ================= SESSION (localStorage cache for route guards) ================= */
@@ -891,8 +1020,8 @@ export async function createLoginForExistingStaff(input: {
 
   const secondary = initializeApp(firebaseConfig, `staff-login-${Date.now()}`);
   try {
-    const cred = await createUserWithEmailAndPassword(
-      getFbAuth(secondary),
+    const cred = await createLoginReclaimingLeftover(
+      secondary,
       input.email.trim().toLowerCase(),
       throwawayPassword,
     );

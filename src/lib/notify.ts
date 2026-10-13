@@ -326,6 +326,56 @@ export async function notifyClinicAdmins(input: {
 }
 
 /**
+ * Notify everyone with admin access: every admin profile (whichever clinic they
+ * administer) and every super admin. There is one global admin role rather than
+ * per-clinic admins, so a request that needs "an admin" goes to all of them.
+ *
+ * `link` is the admin page; super admins have their own copy of it, so a
+ * `superAdminLink` can be given for them.
+ */
+export async function notifyAllAdmins(input: {
+  title: string;
+  message: string;
+  link?: string;
+  superAdminLink?: string;
+  dedupeKey?: string;
+}): Promise<void> {
+  try {
+    const [admins, supers] = await Promise.all([
+      getDocs(query(collection(db, "profiles"), where("role", "==", "admin"))),
+      getDocs(
+        query(collection(db, "profiles"), where("role", "==", "super_admin")),
+      ),
+    ]);
+    const targets = [
+      ...admins.docs.map((d) => ({ id: d.id, link: input.link })),
+      ...supers.docs.map((d) => ({
+        id: d.id,
+        link: input.superAdminLink ?? input.link,
+      })),
+    ];
+    await Promise.all(
+      targets.map((t) =>
+        writeNotification(
+          {
+            notifId: Date.now(),
+            profileId: t.id,
+            title: input.title,
+            message: input.message,
+            isRead: false,
+            timeSent: new Date().toISOString(),
+            ...(t.link ? { link: t.link } : {}),
+          },
+          input.dedupeKey ? `${input.dedupeKey}-${t.id}` : undefined,
+        ),
+      ),
+    );
+  } catch (err) {
+    console.error("notifyAllAdmins failed:", err);
+  }
+}
+
+/**
  * Live notifications addressed by profile document id — used by roles that
  * have no numeric users.userId (currently admins).
  */

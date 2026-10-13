@@ -1,368 +1,409 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
 import { StockFallbackBanner } from "@/components/StockFallbackBanner";
-import { useState, useMemo } from "react";
-import { toast } from "sonner";
-import {
-  Truck,
-  Plus,
-  X,
-  Package,
-  AlertCircle,
-  PackagePlus,
-} from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowRight, Truck } from "lucide-react";
 import {
   useInventory,
   useCurrentPharmacist,
-  sendStockDelivery,
   useStockDeliveries,
-  addInventoryStock,
-  type DeliveryItem,
+  useSupplierOrders,
+  useClinicForecasts,
+  useOpenReorders,
+  reorderSuggestions,
+  type StockDelivery,
 } from "@/lib/pharmacist-service";
+import { SuggestedReorders } from "@/components/QuickReorder";
+import { ClinicDeliverySuggestions } from "@/components/ClinicDeliverySuggestions";
+import { ManualSupplierOrder } from "@/components/ManualSupplierOrder";
+import { SendToClinicForm } from "@/components/SendToClinicForm";
+import { SupplierDeliveries } from "@/components/SupplierDeliveries";
+import { DeliveryHistory } from "@/components/DeliveryHistory";
+import { PharmacyStockTiles } from "@/components/PharmacyStockTiles";
+import { splitRestock } from "@/lib/stock-groups";
+import { buildDeliveryHistory } from "@/lib/delivery-history";
+import { getAuth } from "@/lib/auth";
+import { useSuggestionAlerts } from "@/lib/suggestion-alerts";
 import { useRealActiveClinic } from "@/lib/active-clinic";
 
 export const Route = createFileRoute("/pharmacist/deliveries")({
   component: Deliveries,
 });
 
+// The page is laid out as a dashboard of labelled zones, because two different
+// things used to read as one:
+//
+//   ORDER FROM SUPPLIER  supplier -> pharmacy. The pharmacy replenishing itself.
+//                        Stock goes up when the delivery is confirmed as arrived.
+//   SEND TO CLINIC       pharmacy -> clinic. The pharmacy's own stock going out
+//                        to a clinic. Stock leaves the shelf now; the clinic
+//                        gains it when a nurse confirms.
+//
+// and, separately, what the system suggests from low-stock detection versus what
+// someone starts by hand. Each of those gets its own zone and its own words.
+
+function Zone({
+  id,
+  label,
+  title,
+  description,
+  count,
+  children,
+}: {
+  id: string;
+  label: string;
+  title: string;
+  description: string;
+  count?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section id={id} aria-label={title} className="mb-8 scroll-mt-20">
+      <header className="mb-3 flex flex-wrap items-baseline gap-x-3 border-l-4 border-[oklch(0.55_0.18_245)] pl-3">
+        <span className="text-[11px] font-semibold tracking-widest text-[oklch(0.45_0.15_245)]">
+          {label}
+        </span>
+        <h2 className="text-base font-semibold">{title}</h2>
+        {count && (
+          <span className="text-xs text-muted-foreground">{count}</span>
+        )}
+        <p className="basis-full text-xs text-muted-foreground">
+          {description}
+        </p>
+      </header>
+      {children}
+    </section>
+  );
+}
+
+/** "Supplier → Pharmacy" / "Pharmacy → Hillbrow": which way the stock is moving. */
+function Direction({ from, to }: { from: string; to: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border bg-secondary/50 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+      {from} <ArrowRight size={11} aria-hidden /> {to}
+    </span>
+  );
+}
+
+function EmptyLine({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-lg border bg-white px-4 py-4 text-sm text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
 function Deliveries() {
   const { pharmacist } = useCurrentPharmacist();
   const realClinic = useRealActiveClinic(pharmacist?.clinicIds, "pharmacist");
   const { stock, loading: stockLoading, usingFallback } = useInventory();
 
-  // Deliveries go to whichever clinic is selected in the header — there is
-  // no separate destination picker. Having both meant the header could say
-  // "Hillbrow" while you sent stock to Tembisa, which was contradictory.
+  // Everything on this page is for whichever clinic is selected in the header —
+  // there is no separate destination picker. Having both meant the header could
+  // say "Hillbrow" while you sent stock to Tembisa, which was contradictory.
   const targetClinicId = realClinic.activeClinicId ?? null;
   const targetClinicName = realClinic.activeClinicName;
-
-  const [lines, setLines] = useState<DeliveryItem[]>([]);
-  const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
+  const clinicLabel = targetClinicName ?? "the clinic";
 
   const available = useMemo(() => stock.filter((s) => s.docId), [stock]);
+  const clinicNames = useMemo(
+    () => new Map(realClinic.options.map((o) => [o.clinicId, o.clinicName])),
+    [realClinic.options],
+  );
 
-  const { deliveries } = useStockDeliveries(targetClinicId ?? undefined);
-  const [historyQuery, setHistoryQuery] = useState("");
-  const [historyLimit, setHistoryLimit] = useState(5);
+  const { deliveries, loading: deliveriesLoading } = useStockDeliveries(
+    targetClinicId ?? undefined,
+  );
+  const { orders } = useSupplierOrders(targetClinicId ?? undefined);
+  const { forecasts } = useClinicForecasts(targetClinicId ?? undefined);
+  const { openByInventoryDoc, loading: openLoading } = useOpenReorders(
+    targetClinicId ?? undefined,
+  );
 
-  const pending = deliveries.filter((d) => d.status === "Pending");
-  // Completed deliveries accumulate forever, so this is capped and
-  // searchable rather than becoming an endless scroll.
-  const settled = deliveries
-    .filter((d) => d.status !== "Pending")
-    .filter((d) => {
-      if (!historyQuery.trim()) return true;
-      const needle = historyQuery.toLowerCase();
-      const ref = String(d.id ?? "")
-        .slice(-6)
-        .toLowerCase();
-      return (
-        ref.includes(needle.replace("#", "")) ||
-        (d.items ?? []).some((i: any) =>
-          String(i.name ?? "")
-            .toLowerCase()
-            .includes(needle),
-        )
-      );
-    });
+  // The session role decides who may confirm a delivery arrived; the service
+  // checks the profile again before any stock moves.
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => setRole(getAuth()), []);
+  const actor =
+    pharmacist?.fullName || pharmacist?.pharmacistId || "pharmacist";
 
-  const addLine = () => {
-    const first = available.find(
-      (s) => !lines.some((l) => l.inventoryDocId === s.docId),
-    );
-    if (!first?.docId) return toast.error("Nothing left to add.");
-    setLines([
-      ...lines,
-      { inventoryDocId: first.docId, name: first.name, quantity: 1 },
-    ]);
-  };
+  const sentToClinic = useMemo(
+    () => deliveries.filter((d) => d.status === "Pending"),
+    [deliveries],
+  );
 
-  const send = async () => {
-    if (targetClinicId == null)
-      return toast.error("No clinic selected — pick one in the header.");
-    if (!pharmacist?.pharmacistId)
-      return toast.error("Pharmacist not identified.");
-    setSending(true);
-    // sendStockDelivery now throws when offline, so catch it here rather than
-    // leaving an unhandled rejection with the Send button stuck on "sending".
-    try {
-      const res = await sendStockDelivery({
-        clinicId: targetClinicId,
-        pharmacistId: pharmacist.pharmacistId,
-        items: lines,
-        note: note.trim() || undefined,
-      });
-      if (!res.ok) return toast.error(res.error ?? "Could not send delivery");
-      toast.success(
-        `Delivery sent to ${targetClinicName ?? "the clinic"} — awaiting confirmation`,
-      );
-      setLines([]);
-      setNote("");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not send delivery",
-      );
-    } finally {
-      setSending(false);
-    }
-  };
+  // SUGGESTED: what low-stock detection finds, split by what would fix it. A
+  // medicine the pharmacy's own stock can supply is a "send to clinic"; one
+  // nothing can supply is an "order from supplier". Never both for the same one,
+  // so the two zones can't read as the same action - and a medicine whose
+  // delivery is already on its way is still a "send", not a supplier order.
+  const restock = useMemo(
+    () =>
+      targetClinicId == null
+        ? null
+        : splitRestock({
+            forecasts,
+            stock: available,
+            clinicId: targetClinicId,
+            inTransit: sentToClinic.flatMap((d: StockDelivery) =>
+              (d.items ?? []).map((i) => i.name),
+            ),
+          }),
+    [forecasts, available, targetClinicId, sentToClinic],
+  );
+  const sendSuggestions = useMemo(() => restock?.suggestions ?? [], [restock]);
+  const orderForecasts = useMemo(() => {
+    const covered = restock?.coveredDocIds ?? new Set<string>();
+    return forecasts.filter((f) => !f.docId || !covered.has(f.docId));
+  }, [forecasts, restock]);
+  const orderSuggestions = reorderSuggestions(
+    orderForecasts,
+    openByInventoryDoc,
+  );
 
-  const canSend =
-    !sending &&
-    lines.length > 0 &&
-    targetClinicId != null &&
-    !lines.some((l) => {
-      const src = available.find((s) => s.docId === l.inventoryDocId);
-      return l.quantity <= 0 || l.quantity > (src?.units ?? 0);
-    });
+  // Told once when a suggestion appears, and again on a later visit if it is
+  // still unresolved - never repeatedly during one stay.
+  const where = targetClinicName ?? "the clinic";
+  useSuggestionAlerts({
+    ready:
+      !usingFallback &&
+      !stockLoading &&
+      !openLoading &&
+      targetClinicId != null &&
+      !!pharmacist,
+    userId: pharmacist?.userId,
+    scope: String(targetClinicId),
+    groups: [
+      {
+        kind: "supplier-order",
+        items: orderSuggestions.map((f) => ({
+          key: f.docId ?? f.name,
+          label: f.name,
+        })),
+        title: "Suggested: order from supplier",
+        message: (labels) =>
+          `${labels.length === 1 ? "1 medication" : `${labels.length} medications`} at ${where} should be ordered from a supplier: ${labels.slice(0, 4).join(", ")}${labels.length > 4 ? ", and more" : ""}.`,
+        link: "/pharmacist/deliveries#zone-suggested",
+      },
+      {
+        kind: "clinic-delivery",
+        items: sendSuggestions.map((s) => ({
+          key: s.forecast.docId ?? s.forecast.name,
+          label: s.forecast.name,
+        })),
+        title: "Suggested: send to clinic",
+        message: (labels) =>
+          `${where} is low on ${labels.slice(0, 4).join(", ")}${labels.length > 4 ? ", and more" : ""} — the pharmacy can restock it.`,
+        link: "/pharmacist/deliveries#zone-suggested",
+      },
+    ],
+  });
+
+  const history = useMemo(
+    () =>
+      buildDeliveryHistory({
+        orders,
+        deliveries,
+        clinicName: targetClinicName,
+      }),
+    [orders, deliveries, targetClinicName],
+  );
+
+  const waitingForSuppliers = orders.filter((o) => o.status === "ordered");
 
   return (
     <AppShell role="pharmacist" title="Stock Deliveries">
       {/* One clinic context: whatever the header says is where stock goes. */}
-      <div className="mb-4 flex items-center gap-2 rounded-lg border bg-secondary/40 px-4 py-2.5">
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border bg-secondary/40 px-4 py-2.5">
         <Truck size={15} className="text-muted-foreground shrink-0" />
         <p className="text-sm">
-          Sending to <strong>{targetClinicName ?? "no clinic selected"}</strong>
+          Working on <strong>{targetClinicName ?? "no clinic selected"}</strong>
         </p>
         <span className="text-xs text-muted-foreground ml-auto">
-          Change the clinic in the header to deliver elsewhere
+          Change the clinic in the header to work on another
         </span>
       </div>
 
       {usingFallback && <StockFallbackBanner className="mb-4" />}
 
+      {/* The dashboard, at a glance. */}
+      <nav
+        aria-label="Sections"
+        className="mb-6 flex flex-wrap gap-2 text-xs"
+        data-testid="zone-nav"
+      >
+        {[
+          [
+            "#zone-suggested",
+            `Suggested (${orderSuggestions.length + sendSuggestions.length})`,
+          ],
+          ["#zone-manual", "Manual"],
+          [
+            "#zone-receive",
+            `Receive deliveries (${waitingForSuppliers.length})`,
+          ],
+          ["#zone-sent", `Sent to clinics (${sentToClinic.length})`],
+          ["#zone-history", "History"],
+        ].map(([href, text]) => (
+          <a
+            key={href}
+            href={href}
+            className="rounded-full border bg-white px-3 py-1 hover:bg-secondary"
+          >
+            {text}
+          </a>
+        ))}
+      </nav>
+
       <PharmacyStockTiles
         stock={available}
         loading={stockLoading}
         unavailable={usingFallback}
+        clinicNames={clinicNames}
       />
 
-      {/* Pharmacy's own restocking — moved here from the Distribution page,
-          which is being retired. This is the pharmacy receiving from its
-          wholesaler, which is a different thing from sending to a clinic. */}
-      <SupplierIntake stock={available} />
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Compose */}
-        <div className="bg-white rounded-xl border p-5">
-          <h3 className="font-semibold">New delivery</h3>
-          <p className="text-xs text-muted-foreground mb-4">
-            Stock leaves your shelf immediately. The clinic only gains it once a
-            nurse confirms it arrived.
-          </p>
-
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium">Medications</label>
-            <button
-              onClick={addLine}
-              className="text-xs font-medium border px-2.5 py-1 rounded-md hover:bg-secondary flex items-center gap-1"
-            >
-              <Plus size={12} /> Add line
-            </button>
-          </div>
-
-          {lines.length === 0 ? (
-            <p className="text-xs text-muted-foreground border rounded-md px-3 py-6 text-center">
-              No medications added yet.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {lines.map((line, i) => {
-                const src = available.find(
-                  (s) => s.docId === line.inventoryDocId,
-                );
-                const max = src?.units ?? 0;
-                const tooMany = line.quantity > max;
-                return (
-                  <div key={i} className="flex gap-2 items-start">
-                    <select
-                      value={line.inventoryDocId}
-                      onChange={(e) => {
-                        const picked = available.find(
-                          (s) => s.docId === e.target.value,
-                        );
-                        if (!picked?.docId) return;
-                        const next = [...lines];
-                        next[i] = {
-                          ...next[i],
-                          inventoryDocId: picked.docId,
-                          name: picked.name,
-                        };
-                        setLines(next);
-                      }}
-                      className="flex-1 border rounded-md px-2 py-1.5 text-sm bg-white"
-                    >
-                      {available.map((s) => (
-                        <option key={s.docId} value={s.docId}>
-                          {s.name} ({s.units} in pharmacy)
-                        </option>
-                      ))}
-                    </select>
-                    <div className="w-24">
-                      <input
-                        type="number"
-                        min={1}
-                        value={line.quantity === 0 ? "" : line.quantity}
-                        placeholder="Qty"
-                        onChange={(e) => {
-                          const next = [...lines];
-                          next[i] = {
-                            ...next[i],
-                            quantity: Math.max(0, Number(e.target.value)),
-                          };
-                          setLines(next);
-                        }}
-                        className={`w-full border rounded-md px-2 py-1.5 text-sm ${
-                          tooMany ? "border-red-400 bg-red-50" : ""
-                        }`}
-                      />
-                      {tooMany && (
-                        <p className="text-[10px] text-red-600 mt-0.5">
-                          only {max} left
-                        </p>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => setLines(lines.filter((_, j) => j !== i))}
-                      className="p-1.5 text-muted-foreground hover:text-destructive"
-                      aria-label="Remove line"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          <label className="text-sm font-medium block mt-4 mb-1.5">
-            Note (optional)
-          </label>
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="e.g. cold chain — refrigerate on arrival"
-            className="w-full border rounded-md px-3 py-2 text-sm"
+      {/* ---- SUGGESTED: the system noticed something is low ---- */}
+      <Zone
+        id="zone-suggested"
+        label="SUGGESTED"
+        title="Suggested by the system"
+        description="Found by low-stock detection for the selected clinic. Review the amount, then confirm — nothing happens until you do."
+        count={`${orderSuggestions.length + sendSuggestions.length} to look at`}
+      >
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="text-sm font-semibold">Order from supplier</h3>
+          <Direction from="Supplier" to="Pharmacy" />
+        </div>
+        {orderSuggestions.length > 0 ? (
+          <SuggestedReorders
+            forecasts={orderForecasts}
+            clinicId={targetClinicId ?? undefined}
+            clinicName={targetClinicName}
           />
-
-          <button
-            onClick={send}
-            disabled={!canSend}
-            className="mt-4 w-full bg-[oklch(0.18_0.06_260)] text-white py-2.5 rounded-md text-sm font-medium hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
-          >
-            {sending ? "Sending…" : `Send to ${targetClinicName ?? "clinic"}`}
-          </button>
-        </div>
-
-        {/* History */}
-        <div className="space-y-4">
-          <div className="bg-white rounded-xl border p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <AlertCircle size={16} className="text-amber-600" />
-              <h3 className="font-semibold">Awaiting confirmation</h3>
-              <span className="text-xs text-muted-foreground ml-auto">
-                {pending.length}
-              </span>
-            </div>
-            {pending.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                Nothing in transit.
-              </p>
-            ) : (
-              <ul className="space-y-2">
-                {pending.map((d) => (
-                  <DeliveryCard key={d.id} d={d} />
-                ))}
-              </ul>
-            )}
+        ) : (
+          <div className="mb-6">
+            <EmptyLine>
+              Nothing needs ordering from a supplier right now.
+            </EmptyLine>
           </div>
+        )}
 
-          <div className="bg-white rounded-xl border p-5">
-            <div className="flex items-center gap-2 mb-3 flex-wrap">
-              <Package size={16} className="text-muted-foreground" />
-              <h3 className="font-semibold">Completed</h3>
-              <span className="text-xs text-muted-foreground">
-                {settled.length}
-              </span>
-              <input
-                value={historyQuery}
-                onChange={(e) => {
-                  setHistoryQuery(e.target.value);
-                  setHistoryLimit(5);
-                }}
-                placeholder="Search medication…"
-                className="ml-auto border rounded-md px-2.5 py-1 text-xs w-40"
-              />
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="text-sm font-semibold">Send to clinic</h3>
+          <Direction from="Pharmacy" to={clinicLabel} />
+        </div>
+        {sendSuggestions.length > 0 ? (
+          <ClinicDeliverySuggestions
+            suggestions={sendSuggestions}
+            clinicId={targetClinicId}
+            clinicName={targetClinicName}
+            pharmacistId={pharmacist?.pharmacistId}
+            clinicNames={clinicNames}
+          />
+        ) : (
+          <EmptyLine>
+            {clinicLabel} isn't low on anything the pharmacy can supply right
+            now.
+          </EmptyLine>
+        )}
+      </Zone>
+
+      {/* ---- MANUAL: started by hand ---- */}
+      <Zone
+        id="zone-manual"
+        label="MANUAL"
+        title="Start one yourself"
+        description="For anything the system hasn't suggested. These are two different actions — read the heading on each."
+      >
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="rounded-xl border bg-white p-5">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <h3 className="font-semibold">Order from supplier</h3>
+              <Direction from="Supplier" to="Pharmacy" />
             </div>
-            {settled.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                {historyQuery
-                  ? "No deliveries match."
-                  : "No completed deliveries yet."}
-              </p>
-            ) : (
-              <>
-                <ul className="space-y-2">
-                  {settled.slice(0, historyLimit).map((d) => (
-                    <DeliveryCard key={d.id} d={d} />
-                  ))}
-                </ul>
-                <div className="flex gap-2 mt-3">
-                  {settled.length > historyLimit && (
-                    <button
-                      onClick={() => setHistoryLimit((n) => n + 10)}
-                      className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
-                    >
-                      Show more ({settled.length - historyLimit} older)
-                    </button>
-                  )}
-                  {historyLimit > 5 && (
-                    <button
-                      onClick={() => setHistoryLimit(5)}
-                      className="flex-1 text-xs border py-2 rounded-md hover:bg-secondary"
-                    >
-                      Collapse
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
+            <ManualSupplierOrder
+              stock={available}
+              clinicId={targetClinicId}
+              clinicName={targetClinicName}
+              forecasts={forecasts}
+            />
+          </div>
+          <div className="rounded-xl border bg-white p-5">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <h3 className="font-semibold">Send to clinic</h3>
+              <Direction from="Pharmacy" to={clinicLabel} />
+            </div>
+            <SendToClinicForm
+              available={available}
+              clinicId={targetClinicId}
+              clinicName={targetClinicName}
+              pharmacistId={pharmacist?.pharmacistId}
+            />
           </div>
         </div>
-      </div>
+      </Zone>
+
+      {/* ---- RECEIVE: what is on its way TO the pharmacy ---- */}
+      <Zone
+        id="zone-receive"
+        label="RECEIVE DELIVERIES"
+        title="Deliveries arriving at the pharmacy"
+        description="Orders placed with a supplier. Count what arrived and confirm it here; that is the only way pharmacy stock goes up."
+        count={`${waitingForSuppliers.length} on the way`}
+      >
+        <SupplierDeliveries
+          orders={orders}
+          stock={available}
+          actor={actor}
+          role={role}
+        />
+      </Zone>
+
+      {/* ---- SENT: what is on its way FROM the pharmacy ---- */}
+      <Zone
+        id="zone-sent"
+        label="SENT TO CLINICS"
+        title={`On its way to ${clinicLabel}`}
+        description="Stock the pharmacy has sent out. It stays here until a nurse at the clinic confirms it arrived."
+        count={`${sentToClinic.length} on the way`}
+      >
+        {sentToClinic.length === 0 ? (
+          <EmptyLine>Nothing is on its way to {clinicLabel}.</EmptyLine>
+        ) : (
+          <ul className="space-y-2">
+            {sentToClinic.map((d) => (
+              <PendingDeliveryCard key={d.id} d={d} />
+            ))}
+          </ul>
+        )}
+      </Zone>
+
+      {/* ---- HISTORY: completed, tucked away ---- */}
+      <section id="zone-history" aria-label="History" className="scroll-mt-20">
+        <DeliveryHistory rows={history} loading={deliveriesLoading} />
+      </section>
     </AppShell>
   );
 }
 
-function DeliveryCard({ d }: { d: any }) {
+function PendingDeliveryCard({ d }: { d: StockDelivery }) {
   const when = new Date(d.sentAt);
   const validDate = !Number.isNaN(when.getTime());
-  // A delivery had no human-readable identity, so there was no way to refer
-  // to one — "the Metformin delivery" is ambiguous once there are several.
   // The Firestore document id is long and random, so this shows a short
   // uppercase tail of it: enough to quote on a phone call or search for.
   const ref = String(d.id ?? "")
     .slice(-6)
     .toUpperCase();
   return (
-    <li className="border rounded-lg p-3">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-[10px] font-mono bg-secondary px-1.5 py-0.5 rounded">
+    <li className="rounded-lg border bg-white p-3">
+      <div className="mb-1 flex items-center gap-2">
+        <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px]">
           #{ref}
         </span>
-        <span
-          className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
-            d.status === "Pending"
-              ? "bg-amber-50 text-amber-800 border-amber-200"
-              : d.status === "Confirmed"
-                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                : "bg-red-50 text-red-800 border-red-200"
-          }`}
-        >
-          {d.status === "Pending" ? "In transit" : d.status}
+        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+          In transit
         </span>
-        <span className="text-[11px] text-muted-foreground ml-auto">
+        <span className="ml-auto text-[11px] text-muted-foreground">
           {validDate
             ? when.toLocaleString("en-ZA", {
                 day: "numeric",
@@ -374,287 +415,18 @@ function DeliveryCard({ d }: { d: any }) {
         </span>
       </div>
       <ul className="text-sm">
-        {(d.items ?? []).map((it: any, i: number) => (
+        {(d.items ?? []).map((it, i) => (
           <li key={i} className="flex justify-between">
             <span>{it.name}</span>
             <span className="font-medium">{it.quantity}</span>
           </li>
         ))}
       </ul>
-      {d.hasDiscrepancy && (
-        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2">
-          <p className="text-[11px] font-medium text-amber-900">
-            Received amount didn't match
-          </p>
-          {(d.discrepancies ?? []).map((x: any, i: number) => (
-            <p key={i} className="text-[11px] text-amber-800">
-              {x.name}: sent {x.sent}, received {x.received}
-            </p>
-          ))}
-          {d.discrepancyNote && (
-            <p className="text-[11px] text-amber-800 mt-1 italic">
-              "{d.discrepancyNote}"
-            </p>
-          )}
-        </div>
-      )}
-      {d.rejectionReason && (
-        <p className="text-[11px] text-red-700 mt-1.5 italic">
-          Rejected: {d.rejectionReason}
-        </p>
-      )}
-      {d.confirmedByNurseId && (
-        <p className="text-[11px] text-muted-foreground mt-1.5 pt-1.5 border-t">
-          {d.status === "Confirmed" ? "Received" : "Rejected"} by{" "}
-          {d.confirmedByNurseId}
+      {d.note && (
+        <p className="mt-1.5 text-[11px] italic text-muted-foreground">
+          {d.note}
         </p>
       )}
     </li>
-  );
-}
-function SupplierIntake({
-  stock,
-}: {
-  stock: ReturnType<typeof useInventory>["stock"];
-}) {
-  const [open, setOpen] = useState(false);
-  const [medIdx, setMedIdx] = useState(0);
-  const [qty, setQty] = useState("");
-  const [supplier, setSupplier] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const med = stock[medIdx];
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const n = Number(qty);
-    if (!Number.isFinite(n) || n <= 0)
-      return toast.error("Enter a quantity greater than zero");
-    if (!med?.docId)
-      return toast.error(
-        "That medication isn't linked to an inventory record.",
-      );
-    setSaving(true);
-    try {
-      await addInventoryStock(med.docId, n);
-      toast.success(
-        `${n} × ${med.name} added${supplier ? ` from ${supplier}` : ""}`,
-      );
-      setQty("");
-      setSupplier("");
-      setOpen(false);
-    } catch (err) {
-      console.error(err);
-      // Show the real reason — addInventoryStock refuses offline with a
-      // message explaining that nothing was saved.
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : "Could not update stock. Please try again.",
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="bg-white rounded-xl border p-5 mb-6">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 text-left"
-      >
-        <PackagePlus size={16} className="text-[oklch(0.55_0.18_245)]" />
-        <div>
-          <h3 className="font-semibold">Receive stock into the pharmacy</h3>
-          <p className="text-xs text-muted-foreground">
-            Your own restocking from a wholesaler — separate from sending to a
-            clinic.
-          </p>
-        </div>
-        <span className="ml-auto text-xs font-medium border px-3 py-1.5 rounded-md">
-          {open ? "Close" : "Add stock"}
-        </span>
-      </button>
-
-      {open && (
-        <form
-          onSubmit={submit}
-          className="mt-4 pt-4 border-t grid grid-cols-1 md:grid-cols-[2fr_1fr_1.5fr_auto] gap-3 items-end"
-        >
-          <div>
-            <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
-              MEDICATION
-            </label>
-            <select
-              value={medIdx}
-              onChange={(e) => setMedIdx(Number(e.target.value))}
-              className="w-full px-3 py-2 border rounded-md text-sm bg-white"
-            >
-              {stock.map((s, i) => (
-                <option key={s.docId ?? s.name} value={i}>
-                  {s.name} ({s.units} in pharmacy)
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
-              QUANTITY
-            </label>
-            <input
-              type="number"
-              min={1}
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-              placeholder="e.g. 200"
-              className="w-full px-3 py-2 border rounded-md text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
-              SUPPLIER (OPTIONAL)
-            </label>
-            <input
-              value={supplier}
-              onChange={(e) => setSupplier(e.target.value)}
-              placeholder="e.g. Adcock Ingram"
-              className="w-full px-3 py-2 border rounded-md text-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={saving}
-            className="bg-[oklch(0.18_0.06_260)] text-white px-4 py-2 rounded-md text-sm hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60"
-          >
-            {saving ? "Saving…" : "Add"}
-          </button>
-        </form>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// "What the pharmacy has right now" — a quick colored overview sitting above
-// the send / receive forms, so the pharmacist sees what is on the shelf before
-// deciding what to send. These are the SAME stock lines the forms below use, so
-// the numbers can't disagree with them. Colour follows each line's own
-// reorder level:
-//   red    = out of stock            -> order from your supplier now
-//   amber  = at or below reorder level -> order from your supplier soon
-//   green  = fine
-// A clinic's own stock is a separate thing (see Stock Levels).
-// ---------------------------------------------------------------------------
-function PharmacyStockTiles({
-  stock,
-  loading,
-  unavailable,
-}: {
-  stock: ReturnType<typeof useInventory>["stock"];
-  loading: boolean;
-  /** useInventory fell back to demo data: there is no real stock to show. */
-  unavailable: boolean;
-}) {
-  const tone = (units: number, threshold: number) =>
-    units <= 0
-      ? {
-          box: "bg-red-50 border-red-200",
-          num: "text-red-700",
-          tag: "Out of stock — order now",
-          rank: 0,
-        }
-      : threshold > 0 && units <= threshold
-        ? {
-            box: "bg-amber-50 border-amber-200",
-            num: "text-amber-700",
-            tag: "Low — order from supplier",
-            rank: 1,
-          }
-        : {
-            box: "bg-emerald-50 border-emerald-200",
-            num: "text-emerald-700",
-            tag: "OK",
-            rank: 2,
-          };
-
-  const [search, setSearch] = useState("");
-  const allTiles = stock
-    .map((s) => ({ s, t: tone(s.units, s.threshold) }))
-    .sort((a, b) => a.t.rank - b.t.rank || a.s.name.localeCompare(b.s.name));
-  const needOrder = allTiles.filter((x) => x.t.rank < 2).length;
-  const term = search.trim().toLowerCase();
-  const tiles = term
-    ? allTiles.filter((x) => x.s.name.toLowerCase().includes(term))
-    : allTiles;
-  // Distinct names for the browser's built-in autocomplete list.
-  const names = Array.from(new Set(allTiles.map((x) => x.s.name))).sort();
-
-  return (
-    <div className="bg-white rounded-xl border p-5 mb-6">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-        <div>
-          <h3 className="font-semibold">In your pharmacy right now</h3>
-          <p className="text-xs text-muted-foreground">
-            What you can send. Red and amber need ordering from your supplier.
-          </p>
-        </div>
-        <span className="text-xs text-muted-foreground">
-          {needOrder === 0
-            ? "Nothing to order"
-            : `${needOrder} to order from supplier`}
-        </span>
-      </div>
-      <div className="mb-3">
-        <input
-          type="search"
-          list="pharmacy-stock-names"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search a medication, e.g. Metformin"
-          aria-label="Search pharmacy stock"
-          className="w-full sm:max-w-xs border rounded-md px-3 py-2 text-sm"
-        />
-        <datalist id="pharmacy-stock-names">
-          {names.map((n) => (
-            <option key={n} value={n} />
-          ))}
-        </datalist>
-      </div>
-      {allTiles.length === 0 ? (
-        // This used to say "Loading stock…" whatever the reason it was empty,
-        // so a stock feed that had failed looked like it was still on its way.
-        <p className="text-sm text-muted-foreground">
-          {unavailable
-            ? "Live stock can't be loaded, so there is nothing to show."
-            : loading
-              ? "Loading stock…"
-              : "No stock is recorded at the pharmacy yet."}
-        </p>
-      ) : tiles.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No medication matches "{search.trim()}".
-        </p>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-72 overflow-y-auto pr-1">
-          {tiles.map(({ s, t }) => (
-            <div
-              key={s.docId ?? s.name}
-              className={`rounded-lg border p-3 ${t.box}`}
-            >
-              <p className="text-xs font-medium leading-tight truncate">
-                {s.name}
-              </p>
-              <p className={`text-2xl font-bold mt-1 ${t.num}`}>
-                {s.units.toLocaleString()}
-              </p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                {t.tag}
-                {s.clinicId != null ? ` · clinic ${s.clinicId} line` : ""}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }

@@ -24,6 +24,8 @@ import {
   userIdForStaff,
 } from "@/lib/notify";
 import { logAction } from "@/lib/audit";
+import { cleanDosingNote, dispensedNotice } from "@/lib/dispense-notice";
+import { isStablePatient } from "@/lib/stable-patient";
 import { assertOnline, runTransactionOnline } from "@/lib/offline";
 
 // Shape the existing UI already expects (see pharmacist.index.tsx, pharmacist.stock.tsx).
@@ -297,10 +299,10 @@ export interface PatientDirectoryEntry {
   fullName: string;
   medicalRecordNo?: number;
   chronicCondition?: string;
-  /** A nurse or doctor's clinical judgement — see src/lib/fast-lane.ts.
-   *  Only Fast Lane patients may collect medication directly from the
-   *  pharmacist without queuing through a nurse. */
-  fastLane: boolean;
+  /** Stable patient (CCMDD-eligible): a nurse or doctor's clinical judgement —
+   *  see src/lib/stable-patient.ts. Only stable patients may have medication
+   *  handed over directly by the pharmacist without seeing a nurse first. */
+  stablePatient: boolean;
 }
 
 /**
@@ -343,7 +345,7 @@ export function usePatientDirectory(): {
             fullName: userNameById.get(p.userId) || "Unknown patient",
             medicalRecordNo: p.medicalRecordNo,
             chronicCondition: p.chronicCondition,
-            fastLane: p.fastLane === true,
+            stablePatient: isStablePatient(p),
           };
         });
 
@@ -1420,7 +1422,7 @@ export async function findMedicationAtOtherClinics(
 }
 
 // ---------------------------------------------------------------------------
-// Pharmacist dispensing (Fast Lane patients collecting straight from the
+// Pharmacist dispensing (stable patients collecting straight from the
 // pharmacy). Mirrors the nurse's dispenseMedication: ONE transaction checks
 // the stock, deducts it and writes the dispensing record, so two people can't
 // both hand out the last box, and a failure part-way can't leave stock reduced
@@ -1435,6 +1437,8 @@ export async function dispenseFromPharmacy(input: {
   pharmacistId: string;
   pharmacistName: string;
   medicalRecordNo?: number;
+  /** How the patient should take it; sent to them with the confirmation. */
+  dosingNote?: string;
 }): Promise<{ medName: string; remaining: number }> {
   assertOnline();
   if (!Number.isInteger(input.unitsGiven) || input.unitsGiven <= 0)
@@ -1480,8 +1484,9 @@ export async function dispenseFromPharmacy(input: {
       nurseId: null,
       pharmacistId: input.pharmacistId,
       dispensedBy: input.pharmacistName,
-      source: "pharmacist_fast_lane",
+      source: "pharmacist_stable_patient",
       note: null,
+      dosingNote: cleanDosingNote(input.dosingNote) || null,
       createdAt: serverTimestamp(),
     });
 
@@ -1492,16 +1497,27 @@ export async function dispenseFromPharmacy(input: {
         { lastVisit },
         { merge: true },
       );
-      tx.set(doc(db, "patients", input.patientId), { lastVisit }, { merge: true });
+      tx.set(
+        doc(db, "patients", input.patientId),
+        { lastVisit },
+        { merge: true },
+      );
     }
     if (patientUserId != null && !Number.isNaN(patientUserId)) {
+      const notice = dispensedNotice({
+        unitsGiven: input.unitsGiven,
+        medName,
+        dosingNote: input.dosingNote,
+      });
       tx.set(doc(collection(db, "notifications")), {
         notifId: Date.now(),
         userId: patientUserId,
-        title: "Medication dispensed",
-        message: `You were given ${input.unitsGiven}× ${medName}.`,
+        title: notice.title,
+        message: notice.message,
         isRead: false,
         timeSent: new Date().toISOString(),
+        // Where the prescription and dosage live.
+        link: "/patient/medical-record",
       });
     }
     return { medName, remaining: current - input.unitsGiven };
@@ -1539,7 +1555,15 @@ export async function dispenseFromPharmacy(input: {
 //     recomputed forecast.
 // ---------------------------------------------------------------------------
 
-export type ReorderStatus = "pending" | "ordered" | "dismissed";
+/**
+ * pending   - stock crossed its reorder level; nobody has decided yet
+ * ordered   - an order is placed with a supplier: a PENDING DELIVERY. Stock has
+ *             not changed, and does not until someone confirms it arrived
+ * received  - a pharmacist or admin confirmed what actually arrived (stock went
+ *             up by that typed amount, and who/when/how much is recorded)
+ * dismissed - decided against, or the order was cancelled
+ */
+export type ReorderStatus = "pending" | "ordered" | "received" | "dismissed";
 
 export interface ReorderRequest {
   docId: string;
@@ -1748,18 +1772,193 @@ export function usePendingReorders(clinicId: number | undefined): {
   return { reorders, loading };
 }
 
+// ---------------------------------------------------------------------------
+// Suggested reorders and "Quick reorder".
+//
+// The forecast already knows which medications are at "Order now" (critical) or
+// "Reorder soon" (warning). Quick reorder turns that into an action: the
+// pharmacist sees the suggestion without hunting for the colour-coded row,
+// adjusts the quantity if they need to, and one click records the order in the
+// same `reorders` collection the threshold-triggered requests use.
+// ---------------------------------------------------------------------------
+
 /**
- * Record that an order was actually placed with the supplier.
+ * How long a recorded order is taken to cover a shortage. Nothing marks an order
+ * as received, so without a limit one old order would silence every future
+ * suggestion for that medication for ever. A week is the supplier lead time (3
+ * days) plus a margin; if the item is still short after that, it is flagged again.
+ */
+export const ORDER_COVERS_DAYS = 7;
+
+export type OpenReorderKind = "pending" | "ordered";
+
+/** Is this reorder record still "in hand" - awaiting a decision, or ordered recently? */
+export function reorderIsOpen(
+  r: { status?: unknown; resolvedAt?: unknown; triggeredAt?: unknown },
+  now = new Date(),
+): OpenReorderKind | null {
+  if (r.status === "pending") return "pending";
+  if (r.status !== "ordered") return null;
+  const when = Date.parse(String(r.resolvedAt ?? r.triggeredAt ?? ""));
+  // An order with no readable date is given the benefit of the doubt.
+  if (!Number.isFinite(when)) return "ordered";
+  return now.getTime() - when < ORDER_COVERS_DAYS * 86_400_000
+    ? "ordered"
+    : null;
+}
+
+/**
+ * Which medications at this clinic already have a reorder in hand, by inventory
+ * document id. A single equality filter with the rest checked here, like the
+ * other reorder queries, so no composite index is needed.
+ */
+export function useOpenReorders(clinicId: number | undefined): {
+  openByInventoryDoc: Map<string, { kind: OpenReorderKind; docId: string }>;
+  loading: boolean;
+} {
+  const [open, setOpen] = useState<
+    Map<string, { kind: OpenReorderKind; docId: string }>
+  >(new Map());
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (clinicId == null) {
+      setOpen(new Map());
+      setLoading(false);
+      return;
+    }
+    const unsub = onSnapshot(
+      query(collection(db, "reorders"), where("clinicId", "==", clinicId)),
+      (snap) => {
+        const next = new Map<
+          string,
+          { kind: OpenReorderKind; docId: string }
+        >();
+        for (const d of snap.docs) {
+          const x = d.data();
+          const kind = reorderIsOpen(x);
+          if (!kind) continue;
+          const key = String(x.inventoryDocId ?? "");
+          // "pending" wins: it is the one still waiting for a decision.
+          if (key && next.get(key)?.kind !== "pending")
+            next.set(key, { kind, docId: d.id });
+        }
+        setOpen(next);
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Open reorders subscription failed:", err);
+        setOpen(new Map());
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [clinicId]);
+
+  return { openByInventoryDoc: open, loading };
+}
+
+/**
+ * The medications that should be offered a suggested reorder: "Order now" and
+ * "Reorder soon", skipping any that already have a reorder in hand, most urgent
+ * first (the forecast list is already in that order).
+ */
+export function reorderSuggestions(
+  forecasts: MedForecast[],
+  open: Map<string, unknown>,
+): MedForecast[] {
+  return forecasts.filter(
+    (f) =>
+      (f.status === "critical" || f.status === "reorder") &&
+      !!f.docId &&
+      !open.has(f.docId) &&
+      f.suggestedOrder > 0,
+  );
+}
+
+/**
+ * Place a reorder in one step, with a quantity the pharmacist has chosen.
  *
- * Deliberately does NOT add the stock. Nothing has arrived yet — the stock
- * goes up when it physically does, through "Receive stock into the pharmacy"
- * on the Deliveries page. Crediting it here would show units on the shelf
- * that nobody can hand to a patient.
+ * Writes to the existing `reorders` collection. If the threshold flow already
+ * raised a pending request for this medication, THAT request is confirmed
+ * rather than a second one created. Like confirmReorder, it records the order
+ * only - it does not add stock; that happens when the delivery is received.
+ */
+export async function quickReorder(input: {
+  clinicId: number;
+  inventoryDocId: string;
+  medName: string;
+  currentUnits: number;
+  suggestedQty: number;
+  orderedQty: number;
+  /** Who it is being ordered from. Required: an order needs a supplier. */
+  supplier: string;
+  by: string;
+}): Promise<void> {
+  assertOnline();
+  if (!Number.isInteger(input.orderedQty) || input.orderedQty <= 0) {
+    throw new Error("Enter a whole number of units greater than 0.");
+  }
+  if (!input.supplier.trim()) throw new Error("Choose a supplier.");
+  // Read fresh from the server, not from what the page happens to be showing:
+  // two pharmacists must not both order the same shortage.
+  const existing = await getDocs(
+    query(
+      collection(db, "reorders"),
+      where("inventoryDocId", "==", input.inventoryDocId),
+    ),
+  );
+  const inHand = existing.docs
+    .map((d) => ({ id: d.id, kind: reorderIsOpen(d.data()) }))
+    .filter((r) => r.kind !== null);
+  const pending = inHand.find((r) => r.kind === "pending");
+  if (pending) {
+    await confirmReorder(
+      pending.id,
+      input.orderedQty,
+      input.by,
+      input.supplier,
+    );
+    return;
+  }
+  if (inHand.some((r) => r.kind === "ordered")) {
+    throw new Error(
+      `${input.medName} has already been ordered recently. Check Deliveries before ordering again.`,
+    );
+  }
+  const now = new Date().toISOString();
+  await addDoc(collection(db, "reorders"), {
+    clinicId: input.clinicId,
+    inventoryDocId: input.inventoryDocId,
+    medName: input.medName,
+    currentUnits: input.currentUnits,
+    suggestedQty: input.suggestedQty,
+    status: "ordered" satisfies ReorderStatus,
+    orderedQty: input.orderedQty,
+    supplier: input.supplier.trim(),
+    triggeredAt: now,
+    resolvedAt: now,
+    resolvedBy: input.by,
+    // How it came about, so "ordered from the suggestion" is distinguishable
+    // from "raised when stock crossed its reorder level".
+    source: "quick-reorder",
+  });
+}
+
+/**
+ * Record that an order was actually placed with the supplier. The order is now
+ * a pending delivery, listed on the Deliveries page until it arrives.
+ *
+ * Deliberately does NOT add the stock. Nothing has arrived yet — the stock goes
+ * up only when a pharmacist or admin confirms the delivery on the Deliveries
+ * page and types in what actually arrived (see receiveSupplierOrder). Crediting
+ * it here would show units on the shelf that nobody can hand to a patient.
  */
 export async function confirmReorder(
   docId: string,
   orderedQty: number,
   by: string,
+  supplier?: string,
 ): Promise<void> {
   // Other pharmacists at the clinic read this list to decide whether to
   // order. "Ordered" that only exists on one laptop would cause a double
@@ -1771,6 +1970,7 @@ export async function confirmReorder(
   await updateDoc(doc(db, "reorders", docId), {
     status: "ordered" satisfies ReorderStatus,
     orderedQty,
+    ...(supplier?.trim() ? { supplier: supplier.trim() } : {}),
     resolvedAt: new Date().toISOString(),
     resolvedBy: by,
   });
@@ -1802,5 +2002,244 @@ export async function saveReorderThreshold(
   await updateDoc(doc(db, "inventory", inventoryDocId), {
     reorderThreshold: Math.floor(value),
     lastUpdated: new Date().toISOString(),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Orders placed with a supplier, and receiving them.
+//
+// An order is a `reorders` document with status "ordered": a pending delivery.
+// Placing it changes no stock. It becomes "received" only when a pharmacist or
+// admin confirms, on the Deliveries page, how many units actually arrived - that
+// typed figure (not the ordered one) is what is added to the shelf, and who
+// confirmed it, when, and any shortfall or surplus stays on the record.
+// ---------------------------------------------------------------------------
+
+/** Who may confirm that a delivery arrived (and so add its stock). */
+export function canConfirmDelivery(role: string | null | undefined): boolean {
+  return role === "pharmacist" || role === "admin";
+}
+
+export interface SupplierOrder {
+  docId: string;
+  clinicId: number;
+  inventoryDocId: string;
+  medName: string;
+  orderedQty: number;
+  /** Absent on orders recorded before suppliers were captured. */
+  supplier?: string;
+  orderedAt: string;
+  orderedBy?: string;
+  status: "ordered" | "received";
+  receivedQty?: number;
+  receivedBy?: string;
+  receivedByRole?: string;
+  receivedAt?: string;
+  /** Received something other than what was ordered. */
+  hasDiscrepancy?: boolean;
+  discrepancyNote?: string;
+}
+
+/** Orders for one clinic's stock: those still on their way, and those received. */
+export function useSupplierOrders(clinicId: number | undefined): {
+  orders: SupplierOrder[];
+  loading: boolean;
+} {
+  const [orders, setOrders] = useState<SupplierOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (clinicId == null) {
+      setOrders([]);
+      setLoading(false);
+      return;
+    }
+    // One equality filter, the rest in JS: no composite index to create by hand.
+    const unsub = onSnapshot(
+      query(collection(db, "reorders"), where("clinicId", "==", clinicId)),
+      (snap) => {
+        setOrders(
+          snap.docs
+            .map((d) => ({ d, x: d.data() }))
+            .filter(
+              ({ x }) => x.status === "ordered" || x.status === "received",
+            )
+            .map(({ d, x }) => ({
+              docId: d.id,
+              clinicId: toNumber(x.clinicId),
+              inventoryDocId: String(x.inventoryDocId ?? ""),
+              medName: String(x.medName ?? "Unknown medication"),
+              orderedQty: toNumber(x.orderedQty),
+              supplier:
+                typeof x.supplier === "string" && x.supplier
+                  ? x.supplier
+                  : undefined,
+              orderedAt: String(x.resolvedAt ?? x.triggeredAt ?? ""),
+              orderedBy:
+                typeof x.resolvedBy === "string" ? x.resolvedBy : undefined,
+              status: x.status as "ordered" | "received",
+              receivedQty:
+                x.receivedQty == null ? undefined : toNumber(x.receivedQty),
+              receivedBy:
+                typeof x.receivedBy === "string" ? x.receivedBy : undefined,
+              receivedByRole:
+                typeof x.receivedByRole === "string"
+                  ? x.receivedByRole
+                  : undefined,
+              receivedAt:
+                typeof x.receivedAt === "string" ? x.receivedAt : undefined,
+              hasDiscrepancy: x.hasDiscrepancy === true,
+              discrepancyNote:
+                typeof x.discrepancyNote === "string" && x.discrepancyNote
+                  ? x.discrepancyNote
+                  : undefined,
+            }))
+            .sort((a, b) => b.orderedAt.localeCompare(a.orderedAt)),
+        );
+        setLoading(false);
+      },
+      (err) => {
+        console.error("Supplier orders subscription failed:", err);
+        setOrders([]);
+        setLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [clinicId]);
+
+  return { orders, loading };
+}
+
+/**
+ * Confirms that a supplier delivery arrived and adds what arrived to stock.
+ *
+ * - Only a pharmacist or admin may do this (checked against the signed-in
+ *   person's profile, not just hidden in the page).
+ * - `receivedQty` is what the person counted and typed. It is added as given,
+ *   never the ordered figure, so a short or over delivery shows up in the stock
+ *   and on the record.
+ * - If it differs from what was ordered a note saying why is required.
+ * - One transaction: the stock, and the order closing, happen together or not at
+ *   all, and a second confirmation of the same order is refused.
+ */
+export async function receiveSupplierOrder(input: {
+  orderDocId: string;
+  receivedQty: number;
+  /** The confirming person's display name, for the record. */
+  by: string;
+  note?: string;
+}): Promise<{
+  medName: string;
+  orderedQty: number;
+  receivedQty: number;
+  newUnits: number;
+}> {
+  // Stock is a shared number; an offline receipt would be applied against a
+  // stale figure and could be banked twice.
+  assertOnline();
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Not signed in.");
+  const profile = await getDoc(doc(db, "profiles", uid));
+  const role = profile.exists() ? String(profile.data().role ?? "") : "";
+  if (!canConfirmDelivery(role)) {
+    throw new Error(
+      "Only a pharmacist or an admin can confirm that a delivery arrived.",
+    );
+  }
+  if (!Number.isInteger(input.receivedQty) || input.receivedQty <= 0) {
+    throw new Error(
+      "Enter how many units actually arrived, as a whole number above 0.",
+    );
+  }
+  const note = (input.note ?? "").trim().slice(0, 300);
+
+  const orderRef = doc(db, "reorders", input.orderDocId);
+  const done = await runTransactionOnline(db, async (tx) => {
+    const orderSnap = await tx.get(orderRef);
+    if (!orderSnap.exists()) throw new Error("That order no longer exists.");
+    const o = orderSnap.data();
+    if (o.status !== "ordered") {
+      throw new Error("This delivery was already handled.");
+    }
+    const invRef = doc(db, "inventory", String(o.inventoryDocId ?? ""));
+    const invSnap = await tx.get(invRef);
+    if (!invSnap.exists()) {
+      throw new Error("That medication is no longer in inventory.");
+    }
+    const orderedQty = toNumber(o.orderedQty);
+    const differs = input.receivedQty !== orderedQty;
+    if (differs && !note) {
+      throw new Error(
+        `You ordered ${orderedQty} but entered ${input.receivedQty}. Add a short note saying why they differ.`,
+      );
+    }
+    // Written as an explicit number: quantity is sometimes stored as a string
+    // (see addInventoryStock), which increment() would silently overwrite.
+    const newUnits = toNumber(invSnap.data().quantity) + input.receivedQty;
+    const at = new Date().toISOString();
+    tx.update(invRef, { quantity: newUnits, lastUpdated: at });
+    tx.update(orderRef, {
+      status: "received" satisfies ReorderStatus,
+      receivedQty: input.receivedQty,
+      receivedBy: input.by,
+      receivedByUid: uid,
+      receivedByRole: role,
+      receivedAt: at,
+      hasDiscrepancy: differs,
+      discrepancyNote: note || null,
+    });
+    return {
+      medName: String(o.medName ?? "medication"),
+      orderedQty,
+      clinicId: o.clinicId as number | undefined,
+      newUnits,
+    };
+  });
+
+  logAction({
+    clinicId: done.clinicId != null ? Number(done.clinicId) : null,
+    actor_id: input.by,
+    action_type: "pharmacy.delivery_received",
+    description:
+      `${input.by} confirmed receipt of ${input.receivedQty} × ${done.medName}` +
+      (input.receivedQty === done.orderedQty
+        ? ` (as ordered).`
+        : ` — ${done.orderedQty} were ordered.${note ? ` Note: ${note}` : ""}`),
+  });
+
+  return {
+    medName: done.medName,
+    orderedQty: done.orderedQty,
+    receivedQty: input.receivedQty,
+    newUnits: done.newUnits,
+  };
+}
+
+/**
+ * Cancels an order that is still on its way (it will not arrive, or was placed
+ * by mistake). Changes no stock. Only a pharmacist or admin may.
+ */
+export async function cancelSupplierOrder(input: {
+  orderDocId: string;
+  by: string;
+}): Promise<void> {
+  assertOnline();
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Not signed in.");
+  const profile = await getDoc(doc(db, "profiles", uid));
+  const role = profile.exists() ? String(profile.data().role ?? "") : "";
+  if (!canConfirmDelivery(role)) {
+    throw new Error("Only a pharmacist or an admin can cancel an order.");
+  }
+  const ref = doc(db, "reorders", input.orderDocId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("That order no longer exists.");
+  if (snap.data().status !== "ordered") {
+    throw new Error("This order was already handled.");
+  }
+  await updateDoc(ref, {
+    status: "dismissed" satisfies ReorderStatus,
+    cancelledBy: input.by,
+    cancelledAt: new Date().toISOString(),
   });
 }

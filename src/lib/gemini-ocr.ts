@@ -58,6 +58,27 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+/**
+ * What a person is told when a scan can't be read. The technical cause (which
+ * service, the HTTP status, a missing setting) is kept in `detail` for the
+ * console and never put in front of the user: it is not something they can act
+ * on, and it shouldn't reveal how the reading is done.
+ */
+export class ScanReadError extends Error {
+  readonly kind: "unreadable" | "unavailable";
+  readonly detail: string;
+  constructor(kind: "unreadable" | "unavailable", detail: string) {
+    super(
+      kind === "unavailable"
+        ? "Scan reading isn't available right now. Please enter the details by hand, or try again later."
+        : "Couldn't read this scan clearly — try retaking the photo.",
+    );
+    this.name = "ScanReadError";
+    this.kind = kind;
+    this.detail = detail;
+  }
+}
+
 export interface GeminiExtractionResult {
   data: DigitizedPatientData;
   confidence: number;
@@ -68,7 +89,8 @@ export async function extractPatientDataWithGemini(
 ): Promise<GeminiExtractionResult> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
   if (!apiKey) {
-    throw new Error(
+    throw new ScanReadError(
+      "unavailable",
       "VITE_GEMINI_API_KEY is not set — add it to your .env file, then restart the dev server.",
     );
   }
@@ -76,40 +98,60 @@ export async function extractPatientDataWithGemini(
   const base64 = await blobToBase64(image);
   const mimeType = image.type || "image/jpeg";
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: PROMPT },
-              { inline_data: { mime_type: mimeType, data: base64 } },
-            ],
-          },
-        ],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    },
-  );
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: PROMPT },
+                { inline_data: { mime_type: mimeType, data: base64 } },
+              ],
+            },
+          ],
+          generationConfig: { responseMimeType: "application/json" },
+        }),
+      },
+    );
+  } catch (err) {
+    // Offline, blocked, DNS: the request never completed.
+    throw new ScanReadError(
+      "unavailable",
+      `request failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    throw new Error(`Gemini API error ${res.status}: ${errText.slice(0, 200)}`);
+    // 4xx/5xx from the service is not the scan's fault: say "unavailable".
+    throw new ScanReadError(
+      "unavailable",
+      `Gemini API error ${res.status}: ${errText.slice(0, 200)}`,
+    );
   }
 
   const json = await res.json();
   const text: string | undefined =
     json?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned no extractable text");
+  if (!text)
+    throw new ScanReadError(
+      "unreadable",
+      "Gemini returned no extractable text",
+    );
 
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error("Gemini response wasn't valid JSON — try scanning again");
+    throw new ScanReadError(
+      "unreadable",
+      "Gemini response wasn't valid JSON — try scanning again",
+    );
   }
 
   const str = (v: unknown) => (typeof v === "string" ? v : "");

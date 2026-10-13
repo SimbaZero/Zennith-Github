@@ -12,7 +12,8 @@
 // observation. It is stored with source: "patient" so it is never confused
 // with a dose a nurse actually witnessed and logged (source: "nurse"), and it
 // is shown to clinicians as evidence to weigh, never as an automatic score —
-// see fastLaneEvidence below and the fast-lane toggle in nurse/doctor-service.
+// see the stable-patient evidence below and the stable-patient toggle (see
+// stable-patient.ts).
 // ---------------------------------------------------------------------------
 
 export const MAX_REMINDER_TIMES = 4;
@@ -167,7 +168,7 @@ export function nextReminder(
     : { time: valid[0], tomorrow: true };
 }
 
-// ---- fast-lane evidence -----------------------------------------------------
+// ---- stable-patient evidence ------------------------------------------------
 
 export interface AdherenceLogEntry {
   date: string; // YYYY-MM-DD
@@ -225,4 +226,34 @@ export function summarizeAdherence(
       days.length === 0 ? null : Math.round((credit / days.length) * 100),
     selfReportedDays: taken.filter((d) => d.source === "patient").length,
   };
+}
+
+// ---- confirming a dose, and the short window to take it back ----------------
+
+/** How long after confirming a dose the patient can still undo it. After this
+ *  the log stands - it is evidence a clinician reads, so it isn't left freely
+ *  reversible for the rest of the day. */
+export const UNDO_WINDOW_MS = 5 * 60_000;
+
+/**
+ * Milliseconds of undo time left for a dose confirmed at `takenAtIso`, 0 once
+ * the window has closed. A dose with no recorded time (logged before times were
+ * kept) or one stamped in the future (a badly set device clock) gets none: it
+ * can't be shown to be recent, so it isn't treated as undoable.
+ */
+export function undoTimeLeftMs(
+  takenAtIso: string | null | undefined,
+  now: Date,
+): number {
+  if (!takenAtIso) return 0;
+  const t = Date.parse(takenAtIso);
+  if (!Number.isFinite(t)) return 0;
+  const age = now.getTime() - t;
+  if (age < -60_000) return 0;
+  return Math.max(0, UNDO_WINDOW_MS - Math.max(0, age));
+}
+
+/** The Firestore map key for one reminder time's confirmation time, "08:00" -> "t0800". */
+export function takenAtKey(time: string): string {
+  return `t${time.replace(":", "")}`;
 }

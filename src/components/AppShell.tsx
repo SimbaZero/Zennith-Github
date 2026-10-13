@@ -35,10 +35,12 @@ import {
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
 import { useSignedInName } from "@/lib/signed-in-name";
 import { toast } from "sonner";
+import { Loading } from "@/components/Loading";
 import { useMedicationReminderNotifier } from "@/lib/use-reminder-notifier";
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { waitForPendingWrites } from "firebase/firestore";
-import { db } from "@/firebase";
+import { auth, db } from "@/firebase";
+import { useTabPresence } from "@/lib/tab-presence";
 import { useOnline } from "@/lib/offline";
 import { WifiOff, CloudUpload, CheckCircle2 } from "lucide-react";
 import { getRoleSearchIndex, type SearchEntry } from "@/lib/search-index";
@@ -62,6 +64,8 @@ import { useCurrentNurse } from "@/lib/nurse-service";
 import { resolveCurrentReceptionist } from "@/lib/clinic-data";
 import { useCurrentAdmin } from "@/lib/auth";
 import { jumpToSection } from "@/lib/jump-to-section";
+import { openNotification } from "@/lib/notification-link";
+import { useMyNotifications } from "@/lib/use-my-notifications";
 
 export type NavItem = { to: string; label: string; icon: LucideIcon };
 
@@ -90,9 +94,9 @@ const navByRole: Record<Role, NavItem[]> = {
     { to: "/pharmacist/stock", label: "Stock Levels", icon: Boxes },
     {
       to: "/pharmacist/diagnostics",
-      // Covers both halves of the page: looking a Fast Lane patient's
+      // Covers both halves of the page: looking a stable patient's
       // prescription up, and handing the medication to them directly.
-      label: "Fast Lane Handover",
+      label: "Stable Patient Handover",
       icon: Search,
     },
 
@@ -122,6 +126,7 @@ const navByRole: Record<Role, NavItem[]> = {
     { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
     { to: "/admin/users", label: "Create User", icon: UserPlus },
     { to: "/admin/staff", label: "All Staff", icon: ShieldCheck },
+    { to: "/admin/requests", label: "Clinic Requests", icon: ClipboardList },
     { to: "/admin/audit", label: "Audit Logs", icon: Activity },
   ],
   super_admin: [
@@ -130,6 +135,11 @@ const navByRole: Record<Role, NavItem[]> = {
     {
       to: "/super-admin/applications",
       label: "Clinic Applications",
+      icon: ClipboardList,
+    },
+    {
+      to: "/super-admin/requests",
+      label: "Clinic Requests",
       icon: ClipboardList,
     },
     { to: "/super-admin/audit", label: "Security & Audit", icon: ShieldCheck },
@@ -258,6 +268,10 @@ export function AppShell({
   // Medication reminders fire from here so they reach a patient on any page,
   // not only while the dashboard is open.
   useMedicationReminderNotifier(sidebarPatient, role === "patient");
+  // Lets another tab for this account notice this one (see tab-presence.ts), so
+  // a second tab can say "already signed in in another tab" rather than a
+  // connection message that isn't true.
+  useTabPresence(() => auth.currentUser?.uid);
   // Real pharmacist data. clinicIds/fullName are undefined for every other
   // role, so this does no Firestore reads when not relevant.
   const { pharmacist } = useCurrentPharmacist();
@@ -300,7 +314,10 @@ export function AppShell({
   const nameLoading = !nameWaitOver && !resolvedName && profileNameLoading;
   const initial = nameLoading ? "" : display.charAt(0).toUpperCase();
   const canSwitch = !!staffCanSwitch[role];
-  const siteLabel =
+  const clinicLoadingLabel = (
+    <Loading label="Loading clinic" size={11} className="!text-inherit" />
+  );
+  const siteLabel: ReactNode =
     role === "super_admin"
       ? "Zennith Platform · All facilities"
       : role === "patient"
@@ -310,11 +327,11 @@ export function AppShell({
         : role === "pharmacist"
           ? (clinicNameOverride ??
             realPharmacistClinic.activeClinicName ??
-            "Loading clinic…")
+            clinicLoadingLabel)
           : role === "doctor"
             ? (clinicNameOverride ??
               realDoctorClinic.activeClinicName ??
-              "Loading clinic…")
+              clinicLoadingLabel)
             : (clinicNameOverride ?? "Zennith");
 
   return (
@@ -421,7 +438,7 @@ export function AppShell({
                 clinicName={
                   clinicNameOverride ??
                   realPharmacistClinic.activeClinicName ??
-                  "Loading clinic…"
+                  clinicLoadingLabel
                 }
                 canSwitch={canSwitch && clinicNameOverride == null}
                 onSwitch={(id) =>
@@ -438,7 +455,7 @@ export function AppShell({
                 clinicName={
                   clinicNameOverride ??
                   realDoctorClinic.activeClinicName ??
-                  "Loading clinic…"
+                  clinicLoadingLabel
                 }
                 canSwitch={canSwitch && clinicNameOverride == null}
                 onSwitch={(id) =>
@@ -576,44 +593,13 @@ function NotificationsButton({ role }: { role: Role }) {
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  // Real for EVERY role now. The notifications collection was always keyed
-  // on the numeric users.userId — which every role has — but only Patients
-  // were ever wired to it; the rest rendered a hardcoded fake list.
-  const { patient } = useCurrentPatient();
-  const { nurse } = useCurrentNurse();
-  const { doctor } = useCurrentDoctor();
-  const { pharmacist } = useCurrentPharmacist();
-  const { data: receptionist } = useQuery({
-    queryKey: ["current-receptionist"],
-    queryFn: resolveCurrentReceptionist,
-    enabled: role === "receptionist",
-  });
-  const { admin } = useCurrentAdmin();
-
-  const userId =
-    role === "patient"
-      ? patient?.userId
-      : role === "nurse"
-        ? nurse?.userId
-        : role === "doctor"
-          ? doctor?.userId
-          : role === "pharmacist"
-            ? pharmacist?.userId
-            : role === "receptionist"
-              ? receptionist?.userId
-              : undefined;
-
-  // Admins are addressed by profile id, everyone else by numeric userId.
-  // A reminder the person scheduled ("remind me in 3 hours") appears here by
-  // itself when its time comes; say so with a toast too, so it's seen.
-  const byUserId = useNotifications(
-    role === "admin" ? undefined : userId,
-    (n) => toast(n.title, { description: n.message, duration: 15_000 }),
+  // Every role's notifications are real: one collection, addressed by the
+  // numeric userId (or profile id for admins). A reminder the person scheduled
+  // ("remind me in 3 hours") appears here by itself when its time comes; say so
+  // with a toast too, so it's seen.
+  const items = useMyNotifications(role, (n) =>
+    toast(n.title, { description: n.message, duration: 15_000 }),
   );
-  const byProfile = useNotificationsByProfile(
-    role === "admin" ? admin?.profileId : undefined,
-  );
-  const items = role === "admin" ? byProfile : byUserId;
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -674,21 +660,11 @@ function NotificationsButton({ role }: { role: Role }) {
                   key={n.docId}
                   onClick={() => {
                     if (!n.isRead) markRead(n.docId);
-                    // A notification should be a way IN, not just an
-                    // announcement — jump to where you can act on it.
-                    if (n.link) {
-                      setOpen(false);
-                      // "/page#section" goes to the page AND scrolls to
-                      // (and briefly highlights) that section.
-                      const [path, hash] = n.link.split("#");
-                      (
-                        navigate as unknown as (opts: {
-                          to: string;
-                          hash?: string;
-                        }) => void
-                      )({ to: path, hash: hash || undefined });
-                      if (hash) jumpToSection(hash);
-                    }
+                    setOpen(false);
+                    // A notification is a way IN, not just an announcement:
+                    // go to the thing it is about, or - if it has no page of
+                    // its own - to its detail page.
+                    openNotification(navigate, n);
                   }}
                   className={`w-full text-left p-3 border-b last:border-b-0 hover:bg-secondary/50 ${
                     !n.isRead ? "bg-[oklch(0.97_0.03_245)]" : ""
@@ -711,6 +687,19 @@ function NotificationsButton({ role }: { role: Role }) {
                 </button>
               ))
             )}
+          </div>
+          <div className="border-t p-2">
+            <button
+              className="w-full rounded-md py-1.5 text-center text-xs font-medium text-[oklch(0.4_0.15_245)] hover:bg-secondary"
+              onClick={() => {
+                setOpen(false);
+                (
+                  navigate as unknown as (opts: { to: string }) => void
+                )({ to: "/notifications" });
+              }}
+            >
+              View all notifications
+            </button>
           </div>
         </div>
       )}
@@ -736,7 +725,7 @@ function ClinicChip({
   options,
 }: {
   clinicId: string | number;
-  clinicName: string;
+  clinicName: ReactNode;
   canSwitch: boolean;
   onSwitch: (id: string | number) => void;
   options: { id: string | number; name: string; area?: string }[];
@@ -803,7 +792,8 @@ export type AppointmentStatus =
   | "No-show"
   | "In-progress"
   | "Scheduled"
-  | "Confirmed";
+  | "Confirmed"
+  | "Cancelled";
 export type AnyStatus = StockStatus | AppointmentStatus;
 
 /** Compute status from current units vs threshold:
@@ -828,6 +818,7 @@ export function StatusBadge({ status }: { status: AnyStatus }) {
     "No-show": "bg-[oklch(0.55_0.22_25)] text-white",
     Scheduled: "bg-[oklch(0.94_0.05_245)] text-[oklch(0.4_0.15_245)]",
     Confirmed: "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]",
+    Cancelled: "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]",
   };
   const labels: Record<AnyStatus, string> = {
     OK: "OK",
@@ -839,6 +830,7 @@ export function StatusBadge({ status }: { status: AnyStatus }) {
     "No-show": "No-show",
     Scheduled: "Scheduled",
     Confirmed: "Confirmed",
+    Cancelled: "Cancelled",
   };
   return (
     <span

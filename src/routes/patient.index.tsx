@@ -1,7 +1,9 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useState } from "react";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import { useNow } from "@/lib/store";
+import { SYMPTOM_DISCLAIMER } from "@/lib/symptom-categories";
 import { useStockSearch, STOCK_SEARCH_MIN_CHARS } from "@/lib/use-stock-search";
 import {
   appointmentDateTimeLabel,
@@ -92,9 +94,15 @@ function PatientDashboard() {
         <div>
           <p className="text-xs text-white/60">Welcome back,</p>
           <h2 className="text-3xl font-bold mt-1">
-            {patientLoading
-              ? "Loading..."
-              : (patient?.fullName ?? "Unknown patient")}
+            {patientLoading ? (
+              <Loading
+                label="Loading"
+                size={22}
+                className="!text-white/70 text-base font-normal"
+              />
+            ) : (
+              (patient?.fullName ?? "Unknown patient")
+            )}
           </h2>
           <p className="text-sm text-white/70 mt-1">
             {patient?.patientId} · {clinicLabel}
@@ -118,6 +126,8 @@ function PatientDashboard() {
         </div>
         <p className="text-xs text-muted-foreground mb-3">
           Search what is in stock at {patient?.clinicName ?? "your clinic"}.
+          You can also type a symptom, such as “headache” or “cough”, to see
+          that section of the stock.
         </p>
         {searching && search.status === "done" && !search.clinicLinked && (
           <p className="mb-3 text-sm text-muted-foreground">
@@ -139,16 +149,35 @@ function PatientDashboard() {
           placeholder='Search by medication name, e.g. "Metformin", "TLD"...'
           className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
         />
+        {/* A symptom word was read as a category match. The disclaimer is always
+            shown with it - it can't be dismissed, and it stays whether there are
+            results, none, or the search is still running. */}
+        {searching && search.symptom && (
+          <div
+            data-testid="symptom-note"
+            className="mt-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-950"
+          >
+            <p>
+              Showing the <strong>{search.symptom.label}</strong> section of
+              your clinic's stock, for “{search.symptom.matched.join(", ")}”.
+            </p>
+            <p className="mt-1 text-xs font-medium">{SYMPTOM_DISCLAIMER}</p>
+          </div>
+        )}
         {searching && search.status !== "unavailable" && (
           <ul className="mt-3 divide-y border rounded-md">
             {search.status === "loading" && (
-              <li className="p-3 text-sm text-muted-foreground">Searching…</li>
+              <li className="p-3 text-sm text-muted-foreground">
+                <Loading label="Searching" />
+              </li>
             )}
             {search.status === "done" &&
               search.clinicLinked &&
               search.items.length === 0 && (
                 <li className="p-3 text-sm text-muted-foreground">
-                  No match found at {patient?.clinicName ?? "your clinic"}.
+                  {search.symptom
+                    ? `Nothing in the ${search.symptom.label} section of the stock at ${patient?.clinicName ?? "your clinic"} right now.`
+                    : `No match found at ${patient?.clinicName ?? "your clinic"}.`}
                 </li>
               )}
             {search.status === "done" &&

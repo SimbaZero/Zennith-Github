@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
@@ -8,6 +9,7 @@ import {
   updateStaffDetails,
 } from "@/lib/auth";
 import { fetchClinicStaff, type ClinicStaffMember } from "@/lib/clinic-data";
+import { StaffClinicsPanel } from "@/components/StaffClinicsPanel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -22,6 +24,7 @@ import {
   MapPin,
   UserPlus,
   Pencil,
+  Building2,
 } from "lucide-react";
 
 export const Route = createFileRoute("/admin/staff")({ component: Staff });
@@ -61,6 +64,7 @@ function Staff() {
     null,
   );
   const [editing, setEditing] = useState<ClinicStaffMember | null>(null);
+  const [assigning, setAssigning] = useState<ClinicStaffMember | null>(null);
 
   const [toRemove, setToRemove] = useState<ClinicStaffMember | null>(null);
 
@@ -200,6 +204,17 @@ function Staff() {
         />
       )}
 
+      {assigning && (
+        <StaffClinicsPanel
+          staff={assigning}
+          onClose={() => setAssigning(null)}
+          onDone={() => {
+            setAssigning(null);
+            queryClient.invalidateQueries({ queryKey: ["clinic-staff"] });
+          }}
+        />
+      )}
+
       {creatingFor && (
         <CreateLoginPanel
           staff={creatingFor}
@@ -216,9 +231,11 @@ function Staff() {
         <div className="p-5 border-b flex items-center gap-2">
           <h2 className="font-semibold">Staff Directory</h2>
           <span className="text-xs text-muted-foreground ml-auto">
-            {isLoading
-              ? "Loading…"
-              : `${filtered.length} at ${admin?.clinicName ?? "your clinic"}`}
+            {isLoading ? (
+              <Loading label="Loading" size={12} />
+            ) : (
+              `${filtered.length} at ${admin?.clinicName ?? "your clinic"}`
+            )}
           </span>
         </div>
         <div className="overflow-x-auto">
@@ -263,6 +280,16 @@ function Staff() {
                     )}
                   </td>
                   <td className="px-5 py-3 text-right whitespace-nowrap">
+                    {(s.role === "doctor" || s.role === "pharmacist") && (
+                      <button
+                        onClick={() => setAssigning(s)}
+                        className="text-muted-foreground hover:text-foreground hover:bg-secondary p-1.5 rounded mr-1"
+                        aria-label="Choose clinics"
+                        title={`Choose which clinics this ${s.role} works at`}
+                      >
+                        <Building2 size={14} />
+                      </button>
+                    )}
                     {s.hasLogin && s.username && (
                       <button
                         onClick={() => setEditing(s)}
@@ -272,7 +299,10 @@ function Staff() {
                         <Pencil size={14} />
                       </button>
                     )}
-                    {s.hasLogin && s.username && (
+                    {/* Someone based at another clinic has ONE login, which
+                        is theirs there: from here, take this clinic off their
+                        list (the clinics button) rather than revoking it. */}
+                    {s.hasLogin && s.username && !s.visiting && (
                       <button
                         onClick={() => setToRemove(s)}
                         className="text-destructive hover:bg-destructive/10 p-1.5 rounded"

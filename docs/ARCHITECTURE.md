@@ -24,16 +24,32 @@ flowchart LR
 2. **Role lookup** — the user's role comes from `profiles/{authUid}` in
    Firestore. No profile → sign-in rejected ("no role assigned").
 3. **Two-factor** — `two-factor.tsx` reads the role and 2FA state from the
-   profile (`fetchTwoFactorProfile`), never from the URL. The only method is
-   the **authenticator app** (all roles): [src/lib/totp.ts](../src/lib/totp.ts)
-   (RFC 6238 TOTP, SHA-1/30s/6-digit, verified against the RFC test
-   vector). First login shows a QR code and setup key; the first valid code
-   stores the secret at `profiles/{uid}.totpSecret`. Later logins verify the
-   rotating code (±30s drift window). Text-message codes for patients were
-   removed: a profile still marked `twoFactorMethod: "sms"` is treated as an
-   authenticator account if it has a secret, otherwise it is asked to enrol one,
-   and the stale marker is cleared on that sign-in. An admin resets 2FA by
-   clearing `totpSecret` in the console.
+   profile (`fetchTwoFactorProfile`), never from the URL.
+   - **Authenticator app** (all roles): [src/lib/totp.ts](../src/lib/totp.ts)
+     (RFC 6238 TOTP, SHA-1/30s/6-digit, verified against the RFC test
+     vector). First login shows a QR code and setup key; the first valid code
+     stores the secret at `profiles/{uid}.totpSecret`. Later logins verify the
+     rotating code (±30s drift window).
+   - **Text message** (patients only): server functions in
+     [src/lib/sms-otp.ts](../src/lib/sms-otp.ts) →
+     [src/server/sms-otp.ts](../src/server/sms-otp.ts). The server verifies the
+     caller's Firebase ID token, texts a 6-digit code via SMSPortal to the
+     number on `users/{legacyUserId}.contactNum`, and keeps only a salted hash
+     in `smsChallenges/{uid}` (5-minute expiry, 5 attempts per code, 20 wrong
+     codes per day, 1 send a minute and 5 an hour per account, plus per-number
+     and app-wide daily caps; see the header of that file). Every patient may
+     use it, including those with an authenticator.
+   - **Choosing.** `profiles/{uid}.twoFactorMethod` ("sms" or "totp") is only
+     the remembered *default*; the authenticator is recognised by its secret.
+     A patient switches between the two on the sign-in screen themselves, and
+     the screen checks up front (`getSmsAvailability`) whether SMS can work, so
+     an unconfigured server shows "SMS isn't configured right now" instead of
+     failing after a click. Server failures come back as specific reasons
+     (not configured, provider rejected the credentials, number rejected,
+     limited by `SMS_ONLY_TO`, server error), never a bare exception.
+   - Text message is the weaker factor (SIM swap), so an account with an
+     authenticator is only as strong as the weaker method it allows.
+   An admin resets 2FA by clearing `totpSecret` in the console.
 4. **Session** — after 2FA, `setAuth(role, username, facilityId)` caches the role in
    `localStorage`. Route guards (`beforeLoad` in each `<role>.tsx` layout) read
    this cache **synchronously**, so guards work before Firebase resolves.

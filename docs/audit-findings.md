@@ -166,7 +166,7 @@ name:
 - **Doctor → Patient Files** keeps the old name until a full browser reload ❌
 - **Nurse → Patients** same (`usePatientFiles` → `enrichPatient`, line 796) ❌
 - **Doctor/Nurse → Appointments** same (`resolvePatientNames`, line 304) ❌
-- **Pharmacist → Fast Lane Handover** same, for a different reason (C8) ❌
+- **Pharmacist → Stable Patient Handover** same, for a different reason (C8) ❌
 
 The `patients` listener *does* fire and the row *does* re-render — it just re-renders
 with the cached name, which makes it look like the live subscription is broken when it
@@ -247,7 +247,7 @@ confirmed by grep across `src/routes` and `src/components`: zero hits for
 `usingFallback` or `mockStock` outside the service and `data.ts`.
 
 So on a permission error, an expired session, or an offline first load, the pharmacist's
-Deliveries and Fast Lane pages — **and the patient's "Find a medication" search** —
+Deliveries and Stable Patient Handover pages — **and the patient's "Find a medication" search** —
 display invented stock numbers indistinguishable from real ones.
 
 **Why it matters:** a patient is told a medication is "In stock" based on demo data and
@@ -652,7 +652,7 @@ shared component — see [Shared components](#shared-components).
 
 ## Pharmacist
 
-### `pharmacist.diagnostics.tsx` — "Fast Lane Handover"
+### `pharmacist.diagnostics.tsx` — "Stable Patient Handover" (called "Stable Patient Handover" when this audit was written)
 
 | # | Finding | Severity | Fix |
 |---|---|---|---|
@@ -666,7 +666,7 @@ can search and hand medication to a patient from any clinic in the platform, and
 list never updates while the page is open. The error path only logs.
 
 **PHA-3 detail.** Nothing in the file relates to diagnostics; the nav label and title
-both say "Fast Lane Handover". A reader looking for the handover code will not find it
+both say "Stable Patient Handover" (earlier: "Stable Patient Handover"). A reader looking for the handover code will not find it
 by filename. Renaming the route changes the URL, so it needs a redirect — small but not
 free.
 
@@ -694,7 +694,7 @@ in the same sidebar disagree about what "stock" means:
 | Stock Management | `useClinicForecasts(activeClinicId)` | this clinic |
 | Medication Overview | `useClinicForecasts(activeClinicId)` | this clinic |
 | Stock Deliveries | `useInventory()` | **every clinic** |
-| Fast Lane Handover | `useInventory()` | **every clinic** |
+| Stable Patient Handover | `useInventory()` | **every clinic** |
 
 A pharmacist reconciling a delivery against the stock page is comparing two different
 populations. `nurse-service.ts:796-798` already flags `useInventory()` as the odd one
@@ -995,7 +995,7 @@ individually; the value is in picking one word and applying it.
 | A staff member | "User" (admin nav, `users` collection — which is mostly patients), "Staff" (All Staff page), role collections | **ADM-4** |
 | A clinician's appointments | `useDoctorAppointments`, used by nurses too | **NUR-7** |
 | "Today" | three incompatible definitions | **C2** |
-| The fast-lane page | route `pharmacist.diagnostics.tsx`, titled "Fast Lane Handover" | **PHA-3** |
+| The stable-patient handover page | route `pharmacist.diagnostics.tsx`, titled "Stable Patient Handover" (previously "Stable Patient Handover") | **PHA-3** |
 
 ---
 

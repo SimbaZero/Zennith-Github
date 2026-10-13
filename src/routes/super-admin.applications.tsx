@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { useState } from "react";
@@ -140,11 +141,13 @@ function Applications() {
             />
           </div>
           <span className="text-xs text-muted-foreground ml-auto">
-            {isLoading
-              ? "Loading..."
-              : search.trim()
-                ? `${shown.length} of ${pending.length}`
-                : `${pending.length} awaiting review`}
+            {isLoading ? (
+              <Loading label="Loading" size={12} />
+            ) : search.trim() ? (
+              `${shown.length} of ${pending.length}`
+            ) : (
+              `${pending.length} awaiting review`
+            )}
           </span>
         </div>
 

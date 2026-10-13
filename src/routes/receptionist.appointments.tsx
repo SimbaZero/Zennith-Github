@@ -1,4 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { DateField } from "@/components/DateField";
+import { PatientPicker } from "@/components/PatientPicker";
+import { Loading } from "@/components/Loading";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell, StatusBadge } from "@/components/AppShell";
@@ -12,6 +15,8 @@ import {
   resolveCurrentReceptionist,
 } from "@/lib/clinic-data";
 import { Plus } from "lucide-react";
+import { bookingTimeProblem } from "@/lib/appointment-time";
+import { useNow } from "@/lib/store";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/receptionist/appointments")({
@@ -106,12 +111,18 @@ function ReceptionAppointments() {
       ),
   });
 
+  // Re-checked every half minute, so a slot that was fine when the form was
+  // opened is refused once its time has passed.
+  const now = useNow();
+  const timeProblem = bookingTimeProblem(draft.date, draft.time, now);
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!draft.patientId.trim())
-      return toast.error("Patient ID is required (e.g. Pat-828)");
+      return toast.error("Choose a patient: enter their Patient ID (e.g. Pat-828) or search by name");
     if (!draft.clinician.trim())
       return toast.error("Choose a clinician from the list");
+    if (timeProblem) return toast.error(timeProblem);
     create.mutate();
   };
 
@@ -126,9 +137,11 @@ function ReceptionAppointments() {
           <div>
             <h2 className="font-semibold">Latest Appointments</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {isLoading
-                ? "Loading…"
-                : `25 most recent at ${receptionist?.clinicName ?? "your clinic"}`}
+              {isLoading ? (
+                <Loading label="Loading" size={12} />
+              ) : (
+                `25 most recent at ${receptionist?.clinicName ?? "your clinic"}`
+              )}
             </p>
           </div>
           <input
@@ -150,11 +163,10 @@ function ReceptionAppointments() {
             onSubmit={submit}
             className="p-5 border-b bg-secondary/40 grid grid-cols-1 md:grid-cols-5 gap-3"
           >
-            <Field
-              label="Patient ID"
+            <PatientPicker
               value={draft.patientId}
               onChange={(v) => setDraft({ ...draft, patientId: v })}
-              placeholder="e.g. Pat-828"
+              clinicId={receptionist?.clinicId}
             />
             <div>
               <label
@@ -176,18 +188,28 @@ function ReceptionAppointments() {
                 pendingHint="Choose a clinician from the list."
               />
             </div>
-            <Field
+            <DateField
               label="Date"
-              type="date"
               value={draft.date}
               onChange={(v) => setDraft({ ...draft, date: v })}
             />
-            <Field
-              label="Time"
-              type="time"
-              value={draft.time}
-              onChange={(v) => setDraft({ ...draft, time: v })}
-            />
+            <div>
+              <Field
+                label="Time"
+                type="time"
+                value={draft.time}
+                onChange={(v) => setDraft({ ...draft, time: v })}
+              />
+              {timeProblem && (
+                <p
+                  role="alert"
+                  data-testid="booking-time-problem"
+                  className="mt-1 text-xs text-destructive"
+                >
+                  {timeProblem}
+                </p>
+              )}
+            </div>
             <div>
               <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
                 Type
@@ -214,7 +236,7 @@ function ReceptionAppointments() {
               </button>
               <button
                 type="submit"
-                disabled={create.isPending}
+                disabled={create.isPending || !!timeProblem}
                 className="bg-[oklch(0.55_0.18_245)] text-white px-3 py-1.5 rounded-md text-sm disabled:opacity-60"
               >
                 {create.isPending ? "Booking…" : "Book appointment"}

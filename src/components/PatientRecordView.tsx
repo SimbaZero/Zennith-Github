@@ -1,4 +1,5 @@
 ﻿import { Link, useNavigate } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { ZennithStar } from "@/components/ZennithStar";
 import { AppShell } from "@/components/AppShell";
 import { usePatientRecord } from "@/lib/doctor-service";
@@ -6,7 +7,7 @@ import { HIDDEN_BY_PATIENT } from "@/lib/privacy";
 import { updatePatient, updateMedicalRecord } from "@/lib/clinic-data";
 import { editedFields, type EditableFields } from "@/lib/record-edit";
 import { useClinicInventory, dispenseMedication } from "@/lib/nurse-service";
-import { FastLaneToggle } from "@/components/FastLaneToggle";
+import { StablePatientToggle } from "@/components/StablePatientToggle";
 import { addDoc, collection } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import {
@@ -17,11 +18,13 @@ import {
   Check,
   X,
   Plus,
+  Pill,
   Syringe,
 } from "lucide-react";
 import { generatePatientRecordPdf } from "@/lib/pdf-export";
 import { useState } from "react";
 import { isOffline } from "@/lib/offline";
+import { DOSING_PRESETS, MAX_DOSING_NOTE } from "@/lib/dispense-notice";
 import { toast } from "sonner";
 import type { Role } from "@/lib/auth";
 
@@ -83,6 +86,8 @@ export function PatientRecordView({
   const [dispenseMed, setDispenseMed] = useState("");
   const [dispenseQty, setDispenseQty] = useState("1");
   const [dispenseNote, setDispenseNote] = useState("");
+  // How the patient should take it; sent to them with the confirmation.
+  const [dosingNote, setDosingNote] = useState("");
   const [dispenseSaving, setDispenseSaving] = useState(false);
 
   const download = () => {
@@ -206,6 +211,7 @@ export function PatientRecordView({
         unitsGiven: qty,
         nurseId,
         note: dispenseNote.trim() || undefined,
+        dosingNote: dosingNote.trim() || undefined,
         medicalRecordNo: medicalRecordNo ?? undefined,
       });
       toast.success(`Dispensed ${qty}× ${med.medName} to ${record.patientId}`);
@@ -213,6 +219,7 @@ export function PatientRecordView({
       setDispenseMed("");
       setDispenseQty("1");
       setDispenseNote("");
+      setDosingNote("");
     } catch (err) {
       console.error("Failed to dispense medication:", err);
       toast.error(
@@ -257,14 +264,6 @@ export function PatientRecordView({
             </>
           ) : (
             <>
-              {editable && record && clinicId != null && (
-                <button
-                  onClick={() => setDispensing((v) => !v)}
-                  className="flex items-center gap-1.5 text-sm border px-3 py-1.5 rounded-md hover:bg-secondary"
-                >
-                  <Syringe size={14} /> Dispense Medication
-                </button>
-              )}
               {editable && record && (
                 <button
                   onClick={beginEdit}
@@ -300,7 +299,7 @@ export function PatientRecordView({
           </h3>
           {inventoryLoading ? (
             <p className="text-sm text-muted-foreground">
-              Loading available stock…
+              <Loading label="Loading available stock" />
             </p>
           ) : inventory.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -353,6 +352,38 @@ export function PatientRecordView({
                 </button>
               </div>
               <div className="md:col-span-4">
+                <label
+                  htmlFor="dosing-note"
+                  className="text-[11px] tracking-wider text-muted-foreground block mb-1"
+                >
+                  How should the patient take it? (optional — sent to them)
+                </label>
+                <input
+                  id="dosing-note"
+                  value={dosingNote}
+                  maxLength={MAX_DOSING_NOTE}
+                  onChange={(e) => setDosingNote(e.target.value)}
+                  placeholder="e.g. Take twice daily"
+                  className="w-full px-3 py-2 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] bg-white"
+                />
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {DOSING_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setDosingNote(p)}
+                      className={`rounded-full border px-2.5 py-0.5 text-xs hover:bg-secondary ${
+                        dosingNote === p
+                          ? "border-[oklch(0.55_0.18_245)] bg-[oklch(0.96_0.04_245)]"
+                          : ""
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="md:col-span-4">
                 <label className="text-[11px] tracking-wider text-muted-foreground block mb-1">
                   Note (optional — e.g. scheduled appointment, acute/walk-in)
                 </label>
@@ -370,7 +401,7 @@ export function PatientRecordView({
 
       {loading && (
         <p className="text-sm text-muted-foreground py-10 text-center">
-          Loading medical record…
+          <Loading label="Loading medical record" />
         </p>
       )}
       {error && (
@@ -383,11 +414,11 @@ export function PatientRecordView({
 
       {record && (
         <div className="mb-4 print:hidden">
-          <FastLaneToggle
+          <StablePatientToggle
             patientId={record.patientId}
             clinicId={clinicId}
             prescription={record.prescription}
-            fastLane={record.fastLane}
+            stablePatient={record.stablePatient}
           />
         </div>
       )}
@@ -418,10 +449,34 @@ export function PatientRecordView({
             </div>
           </header>
 
-          <h1 className="text-2xl font-bold">{record.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            Patient ID: {record.patientId}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-bold">{record.name}</h1>
+              <p className="text-sm text-muted-foreground">
+                Patient ID: {record.patientId}
+              </p>
+            </div>
+            {/* The dispense action: a quiet, round icon beside the patient it
+                acts on, rather than another labelled button in the toolbar.
+                Same action as before - it opens the dispense panel. */}
+            {editable && clinicId != null && !editing && (
+              <button
+                type="button"
+                onClick={() => setDispensing((v) => !v)}
+                aria-label="Dispense medication"
+                aria-pressed={dispensing}
+                title="Dispense medication"
+                data-testid="dispense-icon"
+                className={`print:hidden flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-muted-foreground transition hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[oklch(0.55_0.18_245)] ${
+                  dispensing
+                    ? "border-[oklch(0.55_0.18_245)] bg-[oklch(0.96_0.04_245)] text-[oklch(0.4_0.15_245)]"
+                    : "bg-white"
+                }`}
+              >
+                <Pill size={16} aria-hidden />
+              </button>
+            )}
+          </div>
 
           <Section title="Personal Information">
             <Grid>

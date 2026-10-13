@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -135,11 +136,13 @@ function SuperFacilities() {
             />
           </div>
           <span className="text-xs text-muted-foreground ml-auto">
-            {isLoading
-              ? "Loading..."
-              : q
-                ? `${filteredActive.length} of ${active.length}`
-                : `${active.length} live`}
+            {isLoading ? (
+              <Loading label="Loading" size={12} />
+            ) : q ? (
+              `${filteredActive.length} of ${active.length}`
+            ) : (
+              `${active.length} live`
+            )}
           </span>
         </div>
         <table className="w-full text-sm">

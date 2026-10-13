@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell } from "@/components/AppShell";
 import {
   addUser,
@@ -377,7 +378,7 @@ function CreateUser() {
           <div>
             <label className="text-sm font-medium block mb-1.5">Clinic</label>
             <div className="w-full px-3 py-2.5 border rounded-md bg-secondary/40 text-sm">
-              {admin?.clinicName ?? "Loading…"}
+              {admin?.clinicName ?? <Loading label="Loading" size={14} />}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               New staff join your clinic. Doctors and pharmacists can be given
