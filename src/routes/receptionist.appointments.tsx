@@ -133,7 +133,7 @@ function ReceptionAppointments() {
       clinicNameOverride={receptionist?.clinicName}
     >
       <div className="bg-white rounded-xl border">
-        <div className="flex items-center justify-between p-5 border-b">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-b">
           <div>
             <h2 className="font-semibold">Latest Appointments</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -148,7 +148,7 @@ function ReceptionAppointments() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search name or Pat-###…"
-            className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-56 mr-2"
+            className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-full sm:w-56 sm:mr-2"
           />
           <button
             onClick={() => setShowForm((v) => !v)}

@@ -186,7 +186,7 @@ function Staff() {
             {r === "all" ? "Everyone" : `${r}s`}
           </button>
         ))}
-        <div className="relative ml-auto">
+        <div className="relative ml-auto w-full sm:w-auto">
           <Search
             size={14}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -195,7 +195,7 @@ function Staff() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search name, ID or username…"
-            className="border rounded-md pl-9 pr-3 py-1.5 text-sm w-64"
+            className="border rounded-md pl-9 pr-3 py-1.5 text-sm w-full sm:w-64"
           />
         </div>
       </div>

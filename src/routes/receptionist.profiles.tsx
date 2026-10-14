@@ -169,7 +169,7 @@ function Profiles() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search by name or ID (e.g. Pat-42)…"
-            className="px-3 py-1.5 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-64"
+            className="px-3 py-1.5 border rounded-md text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-full sm:w-64"
           />
         </div>
         <div className="overflow-x-auto">

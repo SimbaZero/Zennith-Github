@@ -99,9 +99,11 @@ for (let i = 3; i <= 10; i++) {
 }
 
 // --- appointments 7..10 (6 already exist) --------------------------------------
+// Pat-1..10 are Hillbrow patients, so these carry clinicId 1: reception's
+// appointment list filters on clinicId and would never show them without it.
 const clinicians = [...Array(10)].map((_, i) => `Doc-${i + 1}`).concat([...Array(10)].map((_, i) => `Nur-${i + 1}`));
 for (let i = 7; i <= 10; i++) {
-  await put("appointments", i, { appointmentId: i, appointDateTime: dt(pick([0, 0, 1, 2, 3, -2]), hhmm()), appointType: pick(APPT_TYPES), clinician: pick(clinicians), patientId: `Pat-${1 + Math.floor(rnd() * 10)}`, status: pick(["Scheduled", "Scheduled", "Completed"]) });
+  await put("appointments", i, { appointmentId: i, appointDateTime: dt(pick([0, 0, 1, 2, 3, -2]), hhmm()), appointType: pick(APPT_TYPES), clinician: pick(clinicians), clinicId: 1, patientId: `Pat-${1 + Math.floor(rnd() * 10)}`, status: pick(["Scheduled", "Scheduled", "Completed"]) });
 }
 
 // --- distributions 1..10 -------------------------------------------------------

@@ -102,10 +102,10 @@ function PharmacistDashboard() {
               alerts.map((f, i) => (
                 <div
                   key={`${f.name}-${i}`}
-                  className="flex items-center justify-between p-3 hover:bg-secondary/40 rounded-md"
+                  className="flex items-center justify-between gap-3 p-3 hover:bg-secondary/40 rounded-md"
                 >
-                  <div>
-                    <div className="font-medium text-sm">{f.name}</div>
+                  <div className="min-w-0">
+                    <div className="font-medium text-sm break-words">{f.name}</div>
                     <div className="text-xs text-muted-foreground">
                       {f.onHand} units
                       {f.daysRemaining != null
@@ -117,7 +117,7 @@ function PharmacistDashboard() {
                     </div>
                   </div>
                   <span
-                    className={`text-xs font-medium px-2.5 py-0.5 rounded-full border ${FORECAST_STATUS_STYLE[isCritical(f) ? "critical" : f.status]}`}
+                    className={`shrink-0 text-xs font-medium px-2.5 py-0.5 rounded-full border ${FORECAST_STATUS_STYLE[isCritical(f) ? "critical" : f.status]}`}
                   >
                     {f.onHand <= 0
                       ? "Out of stock"

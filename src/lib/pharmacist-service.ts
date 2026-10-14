@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   collection,
   onSnapshot,
@@ -93,45 +93,80 @@ function mapInventoryDoc(id: string, data: RawInventoryDoc): StockItem {
   };
 }
 
-/**
- * Live-subscribes to the real `inventory` collection in Firestore.
- * Falls back to the existing mock stock data if the read fails
- * (e.g. permission denied, no auth yet, offline) so the dashboard
- * never breaks or shows blank while the backend is still being built.
- */
-export function useInventory(): {
+interface InventoryState {
   stock: StockItem[];
   loading: boolean;
   usingFallback: boolean;
-} {
-  // Starts EMPTY, not with mockStock: the demo numbers flashed on screen for
-  // a moment before the real inventory arrived.
-  const [stock, setStock] = useState<StockItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [usingFallback, setUsingFallback] = useState(false);
+}
 
-  useEffect(() => {
-    const unsubscribe = onSnapshot(
+// Starts EMPTY, not with mockStock: the demo numbers flashed on screen for
+// a moment before the real inventory arrived.
+const INVENTORY_INITIAL: InventoryState = {
+  stock: [],
+  loading: true,
+  usingFallback: false,
+};
+let inventoryState: InventoryState = INVENTORY_INITIAL;
+const inventoryListeners = new Set<() => void>();
+let inventoryUnsub: (() => void) | null = null;
+
+function setInventoryState(next: InventoryState) {
+  inventoryState = next;
+  inventoryListeners.forEach((l) => l());
+}
+
+// ONE Firestore listener on `inventory` is shared by every component on the
+// page that asks for it (the Stock page alone asks from three places). Each
+// extra listener re-reads the whole collection, which is what burns the daily
+// read quota, so the listener opens with the first subscriber and closes with
+// the last.
+function subscribeInventory(listener: () => void): () => void {
+  inventoryListeners.add(listener);
+  if (inventoryListeners.size === 1 && !inventoryUnsub) {
+    inventoryUnsub = onSnapshot(
       collection(db, "inventory"),
       (snapshot) => {
-        const items = snapshot.docs.map((d) => mapInventoryDoc(d.id, d.data()));
-        setStock(items);
-        setUsingFallback(false);
-        setLoading(false);
+        setInventoryState({
+          stock: snapshot.docs.map((d) => mapInventoryDoc(d.id, d.data())),
+          loading: false,
+          usingFallback: false,
+        });
       },
       (err) => {
         // Permission denied, offline, etc. — fall back to mock data so the UI still works.
         console.warn("Falling back to mock stock data:", err.message);
-        setStock(mockStock);
-        setUsingFallback(true);
-        setLoading(false);
+        setInventoryState({
+          stock: mockStock,
+          loading: false,
+          usingFallback: true,
+        });
       },
     );
+  }
+  return () => {
+    inventoryListeners.delete(listener);
+    if (inventoryListeners.size === 0 && inventoryUnsub) {
+      inventoryUnsub();
+      inventoryUnsub = null;
+      // The next person to ask starts from "loading", not from what was here.
+      inventoryState = INVENTORY_INITIAL;
+    }
+  };
+}
 
-    return () => unsubscribe();
-  }, []);
-
-  return { stock, loading, usingFallback };
+/**
+ * Live-subscribes to the real `inventory` collection in Firestore (one shared
+ * listener, however many components call this).
+ * Falls back to the existing mock stock data if the read fails
+ * (e.g. permission denied, no auth yet, offline) so the dashboard
+ * never breaks or shows blank while the backend is still being built.
+ */
+export function useInventory(): InventoryState {
+  return useSyncExternalStore(
+    subscribeInventory,
+    () => inventoryState,
+    () => INVENTORY_INITIAL,
+  );
 }
 
 /**
@@ -306,12 +341,16 @@ export interface PatientDirectoryEntry {
 }
 
 /**
- * Loads a searchable patient directory by joining `patients` + `users` in
- * memory. Patients don't store a name directly (schema links them to
- * `users` by a numeric userId) — this does two collection reads total,
- * then joins them, rather than one read per patient.
+ * Loads a searchable directory of ONE clinic's patients by joining `patients`
+ * and `users` in memory. Patients don't store a name directly (schema links
+ * them to `users` by a numeric userId), so the clinic's patients are read
+ * first and then only their `users` documents are fetched, in batches.
+ *
+ * It used to read both whole collections (thousands of documents) every time
+ * the Stable Patient Handover page opened. Nothing is loaded until the
+ * clinic is known.
  */
-export function usePatientDirectory(): {
+export function usePatientDirectory(clinicId: number | undefined): {
   patients: PatientDirectoryEntry[];
   loading: boolean;
 } {
@@ -320,23 +359,46 @@ export function usePatientDirectory(): {
 
   useEffect(() => {
     let cancelled = false;
+    if (clinicId == null) {
+      setPatients([]);
+      return;
+    }
+    setLoading(true);
 
     async function load() {
       try {
-        const [patientsSnap, usersSnap] = await Promise.all([
-          getDocs(collection(db, "patients")),
-          getDocs(collection(db, "users")),
-        ]);
+        const patientsSnap = await getDocs(
+          query(collection(db, "patients"), where("clinicId", "==", clinicId)),
+        );
+
+        // Firestore's "in" takes at most 30 values; each batch is one query.
+        const userIds = [
+          ...new Set(
+            patientsSnap.docs
+              .map((d) => Number(d.data().userId))
+              .filter((n) => Number.isFinite(n)),
+          ),
+        ];
+        const batches: number[][] = [];
+        for (let i = 0; i < userIds.length; i += 30)
+          batches.push(userIds.slice(i, i + 30));
+        const userSnaps = await Promise.all(
+          batches.map((ids) =>
+            getDocs(query(collection(db, "users"), where("userId", "in", ids))),
+          ),
+        );
 
         // Build a quick lookup: userId (number) -> full name.
         const userNameById = new Map<number, string>();
-        usersSnap.docs.forEach((d) => {
-          const u = d.data();
-          userNameById.set(
-            u.userId,
-            `${u.names ?? ""} ${u.surname ?? ""}`.trim(),
-          );
-        });
+        userSnaps.forEach((snap) =>
+          snap.docs.forEach((d) => {
+            const u = d.data();
+            userNameById.set(
+              u.userId,
+              `${u.names ?? ""} ${u.surname ?? ""}`.trim(),
+            );
+          }),
+        );
 
         const joined: PatientDirectoryEntry[] = patientsSnap.docs.map((d) => {
           const p = d.data();
@@ -363,7 +425,7 @@ export function usePatientDirectory(): {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [clinicId]);
 
   return { patients, loading };
 }
@@ -1379,8 +1441,17 @@ export async function findMedicationAtOtherClinics(
   const term = medName.trim().toLowerCase();
   if (!term) return [];
 
+  // The live inventory listener (see useInventory) already holds every
+  // clinic's stock whenever a stock page is open, so use it rather than
+  // reading the whole collection again on every search.
+  const live =
+    inventoryListeners.size > 0 &&
+    !inventoryState.loading &&
+    !inventoryState.usingFallback
+      ? inventoryState.stock
+      : null;
   const [invSnap, clinicSnap] = await Promise.all([
-    getDocs(collection(db, "inventory")),
+    live ? null : getDocs(collection(db, "inventory")),
     getDocs(collection(db, "clinics")),
   ]);
 
@@ -1401,16 +1472,24 @@ export async function findMedicationAtOtherClinics(
       .replace(/[^a-z/]/g, "");
   const target = loosen(term);
 
-  return invSnap.docs
-    .map((d) => {
-      const data = d.data();
-      return {
-        clinicId: Number(data.clinicId),
-        clinicName: clinicNames.get(Number(data.clinicId)) ?? "Unknown clinic",
-        quantity: toNumber(data.quantity),
-        medName: String(data.medName ?? ""),
-      };
-    })
+  const rows: StockElsewhere[] = live
+    ? live.map((i) => ({
+        clinicId: Number(i.clinicId),
+        clinicName: clinicNames.get(Number(i.clinicId)) ?? "Unknown clinic",
+        quantity: toNumber(i.units),
+        medName: String(i.name ?? ""),
+      }))
+    : invSnap!.docs.map((d) => {
+        const data = d.data();
+        return {
+          clinicId: Number(data.clinicId),
+          clinicName:
+            clinicNames.get(Number(data.clinicId)) ?? "Unknown clinic",
+          quantity: toNumber(data.quantity),
+          medName: String(data.medName ?? ""),
+        };
+      });
+  return rows
     .filter(
       (r) =>
         r.quantity > 0 &&

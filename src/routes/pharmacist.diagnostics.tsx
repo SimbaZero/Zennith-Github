@@ -35,8 +35,14 @@ export const Route = createFileRoute("/pharmacist/diagnostics")({
 });
 
 function StablePatientHandover() {
-  const { patients, loading } = usePatientDirectory();
   const { pharmacist } = useCurrentPharmacist();
+  const directoryClinic = useRealActiveClinic(
+    pharmacist?.clinicIds,
+    "pharmacist",
+  );
+  const { patients, loading } = usePatientDirectory(
+    directoryClinic.activeClinicId ?? pharmacist?.clinicId,
+  );
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<PatientDirectoryEntry | null>(null);
   const [prescription, setPrescription] = useState<string | null>(null);
@@ -126,10 +132,10 @@ function StablePatientHandover() {
                 <li key={p.patientId}>
                   <button
                     onClick={() => selectPatient(p)}
-                    className="w-full text-left p-3 hover:bg-secondary/50 flex items-center justify-between"
+                    className="w-full text-left p-3 hover:bg-secondary/50 flex items-center justify-between gap-3"
                   >
-                    <span className="font-medium text-sm">{p.fullName}</span>
-                    <span className="text-xs text-muted-foreground font-mono">
+                    <span className="min-w-0 break-words font-medium text-sm">{p.fullName}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground font-mono">
                       {p.patientId}
                     </span>
                   </button>

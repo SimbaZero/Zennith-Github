@@ -237,14 +237,14 @@ export function PatientRecordView({
       clinicNameOverride={clinicName}
     >
       {/* Toolbar (hidden in print) */}
-      <div className="flex items-center justify-between mb-4 print:hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4 print:hidden">
         <button
           onClick={() => navigate({ to: backTo as any })}
           className="flex items-center gap-1.5 text-sm border px-3 py-1.5 rounded-md hover:bg-secondary"
         >
           <ArrowLeft size={14} /> {backLabel}
         </button>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {editing ? (
             <>
               <button
@@ -426,10 +426,10 @@ export function PatientRecordView({
       {record && (
         <div
           id="record-page"
-          className="mx-auto bg-white text-foreground border shadow-sm print:shadow-none print:border-0"
-          style={{ maxWidth: 820, padding: "48px 56px", minHeight: 1100 }}
+          className="mx-auto bg-white text-foreground border shadow-sm print:shadow-none print:border-0 px-4 py-8 sm:px-14 sm:py-12"
+          style={{ maxWidth: 820, minHeight: 1100 }}
         >
-          <header className="flex items-center justify-between border-b-2 border-[oklch(0.18_0.06_260)] pb-4 mb-6">
+          <header className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-[oklch(0.18_0.06_260)] pb-4 mb-6">
             <div className="flex items-center gap-3">
               <ZennithStar size={48} />
               <div>
@@ -450,8 +450,8 @@ export function PatientRecordView({
           </header>
 
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-bold">{record.name}</h1>
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold break-words">{record.name}</h1>
               <p className="text-sm text-muted-foreground">
                 Patient ID: {record.patientId}
               </p>
@@ -649,7 +649,7 @@ function Section({
 }
 function Grid({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-2 gap-y-2 gap-x-6 text-sm">{children}</div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-6 text-sm">{children}</div>
   );
 }
 function Row({ label, value }: { label: string; value: string | number }) {
@@ -659,10 +659,10 @@ function Row({ label, value }: { label: string; value: string | number }) {
     value === HIDDEN_BY_PATIENT
       ? "italic text-muted-foreground"
       : "font-medium";
-  const valueClass = `flex-1 border-b border-dotted border-muted-foreground/40 pb-0.5 ${valueStyle}`;
+  const valueClass = `flex-1 min-w-0 break-words border-b border-dotted border-muted-foreground/40 pb-0.5 ${valueStyle}`;
   return (
     <div className="flex">
-      <div className="w-40 text-muted-foreground text-xs uppercase tracking-wider self-end pb-0.5">
+      <div className="w-28 sm:w-40 shrink-0 text-muted-foreground text-xs uppercase tracking-wider self-end pb-0.5">
         {label}
       </div>
       <div className={valueClass}>{value}</div>
@@ -682,14 +682,14 @@ function EditRow({
 }) {
   return (
     <div className="flex items-center print:hidden">
-      <div className="w-40 text-muted-foreground text-xs uppercase tracking-wider">
+      <div className="w-28 sm:w-40 shrink-0 text-muted-foreground text-xs uppercase tracking-wider">
         {label}
       </div>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="flex-1 font-medium border rounded px-1.5 py-0.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
+        className="flex-1 min-w-0 font-medium border rounded px-1.5 py-0.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)]"
       />
     </div>
   );

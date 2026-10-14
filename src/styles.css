@@ -145,6 +145,18 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    /* A long unbroken word (an e-mail address, an ID) wraps inside its box
+       instead of pushing the page wider than a phone screen. */
+    overflow-wrap: break-word;
+  }
+
+  /* Form controls may shrink inside a flex row instead of forcing the row
+     wider than the screen (a date or time field has a wide built-in width). */
+  input,
+  select,
+  textarea {
+    min-width: 0;
+    max-width: 100%;
   }
 }
 

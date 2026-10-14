@@ -392,7 +392,7 @@ export function AppShell({
       )}
 
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="bg-white border-b px-4 lg:px-6 h-16 flex items-center gap-3 sticky top-0 z-20">
+        <header className="bg-white border-b px-4 lg:px-6 min-h-16 py-2 sm:py-0 sm:h-16 flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-2 sticky top-0 z-20">
           <button
             className="lg:hidden p-2"
             onClick={() => setOpen(true)}
@@ -411,10 +411,12 @@ export function AppShell({
               <ChevronLeft size={20} />
             </button>
           )}
-          <h1 className="font-semibold text-base lg:text-lg truncate">
+          {/* On a phone the title takes whatever width is left and truncates,
+              and the clinic switcher drops to its own row below. */}
+          <h1 className="font-semibold text-base lg:text-lg truncate min-w-0 flex-1 basis-0 sm:flex-none sm:basis-auto">
             {title}
           </h1>
-          <div className="flex-1" />
+          <div className="hidden sm:block flex-1" />
           {role === "patient" && sidebarPatient?.clinicName ? (
             <ClinicChip
               clinicId=""
@@ -621,7 +623,9 @@ function NotificationsButton({ role }: { role: Role }) {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-80 bg-white border rounded-md shadow-lg z-50">
+        // On a phone the panel is pinned across the screen under the header:
+        // anchored to the bell it would run off the left edge.
+        <div className="fixed left-3 right-3 top-[4.25rem] sm:absolute sm:inset-auto sm:right-0 sm:top-auto sm:mt-1 sm:w-80 bg-white border rounded-md shadow-lg z-50">
           <div className="flex items-center justify-between p-3 border-b">
             <span className="font-semibold text-sm">Notifications</span>
             {unread > 0 && (
@@ -742,13 +746,16 @@ function ClinicChip({
     );
   }
   return (
-    <div className="relative" ref={ref}>
+    <div
+      className="relative order-last basis-full sm:order-none sm:basis-auto"
+      ref={ref}
+    >
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border bg-white hover:bg-secondary/60"
+        className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border bg-white hover:bg-secondary/60 max-w-full"
       >
         <Building2 size={12} />{" "}
-        <span className="font-medium">{clinicName}</span>
+        <span className="font-medium truncate">{clinicName}</span>
         <span className="text-muted-foreground">▾</span>
       </button>
       {open && (

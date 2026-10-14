@@ -23,10 +23,18 @@ export const STALE_MS = 150_000;
 /** Entries older than this are junk from a tab that crashed; only then are they removed. */
 const JUNK_MS = 60 * 60_000;
 
-const tabId =
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : String(Math.random()).slice(2);
+// Made on first use, not at module load: Cloudflare Workers forbid generating
+// random values in global scope, and this module is also loaded during SSR.
+let cachedTabId: string | null = null;
+function getTabId(): string {
+  if (cachedTabId === null) {
+    cachedTabId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : String(Math.random()).slice(2);
+  }
+  return cachedTabId;
+}
 
 function storage(): Storage | null {
   try {
@@ -50,7 +58,7 @@ export function otherTabsForAccount(
   try {
     for (let i = 0; i < ls.length; i++) {
       const k = ls.key(i);
-      if (!k || !k.startsWith(PREFIX) || k === PREFIX + tabId) continue;
+      if (!k || !k.startsWith(PREFIX) || k === PREFIX + getTabId()) continue;
       const v = JSON.parse(ls.getItem(k) ?? "null") as {
         uid?: string;
         t?: number;
@@ -84,8 +92,11 @@ export function startTabPresence(
       const uid = getUid();
       try {
         if (uid)
-          ls.setItem(PREFIX + tabId, JSON.stringify({ uid, t: Date.now() }));
-        else ls.removeItem(PREFIX + tabId);
+          ls.setItem(
+            PREFIX + getTabId(),
+            JSON.stringify({ uid, t: Date.now() }),
+          );
+        else ls.removeItem(PREFIX + getTabId());
       } catch {
         /* storage full or blocked: nothing to do */
       }
@@ -94,7 +105,7 @@ export function startTabPresence(
     const id = setInterval(beat, BEAT_MS);
     const leave = () => {
       try {
-        ls?.removeItem(PREFIX + tabId);
+        ls?.removeItem(PREFIX + getTabId());
       } catch {
         /* ignore */
       }

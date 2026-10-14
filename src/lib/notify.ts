@@ -11,7 +11,8 @@ import {
   where,
 } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
-import { db } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
+import { getClinicAdminIds } from "@/lib/clinic-admins";
 import { isOffline } from "@/lib/offline";
 
 // One notification system for every role.
@@ -295,28 +296,31 @@ export async function notifyClinicAdmins(input: {
   dedupeKey?: string;
 }): Promise<void> {
   try {
-    const snap = await getDocs(
-      query(
-        collection(db, "profiles"),
-        where("role", "==", "admin"),
-        where("clinicId", "==", input.clinicId),
-      ),
-    );
+    // The admins are found by the server: a patient's or a receptionist's
+    // browser isn't allowed to read other people's profile documents.
+    const idToken = (await auth.currentUser?.getIdToken()) ?? "";
+    const found = await getClinicAdminIds({
+      data: { idToken, clinicId: input.clinicId },
+    });
+    if (!found.ok) {
+      console.error("notifyClinicAdmins: no admin list:", found.reason);
+      return;
+    }
     await Promise.all(
-      snap.docs.map((d) =>
+      found.adminIds.map((adminId) =>
         writeNotification(
           {
             notifId: Date.now(),
             // Admins are addressed by their profile document id, since they
             // have no numeric users.userId.
-            profileId: d.id,
+            profileId: adminId,
             title: input.title,
             message: input.message,
             isRead: false,
             timeSent: new Date().toISOString(),
             ...(input.link ? { link: input.link } : {}),
           },
-          input.dedupeKey ? `${input.dedupeKey}-${d.id}` : undefined,
+          input.dedupeKey ? `${input.dedupeKey}-${adminId}` : undefined,
         ),
       ),
     );

@@ -54,7 +54,7 @@ function DoctorPatientFilesTable({ clinicId }: { clinicId?: number }) {
 
   return (
     <div className="bg-white rounded-xl border overflow-hidden">
-      <div className="flex items-center justify-between p-5 border-b">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-b">
         <div>
           <h3 className="font-semibold">Patient Files</h3>
           <p
@@ -77,7 +77,7 @@ function DoctorPatientFilesTable({ clinicId }: { clinicId?: number }) {
           placeholder="Search name or Pat-###…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-64"
+          className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-full sm:w-64"
         />
       </div>
       <div className="overflow-x-auto">

@@ -123,16 +123,16 @@ function SiteHeader() {
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1 sm:gap-2">
           <Link
             to="/login"
-            className="text-sm px-4 py-2 rounded-md hover:bg-white"
+            className="text-[13px] sm:text-sm px-2 sm:px-4 py-2 rounded-md hover:bg-white whitespace-nowrap"
           >
             Sign in
           </Link>
           <Link
             to="/signup"
-            className="text-sm px-4 py-2 rounded-md bg-[oklch(0.22_0.07_260)] text-white hover:bg-[oklch(0.3_0.08_260)] active:scale-[0.97] transition"
+            className="text-[13px] sm:text-sm px-2.5 sm:px-4 py-2 rounded-md bg-[oklch(0.22_0.07_260)] text-white hover:bg-[oklch(0.3_0.08_260)] active:scale-[0.97] transition whitespace-nowrap"
           >
             Create account
           </Link>
@@ -183,7 +183,7 @@ function Hero() {
 
       <div className="mx-auto max-w-6xl px-6 pt-16 pb-20 grid lg:grid-cols-[1.05fr_1fr] gap-12 lg:gap-16 items-center">
         <div className="animate-fade-up">
-          <h1 className="font-serif text-[2.6rem] leading-[1.08] sm:text-6xl sm:leading-[1.05] tracking-tight">
+          <h1 className="font-serif text-[2rem] min-[420px]:text-[2.6rem] leading-[1.08] sm:text-6xl sm:leading-[1.05] tracking-tight">
             Nobody should spend
             <br />a whole day waiting
             <br />

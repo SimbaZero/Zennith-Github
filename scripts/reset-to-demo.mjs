@@ -153,14 +153,16 @@ await setDoc(doc(db, "medicalRecords", "2"), { medicalRecordNo: 2, bloodType: "A
 await setDoc(doc(db, "medicalRecordsHistory", "1"), { historyId: 1, medicalRecordNo: 1, patientId: "Pat-1", description: "Diabetes well controlled; continue Metformin and lifestyle plan." }, { merge: true });
 await setDoc(doc(db, "medicalRecordsHistory", "2"), { historyId: 2, medicalRecordNo: 2, patientId: "Pat-2", description: "Blood pressure elevated; Amlodipine dose increased, review in 4 weeks." }, { merge: true });
 
-// a handful of appointments incl. today so dashboards show live data
+// a handful of appointments incl. today so dashboards show live data.
+// clinicId is what reception's appointment list filters on: without it the
+// appointment exists but never shows up there. Everything here is Hillbrow (1).
 const APPTS = [
-  { clinician: "Doc-1", patientId: "Pat-1", appointDateTime: iso(0, "09:00"), appointType: "Diabetic Review", status: "Scheduled" },
-  { clinician: "Doc-1", patientId: "Pat-2", appointDateTime: iso(0, "10:30"), appointType: "Hypertension Review", status: "Scheduled" },
-  { clinician: "Nur-1", patientId: "Pat-2", appointDateTime: iso(0, "11:00"), appointType: "Chronic Care Follow-up", status: "Scheduled" },
-  { clinician: "Doc-2", patientId: "Pat-1", appointDateTime: iso(7, "14:00"), appointType: "Paediatric Follow-up", status: "Scheduled" },
-  { clinician: "Nur-1", patientId: "Pat-1", appointDateTime: iso(-3, "08:30"), appointType: "Blood Pressure Check", status: "Completed" },
-  { clinician: "Doc-1", patientId: "Pat-2", appointDateTime: iso(-10, "09:00"), appointType: "Consultation", status: "Completed" },
+  { clinician: "Doc-1", clinicId: 1, patientId: "Pat-1", appointDateTime: iso(0, "09:00"), appointType: "Diabetic Review", status: "Scheduled" },
+  { clinician: "Doc-1", clinicId: 1, patientId: "Pat-2", appointDateTime: iso(0, "10:30"), appointType: "Hypertension Review", status: "Scheduled" },
+  { clinician: "Nur-1", clinicId: 1, patientId: "Pat-2", appointDateTime: iso(0, "11:00"), appointType: "Chronic Care Follow-up", status: "Scheduled" },
+  { clinician: "Doc-2", clinicId: 1, patientId: "Pat-1", appointDateTime: iso(7, "14:00"), appointType: "Paediatric Follow-up", status: "Scheduled" },
+  { clinician: "Nur-1", clinicId: 1, patientId: "Pat-1", appointDateTime: iso(-3, "08:30"), appointType: "Blood Pressure Check", status: "Completed" },
+  { clinician: "Doc-1", clinicId: 1, patientId: "Pat-2", appointDateTime: iso(-10, "09:00"), appointType: "Consultation", status: "Completed" },
 ];
 for (let i = 0; i < APPTS.length; i++) await setDoc(doc(db, "appointments", String(i + 1)), { appointmentId: i + 1, ...APPTS[i] }, { merge: true });
 

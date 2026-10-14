@@ -60,9 +60,6 @@ const EMPTY = ["", "", "", "", "", ""];
 // not auth.login_success, so it can't pass for a normal sign-in in the audit
 // log, where super admins see it flagged), and a banner is shown for as long as
 // the mode is on.
-//
-// (This replaces the earlier build-time VITE_DEV_2FA_BYPASS flag, which was
-// restricted to local addresses and so could not be used on a deployed demo.)
 // ---------------------------------------------------------------------------
 
 /** Is demo mode on? false until the server says so, and false if it can't be asked. */

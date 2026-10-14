@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { Loading } from "@/components/Loading";
 import { NotificationsView } from "@/components/NotificationsView";
 import { getAuth, type Role } from "@/lib/auth";
+import { RequireRole } from "@/components/RequireRole";
 
 // One notifications page for every role: the bell's dropdown is a glance, this
 // is where a notification is read in full. (Patients' own page is /patient/alerts,
@@ -21,8 +22,16 @@ export const Route = createFileRoute("/notifications")({
 
 function NotificationsPage() {
   const { n } = Route.useSearch();
+  return (
+    <RequireRole>
+      <NotificationsForRole selectedId={n} />
+    </RequireRole>
+  );
+}
+
+function NotificationsForRole({ selectedId: n }: { selectedId?: string }) {
   const navigate = useNavigate();
-  // The session role lives in the browser, so it's read after mounting.
+  // The session role lives in the browser; RequireRole has already checked it.
   const [role, setRole] = useState<Role | null>(null);
   useEffect(() => setRole(getAuth()), []);
 

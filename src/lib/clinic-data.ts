@@ -2001,8 +2001,18 @@ export async function signUpPatient(
           clinicId: input.clinicId,
           // Query-only — see nameTokens / searchPatientsByName.
           nameTokensLower: nameTokens(input.fullName),
+          // Who made this record. The rules only let a new account claim a
+          // patient record (in its own profile) that it created itself, so
+          // nobody can point their profile at someone else's patientId.
+          ownerUid: cred.user.uid,
         }),
       ),
+    ]);
+
+    // The profile is written only after the patient record exists: the rules
+    // check that record's ownerUid when the profile is created, so the two
+    // can't be written at the same time.
+    await Promise.all([
       tag(
         "profiles",
         setDoc(doc(fdb, "profiles", cred.user.uid), {
@@ -2947,55 +2957,97 @@ const STAFF_COLLECTIONS = [
   ["receptionists", "receptionist"],
 ] as const;
 
+/** Splits a list into runs of at most 30: the most a Firestore "in" takes. */
+function inBatches<T>(values: T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < values.length; i += 30) out.push(values.slice(i, i + 30));
+  return out;
+}
+
 export async function fetchClinicStaff(
   clinicId: number,
 ): Promise<ClinicStaffMember[]> {
-  const [profileSnap, userSnap] = await Promise.all([
-    getDocs(collection(db, "profiles")),
-    getDocs(collection(db, "users")),
-  ]);
+  // Only this clinic's staff are read (by home clinic, or by the list of
+  // clinics they serve), and then only the users/profiles of those people.
+  // This used to read all of `profiles`, all of `users` (thousands of
+  // documents) and the four staff collections whole, on every visit to the
+  // Admin dashboard and All Staff. The id is matched as a number and as text
+  // because older records stored it either way.
+  const asText = String(clinicId);
+  const staff = new Map<
+    string,
+    { role: ClinicStaffMember["role"]; data: Record<string, unknown> }
+  >();
+  await Promise.all(
+    STAFF_COLLECTIONS.flatMap(([colName]) => [
+      getDocs(
+        query(
+          collection(db, colName),
+          where("clinicId", "in", [clinicId, asText]),
+        ),
+      ),
+      getDocs(
+        query(
+          collection(db, colName),
+          where("clinicIds", "array-contains-any", [clinicId, asText]),
+        ),
+      ),
+    ]).map(async (pending, i) => {
+      const role = STAFF_COLLECTIONS[Math.floor(i / 2)][1];
+      for (const d of (await pending).docs)
+        staff.set(`${role}:${d.id}`, { role, data: d.data() });
+    }),
+  );
 
+  const userIds = [
+    ...new Set(
+      [...staff.values()]
+        .map((s) => (s.data.userId != null ? Number(s.data.userId) : NaN))
+        .filter((n) => Number.isFinite(n)),
+    ),
+  ];
   const usernameByUserId = new Map<number, string>();
-  for (const p of profileSnap.docs) {
-    const d = p.data();
-    if (d.legacyUserId != null)
-      usernameByUserId.set(Number(d.legacyUserId), d.username ?? "");
-  }
   const nameByUserId = new Map<number, string>();
-  for (const u of userSnap.docs) {
-    const d = u.data();
-    const name = [d.names, d.surname].filter(Boolean).join(" ");
-    if (d.userId != null && name) nameByUserId.set(Number(d.userId), name);
-  }
+  await Promise.all(
+    inBatches(userIds).flatMap((ids) => [
+      getDocs(
+        query(collection(db, "profiles"), where("legacyUserId", "in", ids)),
+      ).then((snap) => {
+        for (const p of snap.docs) {
+          const d = p.data();
+          if (d.legacyUserId != null)
+            usernameByUserId.set(Number(d.legacyUserId), d.username ?? "");
+        }
+      }),
+      getDocs(
+        query(collection(db, "users"), where("userId", "in", ids)),
+      ).then((snap) => {
+        for (const u of snap.docs) {
+          const d = u.data();
+          const name = [d.names, d.surname].filter(Boolean).join(" ");
+          if (d.userId != null && name)
+            nameByUserId.set(Number(d.userId), name);
+        }
+      }),
+    ]),
+  );
 
   const out: ClinicStaffMember[] = [];
-
-  for (const [colName, role] of STAFF_COLLECTIONS) {
-    const snap = await getDocs(collection(db, colName));
-    for (const d of snap.docs) {
-      const data = d.data();
-      const primary = Number(data.clinicId);
-      const serves = Array.isArray(data.clinicIds)
-        ? data.clinicIds.map(Number)
-        : [];
-      const isHere = primary === clinicId || serves.includes(clinicId);
-      if (!isHere) continue;
-
-      const userId = data.userId != null ? Number(data.userId) : undefined;
-      const username =
-        userId != null ? usernameByUserId.get(userId) : undefined;
-
-      out.push({
-        staffId: d.id,
-        role,
-        fullName:
-          (userId != null ? nameByUserId.get(userId) : undefined) ?? d.id,
-        userId,
-        username: username || undefined,
-        hasLogin: !!username,
-        visiting: primary !== clinicId,
-      });
-    }
+  for (const [key, { role, data }] of staff) {
+    const primary = Number(data.clinicId);
+    const userId = data.userId != null ? Number(data.userId) : undefined;
+    const username = userId != null ? usernameByUserId.get(userId) : undefined;
+    const staffId = key.slice(role.length + 1);
+    out.push({
+      staffId,
+      role,
+      fullName:
+        (userId != null ? nameByUserId.get(userId) : undefined) ?? staffId,
+      userId,
+      username: username || undefined,
+      hasLogin: !!username,
+      visiting: primary !== clinicId,
+    });
   }
 
   return out.sort((a, b) => a.fullName.localeCompare(b.fullName));

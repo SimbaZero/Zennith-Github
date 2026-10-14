@@ -184,16 +184,16 @@ function PatientDashboard() {
               search.items.map((s) => (
                 <li
                   key={s.name}
-                  className="p-3 flex items-center justify-between"
+                  className="p-3 flex items-center justify-between gap-3"
                 >
-                  <div>
-                    <p className="text-sm font-medium">{s.name}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium break-words">{s.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {s.category}
                     </p>
                   </div>
                   <span
-                    className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full ${s.inStock ? "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]" : "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]"}`}
+                    className={`inline-flex shrink-0 items-center gap-1 text-xs px-2.5 py-1 rounded-full ${s.inStock ? "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]" : "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]"}`}
                   >
                     {s.inStock ? (
                       <CheckCircle2 size={12} />
@@ -283,9 +283,9 @@ function PatientDashboard() {
           {upcoming.map((a) => (
             <div
               key={a.docId}
-              className="flex items-center justify-between py-3 border-b last:border-0"
+              className="flex items-center justify-between gap-3 py-3 border-b last:border-0"
             >
-              <div>
+              <div className="min-w-0">
                 <div className="font-mono font-semibold">
                   {formatDateTime(a.dateTime)}
                 </div>

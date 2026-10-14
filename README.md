@@ -159,7 +159,7 @@ VITE_FIREBASE_APP_ID=
 
 Everything else in `.env.example` is optional and switches a feature on: `RESEND_API_KEY`
 for patient signup emails, `SMSPORTAL_*` and `FIREBASE_SERVICE_ACCOUNT` for SMS
-booking texts, appointment reminders and sign-in codes, `VITE_GEMINI_API_KEY` for OCR on the Digitize Files page. The
+booking texts, appointment reminders and sign-in codes, `GEMINI_API_KEY` for OCR on the Digitize Files page. The
 server-side ones have no `VITE_` prefix on purpose — that prefix would publish them in
 the browser bundle. In production set them with `wrangler secret put NAME`.
 
@@ -206,8 +206,7 @@ two-factor screen shows a "Skip (demo mode)" button under a "Demo mode" banner. 
 by the server at run time (restart the dev server after editing `.env`; no rebuild is
 needed), only the exact string `true` turns it on, and with it unset there is no button,
 no banner and no other trace. A skip is audited as `auth.login_dev_bypass`, which the super
-admin's audit page flags. **Never set it in production.** It replaces the older build-time
-`VITE_DEV_2FA_BYPASS`, which only worked on a local address.
+admin's audit page flags. **Never set it in production.**
 
 Two things that cost people an afternoon:
 
@@ -454,12 +453,14 @@ that answers "is this ID taken?" without returning the data.
 it before any real deployment.
 
 
-**The Gemini OCR key is exposed client-side.** The Digitize Files feature reads
-`VITE_GEMINI_API_KEY`, and the `VITE_` prefix means it ships in the browser bundle.
-Separately, Gemini's free tier permits Google to use submitted content to improve their
-products, so it has only ever been tested with synthetic patients. Both problems are
-solved by the same fix: move the call behind a backend. Do not put real patient
-photographs through it as it stands.
+**The Gemini OCR call runs on the server.** The Digitize Files feature sends the photo to
+a server function (`src/server/gemini-ocr.ts`), which reads `GEMINI_API_KEY` (no `VITE_`
+prefix, so it is never in the browser bundle) and only answers signed-in nurses, doctors,
+receptionists and admins. In production set it with `wrangler secret put GEMINI_API_KEY`.
+If an older build ever shipped a `VITE_GEMINI_API_KEY`, treat that key as public and
+rotate it. Separately, Gemini's free tier permits Google to use submitted content to
+improve their products, so it has only ever been tested with synthetic patients: do not
+put real patient photographs through it until it is on a paid tier.
 
 A fuller running log — including schema gaps, fields that don't exist yet and decisions
 still open — is in [docs/db-issues.md](docs/db-issues.md), with a page-by-page audit in

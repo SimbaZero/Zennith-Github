@@ -332,7 +332,7 @@ function NurseAppointments() {
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="flex items-center justify-between p-5 border-b">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-b">
           <h3 className="font-semibold">Appointments · {selected || "—"}</h3>
           <button
             onClick={() => setShowForm((v) => !v)}
