@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Github } from "lucide-react";
 import { ZennithStar } from "@/components/ZennithStar";
+import { BuilderEasterEgg } from "@/components/BuilderEasterEgg";
 import { LandingPatientAssistant } from "@/components/LandingPatientAssistant";
 import { listClinics, usePublicQueueSummary } from "@/lib/clinic-data";
 import { useNow } from "@/lib/store";
@@ -83,7 +84,9 @@ function Home() {
 
       <footer className="bg-[oklch(0.16_0.07_265)]">
         <div className="mx-auto max-w-6xl px-6 py-8 flex flex-wrap items-center gap-4 text-sm text-white/60">
-          <ZennithStar size={24} />
+          <BuilderEasterEgg>
+            <ZennithStar size={24} />
+          </BuilderEasterEgg>
           <span>Zennith Health Services</span>
           <span className="ml-auto">
             © {now.getFullYear()} · Built at the University of Johannesburg
@@ -718,7 +721,7 @@ function TeamPortrait() {
     return (
       <div
         ref={panelRef}
-        className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7] bg-gradient-to-br from-[oklch(0.22_0.1_255)] to-[oklch(0.16_0.07_265)]"
+        className="relative mt-12 -mx-6 sm:mx-0 rounded-none sm:rounded-xl overflow-hidden aspect-[4/3] sm:aspect-[16/7] bg-gradient-to-br from-[oklch(0.22_0.1_255)] to-[oklch(0.16_0.07_265)]"
       >
         {caption}
       </div>
@@ -727,7 +730,7 @@ function TeamPortrait() {
   return (
     <div
       ref={panelRef}
-      className="relative mt-12 rounded-xl overflow-hidden aspect-[16/7]"
+      className="relative mt-12 -mx-6 sm:mx-0 rounded-none sm:rounded-xl overflow-hidden aspect-[4/3] sm:aspect-[16/7]"
     >
       <img
         src={src}
@@ -1061,7 +1064,13 @@ function PublicQueue() {
           record the picker uses; a clinic with only a street address shows the
           address, and a map that can't load shows the same, never a blank. */}
       {clinicId != null && (
-        <div className="mt-4 flex flex-wrap items-start gap-3">
+        <div className="mt-4">
+          {/* The map is drawn wider than any card it sits in and centred, so
+              it always fills the card's full width (the extra is clipped
+              evenly from both sides and the pin stays in the middle). The
+              w-0 / min-w-full pair keeps the oversized map from stretching
+              the card itself. */}
+          <div className="flex w-0 min-w-full justify-center overflow-hidden rounded-md">
           <ClinicMiniMap
             key={clinicId}
             coordinates={active.find((c) => c.clinicId === clinicId)?.address}
@@ -1069,10 +1078,11 @@ function PublicQueue() {
               active.find((c) => c.clinicId === clinicId)?.clinicName ??
               "this clinic"
             }
-            width={280}
+            width={720}
             height={176}
           />
-          <p className="text-xs text-white/55">
+          </div>
+          <p className="mt-2 text-xs text-white/55">
             Map ©{" "}
             <a
               href="https://www.openstreetmap.org/copyright"
