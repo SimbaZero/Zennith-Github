@@ -14,6 +14,7 @@ import {
   cancelledText,
   confirmedText,
   formatNextReminder,
+  FROM,
   loadAppointmentContexts,
   remindAgainText,
 } from "./appointment-sms";
@@ -84,7 +85,7 @@ export async function handleInboundSmsReply(
   let cancelled = false;
   if (choice === "confirm") {
     status = "Confirmed";
-    reply = context ? confirmedText(context) : "Thank you. Your appointment is confirmed.";
+    reply = context ? confirmedText(context) : `${FROM}Thank you. Your appointment is confirmed.`;
   } else {
     // "No" keeps the appointment open while another reminder is still to
     // come, so the patient can confirm later; a "no" to the last one cancels.
@@ -98,7 +99,7 @@ export async function handleInboundSmsReply(
     } else {
       status = "Cancelled";
       cancelled = true;
-      reply = context ? cancelledText(context) : "Thank you for letting us know. Your appointment has been cancelled.";
+      reply = context ? cancelledText(context) : `${FROM}Thank you for letting us know. Your appointment has been cancelled.`;
     }
   }
 
