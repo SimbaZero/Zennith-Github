@@ -250,6 +250,12 @@ const adminIndex: SearchEntry[] = [
     keywords: ["users", "list", "manage"],
   },
   {
+    label: "Billing",
+    section: "Admin",
+    path: "/admin/billing",
+    keywords: ["invoices", "plan", "payments", "account"],
+  },
+  {
     label: "Audit Logs",
     section: "Admin",
     path: "/admin/audit",
@@ -275,6 +281,12 @@ const superAdminIndex: SearchEntry[] = [
     section: "Platform",
     path: "/super-admin/applications",
     keywords: ["applications", "approve", "review", "clinics", "register"],
+  },
+  {
+    label: "Billing",
+    section: "Platform",
+    path: "/super-admin/billing",
+    keywords: ["invoices", "payments", "plans", "mrr", "overdue", "eft"],
   },
   {
     label: "Security & Audit",

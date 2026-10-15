@@ -4,11 +4,13 @@ import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   listClinics,
-  deleteClinicIfEmpty,
+  deactivateClinic,
+  reactivateClinic,
   type ClinicRecord,
 } from "@/lib/clinic-data";
 import { getUsers, removeUser } from "@/lib/auth";
 import { assignClinicAdmin } from "@/lib/super-admin-service";
+import { formatDate, todayInClinicTime } from "@/lib/billing";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -17,6 +19,8 @@ import {
   Trash2,
   ShieldCheck,
   Search,
+  PowerOff,
+  Power,
 } from "lucide-react";
 
 export const Route = createFileRoute("/super-admin/facilities")({
@@ -44,6 +48,7 @@ function SuperFacilities() {
 
   const pending = clinics.filter((c) => c.status === "pending");
   const active = clinics.filter((c) => c.status === "active");
+  const deactivated = clinics.filter((c) => c.status === "deactivated");
 
   // Matches on clinic name (partial, case-insensitive) or clinic ID
   // (partial string match, so typing "1" also surfaces 1, 14, 15 etc.,
@@ -57,33 +62,46 @@ function SuperFacilities() {
       )
     : active;
 
-  // Deleting anything here is a two-step, deliberate act: click the bin, then
-  // confirm in a dialog. Removing a whole clinic also makes you type its name.
-  const [clinicToRemove, setClinicToRemove] = useState<ClinicRecord | null>(
-    null,
-  );
+  // Clinics are never deleted — they are deactivated, so their records and
+  // invoices stay. Deactivating is still deliberate: pick the date, then
+  // type the clinic's name to confirm.
+  const [statusChange, setStatusChange] = useState<{
+    clinic: ClinicRecord;
+    to: "deactivated" | "active";
+  } | null>(null);
   const [typedName, setTypedName] = useState("");
+  const [changeDate, setChangeDate] = useState(todayInClinicTime());
   const [adminToRemove, setAdminToRemove] = useState<{
     username: string;
     label: string;
     clinicName: string;
   } | null>(null);
 
-  const remove = useMutation({
-    mutationFn: (clinicId: number) => deleteClinicIfEmpty(clinicId),
-    onSuccess: (res) => {
-      if (!res.ok) {
-        toast.error(res.error || "Could not remove");
-        return;
-      }
-      toast.success("Clinic removed");
-      setClinicToRemove(null);
+  const openStatusChange = (
+    clinic: ClinicRecord,
+    to: "deactivated" | "active",
+  ) => {
+    setTypedName("");
+    setChangeDate(todayInClinicTime());
+    setStatusChange({ clinic, to });
+  };
+
+  const changeStatus = useMutation({
+    mutationFn: (c: { clinicId: number; to: "deactivated" | "active" }) =>
+      c.to === "deactivated"
+        ? deactivateClinic(c.clinicId, changeDate)
+        : reactivateClinic(c.clinicId, changeDate),
+    onSuccess: (_res, c) => {
+      toast.success(
+        c.to === "deactivated" ? "Clinic deactivated" : "Clinic reactivated",
+      );
+      setStatusChange(null);
       setTypedName("");
       queryClient.invalidateQueries({ queryKey: ["clinics"] });
     },
     onError: (err) =>
       toast.error(
-        err instanceof Error ? err.message : "Could not remove clinic",
+        err instanceof Error ? err.message : "Could not change clinic status",
       ),
   });
 
@@ -199,15 +217,11 @@ function SuperFacilities() {
                       <ShieldCheck size={12} /> Assign Admin
                     </button>
                     <button
-                      onClick={() => {
-                        setTypedName("");
-                        setClinicToRemove(c);
-                      }}
-                      disabled={remove.isPending}
-                      className="text-destructive hover:bg-destructive/10 p-1.5 rounded inline-flex disabled:opacity-40"
-                      aria-label="Remove"
+                      onClick={() => openStatusChange(c, "deactivated")}
+                      disabled={changeStatus.isPending}
+                      className="text-xs text-destructive border border-destructive/30 px-2 py-1 rounded hover:bg-destructive/10 inline-flex items-center gap-1 disabled:opacity-40"
                     >
-                      <Trash2 size={14} />
+                      <PowerOff size={12} /> Deactivate
                     </button>
                   </td>
                 </tr>
@@ -229,6 +243,54 @@ function SuperFacilities() {
         </table>
       </div>
 
+      {deactivated.length > 0 && (
+        <div className="bg-white rounded-xl border overflow-hidden mt-6">
+          <div className="p-5 border-b flex items-center gap-3">
+            <PowerOff size={16} />
+            <h3 className="font-semibold">Deactivated clinics</h3>
+            <span className="text-xs text-muted-foreground ml-auto">
+              Kept on record, with their invoices
+            </span>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground border-b">
+                <th className="px-5 py-3 font-medium">Clinic</th>
+                <th className="px-5 py-3 font-medium">Type</th>
+                <th className="px-5 py-3 font-medium">Inactive from</th>
+                <th className="px-5 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {deactivated.map((c) => (
+                <tr key={c.clinicId} className="border-b last:border-0">
+                  <td className="px-5 py-3 font-medium">
+                    {c.clinicName}
+                    <span className="text-muted-foreground font-normal">
+                      {" "}
+                      · ID {c.clinicId}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3 capitalize">{c.type}</td>
+                  <td className="px-5 py-3 text-muted-foreground">
+                    {c.deactivatedOn ? formatDate(c.deactivatedOn) : "—"}
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    <button
+                      onClick={() => openStatusChange(c, "active")}
+                      disabled={changeStatus.isPending}
+                      className="text-xs border px-2 py-1 rounded hover:bg-secondary inline-flex items-center gap-1 disabled:opacity-40"
+                    >
+                      <Power size={12} /> Reactivate
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <ConfirmDialog
         open={adminToRemove !== null}
         destructive
@@ -246,34 +308,64 @@ function SuperFacilities() {
       />
 
       <ConfirmDialog
-        open={clinicToRemove !== null}
-        destructive
-        busy={remove.isPending}
+        open={statusChange !== null}
+        destructive={statusChange?.to === "deactivated"}
+        busy={changeStatus.isPending}
         confirmDisabled={
-          typedName.trim().toLowerCase() !==
-          (clinicToRemove?.clinicName ?? "").trim().toLowerCase()
+          !changeDate ||
+          (statusChange?.to === "deactivated" &&
+            typedName.trim().toLowerCase() !==
+              statusChange.clinic.clinicName.trim().toLowerCase())
         }
-        title={`Remove ${clinicToRemove?.clinicName ?? "this clinic"}?`}
+        title={
+          statusChange?.to === "deactivated"
+            ? `Deactivate ${statusChange.clinic.clinicName}?`
+            : `Reactivate ${statusChange?.clinic.clinicName ?? "this clinic"}?`
+        }
         description={
-          "This deletes the clinic. It only works if no staff are still assigned to it. " +
-          "To confirm, type the clinic's name below."
+          statusChange?.to === "deactivated"
+            ? "The clinic is not deleted: its records and invoices stay, and it can be reactivated later. " +
+              "It stops being offered to new patients and is billed only up to the day before the date below. " +
+              "Its staff can still sign in. To confirm, type the clinic's name."
+            : "The clinic is offered to new patients again and is billed from the date below."
         }
-        confirmLabel="Remove clinic"
+        confirmLabel={
+          statusChange?.to === "deactivated" ? "Deactivate clinic" : "Reactivate clinic"
+        }
         onCancel={() => {
-          setClinicToRemove(null);
+          setStatusChange(null);
           setTypedName("");
         }}
         onConfirm={() => {
-          if (clinicToRemove) remove.mutate(clinicToRemove.clinicId);
+          if (statusChange)
+            changeStatus.mutate({
+              clinicId: statusChange.clinic.clinicId,
+              to: statusChange.to,
+            });
         }}
       >
-        <input
-          value={typedName}
-          onChange={(e) => setTypedName(e.target.value)}
-          placeholder={clinicToRemove?.clinicName ?? ""}
-          className="w-full border rounded-md px-3 py-2 text-sm"
-          aria-label="Type the clinic name to confirm"
-        />
+        <div className="space-y-3">
+          <label className="block text-xs text-muted-foreground">
+            {statusChange?.to === "deactivated"
+              ? "First day the clinic is no longer active"
+              : "First day the clinic is active again"}
+            <input
+              type="date"
+              value={changeDate}
+              onChange={(e) => setChangeDate(e.target.value)}
+              className="mt-1 w-full border rounded-md px-3 py-2 text-sm text-foreground"
+            />
+          </label>
+          {statusChange?.to === "deactivated" && (
+            <input
+              value={typedName}
+              onChange={(e) => setTypedName(e.target.value)}
+              placeholder={statusChange.clinic.clinicName}
+              className="w-full border rounded-md px-3 py-2 text-sm"
+              aria-label="Type the clinic name to confirm"
+            />
+          )}
+        </div>
       </ConfirmDialog>
 
       {assign.open && assign.clinic && (

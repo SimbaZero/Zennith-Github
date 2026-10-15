@@ -30,6 +30,7 @@ import { Route as NurseIndexRouteImport } from './routes/nurse.index'
 import { Route as DoctorIndexRouteImport } from './routes/doctor.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as SuperAdminFacilitiesRouteImport } from './routes/super-admin.facilities'
+import { Route as SuperAdminBillingRouteImport } from './routes/super-admin.billing'
 import { Route as SuperAdminAuditRouteImport } from './routes/super-admin.audit'
 import { Route as SuperAdminApplicationsRouteImport } from './routes/super-admin.applications'
 import { Route as ReceptionistRegistrationRouteImport } from './routes/receptionist.registration'
@@ -52,11 +53,14 @@ import { Route as DoctorPatientsRouteImport } from './routes/doctor.patients'
 import { Route as DoctorAppointmentsRouteImport } from './routes/doctor.appointments'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminStaffRouteImport } from './routes/admin.staff'
+import { Route as AdminBillingRouteImport } from './routes/admin.billing'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
 import { Route as ReceptionistProfilesPidRouteImport } from './routes/receptionist.profiles_.$pid'
 import { Route as NursePatientRecordPidRouteImport } from './routes/nurse.patient-record.$pid'
 import { Route as DoctorPatientRecordPidRouteImport } from './routes/doctor.patient-record.$pid'
+import { Route as AdminBillingInvoiceIdRouteImport } from './routes/admin.billing_.$invoiceId'
 import { Route as DoctorPatientRecordRouteImport } from './routes/doctor.patient-record.'
+import { Route as SuperAdminBillingClinicIdInvoiceIdRouteImport } from './routes/super-admin.billing_.$clinicId.$invoiceId'
 
 const TwoFactorRoute = TwoFactorRouteImport.update({
   id: '/two-factor',
@@ -161,6 +165,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
 const SuperAdminFacilitiesRoute = SuperAdminFacilitiesRouteImport.update({
   id: '/facilities',
   path: '/facilities',
+  getParentRoute: () => SuperAdminRoute,
+} as any)
+const SuperAdminBillingRoute = SuperAdminBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
   getParentRoute: () => SuperAdminRoute,
 } as any)
 const SuperAdminAuditRoute = SuperAdminAuditRouteImport.update({
@@ -275,6 +284,11 @@ const AdminStaffRoute = AdminStaffRouteImport.update({
   path: '/staff',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminBillingRoute = AdminBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminAuditRoute = AdminAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
@@ -295,11 +309,22 @@ const DoctorPatientRecordPidRoute = DoctorPatientRecordPidRouteImport.update({
   path: '/patient-record/$pid',
   getParentRoute: () => DoctorRoute,
 } as any)
+const AdminBillingInvoiceIdRoute = AdminBillingInvoiceIdRouteImport.update({
+  id: '/billing_/$invoiceId',
+  path: '/billing/$invoiceId',
+  getParentRoute: () => AdminRoute,
+} as any)
 const DoctorPatientRecordRoute = DoctorPatientRecordRouteImport.update({
   id: '/patient-record/',
   path: '/patient-record/',
   getParentRoute: () => DoctorRoute,
 } as any)
+const SuperAdminBillingClinicIdInvoiceIdRoute =
+  SuperAdminBillingClinicIdInvoiceIdRouteImport.update({
+    id: '/billing_/$clinicId/$invoiceId',
+    path: '/billing/$clinicId/$invoiceId',
+    getParentRoute: () => SuperAdminRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -316,6 +341,7 @@ export interface FileRoutesByFullPath {
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/billing': typeof AdminBillingRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -338,6 +364,7 @@ export interface FileRoutesByFullPath {
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
+  '/super-admin/billing': typeof SuperAdminBillingRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
@@ -347,9 +374,11 @@ export interface FileRoutesByFullPath {
   '/receptionist/': typeof ReceptionistIndexRoute
   '/super-admin/': typeof SuperAdminIndexRoute
   '/doctor/patient-record/': typeof DoctorPatientRecordRoute
+  '/admin/billing/$invoiceId': typeof AdminBillingInvoiceIdRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
   '/receptionist/profiles/$pid': typeof ReceptionistProfilesPidRoute
+  '/super-admin/billing/$clinicId/$invoiceId': typeof SuperAdminBillingClinicIdInvoiceIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -359,6 +388,7 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/billing': typeof AdminBillingRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -381,6 +411,7 @@ export interface FileRoutesByTo {
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
+  '/super-admin/billing': typeof SuperAdminBillingRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
   '/admin': typeof AdminIndexRoute
   '/doctor': typeof DoctorIndexRoute
@@ -390,9 +421,11 @@ export interface FileRoutesByTo {
   '/receptionist': typeof ReceptionistIndexRoute
   '/super-admin': typeof SuperAdminIndexRoute
   '/doctor/patient-record': typeof DoctorPatientRecordRoute
+  '/admin/billing/$invoiceId': typeof AdminBillingInvoiceIdRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
   '/receptionist/profiles/$pid': typeof ReceptionistProfilesPidRoute
+  '/super-admin/billing/$clinicId/$invoiceId': typeof SuperAdminBillingClinicIdInvoiceIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -410,6 +443,7 @@ export interface FileRoutesById {
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
+  '/admin/billing': typeof AdminBillingRoute
   '/admin/staff': typeof AdminStaffRoute
   '/admin/users': typeof AdminUsersRoute
   '/doctor/appointments': typeof DoctorAppointmentsRoute
@@ -432,6 +466,7 @@ export interface FileRoutesById {
   '/receptionist/registration': typeof ReceptionistRegistrationRoute
   '/super-admin/applications': typeof SuperAdminApplicationsRoute
   '/super-admin/audit': typeof SuperAdminAuditRoute
+  '/super-admin/billing': typeof SuperAdminBillingRoute
   '/super-admin/facilities': typeof SuperAdminFacilitiesRoute
   '/admin/': typeof AdminIndexRoute
   '/doctor/': typeof DoctorIndexRoute
@@ -441,9 +476,11 @@ export interface FileRoutesById {
   '/receptionist/': typeof ReceptionistIndexRoute
   '/super-admin/': typeof SuperAdminIndexRoute
   '/doctor/patient-record/': typeof DoctorPatientRecordRoute
+  '/admin/billing_/$invoiceId': typeof AdminBillingInvoiceIdRoute
   '/doctor/patient-record/$pid': typeof DoctorPatientRecordPidRoute
   '/nurse/patient-record/$pid': typeof NursePatientRecordPidRoute
   '/receptionist/profiles_/$pid': typeof ReceptionistProfilesPidRoute
+  '/super-admin/billing_/$clinicId/$invoiceId': typeof SuperAdminBillingClinicIdInvoiceIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -462,6 +499,7 @@ export interface FileRouteTypes {
     | '/super-admin'
     | '/two-factor'
     | '/admin/audit'
+    | '/admin/billing'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -484,6 +522,7 @@ export interface FileRouteTypes {
     | '/receptionist/registration'
     | '/super-admin/applications'
     | '/super-admin/audit'
+    | '/super-admin/billing'
     | '/super-admin/facilities'
     | '/admin/'
     | '/doctor/'
@@ -493,9 +532,11 @@ export interface FileRouteTypes {
     | '/receptionist/'
     | '/super-admin/'
     | '/doctor/patient-record/'
+    | '/admin/billing/$invoiceId'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
     | '/receptionist/profiles/$pid'
+    | '/super-admin/billing/$clinicId/$invoiceId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -505,6 +546,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/two-factor'
     | '/admin/audit'
+    | '/admin/billing'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -527,6 +569,7 @@ export interface FileRouteTypes {
     | '/receptionist/registration'
     | '/super-admin/applications'
     | '/super-admin/audit'
+    | '/super-admin/billing'
     | '/super-admin/facilities'
     | '/admin'
     | '/doctor'
@@ -536,9 +579,11 @@ export interface FileRouteTypes {
     | '/receptionist'
     | '/super-admin'
     | '/doctor/patient-record'
+    | '/admin/billing/$invoiceId'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
     | '/receptionist/profiles/$pid'
+    | '/super-admin/billing/$clinicId/$invoiceId'
   id:
     | '__root__'
     | '/'
@@ -555,6 +600,7 @@ export interface FileRouteTypes {
     | '/super-admin'
     | '/two-factor'
     | '/admin/audit'
+    | '/admin/billing'
     | '/admin/staff'
     | '/admin/users'
     | '/doctor/appointments'
@@ -577,6 +623,7 @@ export interface FileRouteTypes {
     | '/receptionist/registration'
     | '/super-admin/applications'
     | '/super-admin/audit'
+    | '/super-admin/billing'
     | '/super-admin/facilities'
     | '/admin/'
     | '/doctor/'
@@ -586,9 +633,11 @@ export interface FileRouteTypes {
     | '/receptionist/'
     | '/super-admin/'
     | '/doctor/patient-record/'
+    | '/admin/billing_/$invoiceId'
     | '/doctor/patient-record/$pid'
     | '/nurse/patient-record/$pid'
     | '/receptionist/profiles_/$pid'
+    | '/super-admin/billing_/$clinicId/$invoiceId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -756,6 +805,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SuperAdminFacilitiesRouteImport
       parentRoute: typeof SuperAdminRoute
     }
+    '/super-admin/billing': {
+      id: '/super-admin/billing'
+      path: '/billing'
+      fullPath: '/super-admin/billing'
+      preLoaderRoute: typeof SuperAdminBillingRouteImport
+      parentRoute: typeof SuperAdminRoute
+    }
     '/super-admin/audit': {
       id: '/super-admin/audit'
       path: '/audit'
@@ -910,6 +966,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminStaffRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/billing': {
+      id: '/admin/billing'
+      path: '/billing'
+      fullPath: '/admin/billing'
+      preLoaderRoute: typeof AdminBillingRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/audit': {
       id: '/admin/audit'
       path: '/audit'
@@ -938,6 +1001,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DoctorPatientRecordPidRouteImport
       parentRoute: typeof DoctorRoute
     }
+    '/admin/billing_/$invoiceId': {
+      id: '/admin/billing_/$invoiceId'
+      path: '/billing/$invoiceId'
+      fullPath: '/admin/billing/$invoiceId'
+      preLoaderRoute: typeof AdminBillingInvoiceIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/doctor/patient-record/': {
       id: '/doctor/patient-record/'
       path: '/patient-record'
@@ -945,21 +1015,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DoctorPatientRecordRouteImport
       parentRoute: typeof DoctorRoute
     }
+    '/super-admin/billing_/$clinicId/$invoiceId': {
+      id: '/super-admin/billing_/$clinicId/$invoiceId'
+      path: '/billing/$clinicId/$invoiceId'
+      fullPath: '/super-admin/billing/$clinicId/$invoiceId'
+      preLoaderRoute: typeof SuperAdminBillingClinicIdInvoiceIdRouteImport
+      parentRoute: typeof SuperAdminRoute
+    }
   }
 }
 
 interface AdminRouteChildren {
   AdminAuditRoute: typeof AdminAuditRoute
+  AdminBillingRoute: typeof AdminBillingRoute
   AdminStaffRoute: typeof AdminStaffRoute
   AdminUsersRoute: typeof AdminUsersRoute
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminBillingInvoiceIdRoute: typeof AdminBillingInvoiceIdRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditRoute: AdminAuditRoute,
+  AdminBillingRoute: AdminBillingRoute,
   AdminStaffRoute: AdminStaffRoute,
   AdminUsersRoute: AdminUsersRoute,
   AdminIndexRoute: AdminIndexRoute,
+  AdminBillingInvoiceIdRoute: AdminBillingInvoiceIdRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
@@ -1067,15 +1148,20 @@ const ReceptionistRouteWithChildren = ReceptionistRoute._addFileChildren(
 interface SuperAdminRouteChildren {
   SuperAdminApplicationsRoute: typeof SuperAdminApplicationsRoute
   SuperAdminAuditRoute: typeof SuperAdminAuditRoute
+  SuperAdminBillingRoute: typeof SuperAdminBillingRoute
   SuperAdminFacilitiesRoute: typeof SuperAdminFacilitiesRoute
   SuperAdminIndexRoute: typeof SuperAdminIndexRoute
+  SuperAdminBillingClinicIdInvoiceIdRoute: typeof SuperAdminBillingClinicIdInvoiceIdRoute
 }
 
 const SuperAdminRouteChildren: SuperAdminRouteChildren = {
   SuperAdminApplicationsRoute: SuperAdminApplicationsRoute,
   SuperAdminAuditRoute: SuperAdminAuditRoute,
+  SuperAdminBillingRoute: SuperAdminBillingRoute,
   SuperAdminFacilitiesRoute: SuperAdminFacilitiesRoute,
   SuperAdminIndexRoute: SuperAdminIndexRoute,
+  SuperAdminBillingClinicIdInvoiceIdRoute:
+    SuperAdminBillingClinicIdInvoiceIdRoute,
 }
 
 const SuperAdminRouteWithChildren = SuperAdminRoute._addFileChildren(

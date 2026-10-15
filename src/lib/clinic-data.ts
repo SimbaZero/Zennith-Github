@@ -20,6 +20,8 @@ import {
   updateDoc,
   where,
   serverTimestamp,
+  writeBatch,
+  deleteField,
   type DocumentData,
   type Timestamp,
 } from "firebase/firestore";
@@ -1800,10 +1802,13 @@ export async function fetchRealClinics(): Promise<RealClinic[]> {
   const snap = await getDocs(collection(db, "clinics"));
   return (
     snap.docs
-      // A clinic still waiting for review must not be selectable by patients.
-      // Clinics with no status at all are the original pre-loaded ones, which
-      // are active.
-      .filter((d) => d.data().status !== "pending")
+      // A clinic still waiting for review, or deactivated, must not be
+      // selectable by patients. Clinics with no status at all are the
+      // original pre-loaded ones, which are active.
+      .filter(
+        (d) =>
+          d.data().status !== "pending" && d.data().status !== "deactivated",
+      )
       .map((d) => {
         const data = d.data();
         return {
@@ -2185,7 +2190,14 @@ export interface ClinicRecord {
   clinicName: string;
   type: "public" | "private";
   address?: string;
-  status: "pending" | "active";
+  /** Clinics are never deleted once live — they are deactivated instead. */
+  status: "pending" | "active" | "deactivated";
+  /** When the application was approved (ISO). Pre-loaded clinics have none. */
+  approvedAt?: string;
+  /** YYYY-MM-DD: first day the clinic was no longer active. */
+  deactivatedOn?: string;
+  /** YYYY-MM-DD: first day active again after the last deactivation. */
+  reactivatedOn?: string;
   plan?: "public-standard" | "private-standard";
   billingStatus?: "not-set-up" | "active";
   contactName?: string;
@@ -2215,7 +2227,13 @@ export async function listClinics(): Promise<ClinicRecord[]> {
         address: data.Coordinates,
         // Existing pre-loaded clinics have no status field at all — treat
         // those as already active rather than newly pending.
-        status: data.status === "pending" ? "pending" : "active",
+        status:
+          data.status === "pending" || data.status === "deactivated"
+            ? data.status
+            : "active",
+        approvedAt: data.approvedAt,
+        deactivatedOn: data.deactivatedOn,
+        reactivatedOn: data.reactivatedOn,
         plan: data.plan,
         billingStatus: data.billingStatus,
         contactName: data.contactName,
@@ -2316,6 +2334,56 @@ export async function approveClinic(
     ...(meta?.approvedBy ? { approvedBy: meta.approvedBy } : {}),
     ...(meta?.note?.trim() ? { reviewNote: meta.note.trim() } : {}),
   });
+}
+
+/**
+ * Takes a live clinic off the platform without deleting it, so its records
+ * and invoices stay. `on` is the first day it is no longer active
+ * (YYYY-MM-DD); billing prorates private fees from it. This changes the
+ * clinic's status only — it does NOT lock the clinic's staff out.
+ * The audit entry is written in the same batch, so neither saves alone.
+ */
+export async function deactivateClinic(
+  clinicId: number,
+  on: string,
+): Promise<void> {
+  assertOnline();
+  const batch = writeBatch(db);
+  batch.update(doc(db, "clinics", String(clinicId)), {
+    status: "deactivated",
+    deactivatedOn: on,
+    // A previous reactivation no longer applies to this new deactivation.
+    reactivatedOn: deleteField(),
+  });
+  batch.set(doc(collection(db, "systemAudit")), {
+    clinicId,
+    actor_id: getUsername() || "system",
+    action_type: "clinic.deactivate",
+    description: `Deactivated clinic ${clinicId} from ${on}`,
+    timestamp: serverTimestamp(),
+  });
+  await batch.commit();
+}
+
+/** Brings a deactivated clinic back. `on` is its first active day again. */
+export async function reactivateClinic(
+  clinicId: number,
+  on: string,
+): Promise<void> {
+  assertOnline();
+  const batch = writeBatch(db);
+  batch.update(doc(db, "clinics", String(clinicId)), {
+    status: "active",
+    reactivatedOn: on,
+  });
+  batch.set(doc(collection(db, "systemAudit")), {
+    clinicId,
+    actor_id: getUsername() || "system",
+    action_type: "clinic.reactivate",
+    description: `Reactivated clinic ${clinicId} from ${on}`,
+    timestamp: serverTimestamp(),
+  });
+  await batch.commit();
 }
 
 export async function rejectClinicApplication(clinicId: number): Promise<void> {

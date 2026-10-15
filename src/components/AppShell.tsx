@@ -30,6 +30,7 @@ import {
   ShieldQuestion,
   Truck,
   Package,
+  Receipt,
   type LucideIcon,
 } from "lucide-react";
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
@@ -120,6 +121,7 @@ const navByRole: Record<Role, NavItem[]> = {
     { to: "/admin", label: "Dashboard", icon: LayoutDashboard },
     { to: "/admin/users", label: "Create User", icon: UserPlus },
     { to: "/admin/staff", label: "All Staff", icon: ShieldCheck },
+    { to: "/admin/billing", label: "Billing", icon: Receipt },
     { to: "/admin/audit", label: "Audit Logs", icon: Activity },
   ],
   super_admin: [
@@ -130,6 +132,7 @@ const navByRole: Record<Role, NavItem[]> = {
       label: "Clinic Applications",
       icon: ClipboardList,
     },
+    { to: "/super-admin/billing", label: "Billing", icon: Receipt },
     { to: "/super-admin/audit", label: "Security & Audit", icon: ShieldCheck },
   ],
 };

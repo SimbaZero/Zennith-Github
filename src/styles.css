@@ -226,3 +226,25 @@
   main { padding: 0 !important; }
   #record-page { box-shadow: none !important; border: 0 !important; }
 }
+
+/* Billing invoices print as a clean A4 page (browser Print → Save as PDF).
+   A named page, so it doesn't change how anything else prints. */
+@page invoice {
+  size: A4;
+  margin: 14mm;
+}
+@media print {
+  .invoice-sheet {
+    page: invoice;
+    box-shadow: none !important;
+    border: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .invoice-sheet tr,
+  .invoice-sheet .invoice-keep {
+    break-inside: avoid;
+  }
+}
