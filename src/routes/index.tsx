@@ -519,6 +519,7 @@ const TEAM_MEMBERS: TeamMember[] = [
     tags: ["Firestore rules", "Presenter"],
     accent: "database",
     photo: "/team/michelle",
+    github: "https://github.com/Micchie11",
   },
   {
     name: "Simbarashe",
