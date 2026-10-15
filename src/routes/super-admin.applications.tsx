@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createPortal } from "react-dom";
 import { useState } from "react";
 import { toast } from "sonner";
 import { collection, getDocs, limit, query, where } from "firebase/firestore";
@@ -139,11 +141,13 @@ function Applications() {
             />
           </div>
           <span className="text-xs text-muted-foreground ml-auto">
-            {isLoading
-              ? "Loading..."
-              : search.trim()
-                ? `${shown.length} of ${pending.length}`
-                : `${pending.length} awaiting review`}
+            {isLoading ? (
+              <Loading label="Loading" size={12} />
+            ) : search.trim() ? (
+              `${shown.length} of ${pending.length}`
+            ) : (
+              `${pending.length} awaiting review`
+            )}
           </span>
         </div>
 
@@ -389,7 +393,12 @@ function ReviewDrawer({
 
   const busy = approve.isPending || reject.isPending;
 
-  return (
+  // Rendered into <body>, not where it is declared. The page content sits in a
+  // fading-in wrapper that forms ONE stacking layer below the sticky top bar
+  // (z-20), so a z-50 panel inside it still painted under that bar and its first
+  // lines were covered. At the body level its z-50 competes with the bar itself.
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex"
       role="dialog"
@@ -582,7 +591,8 @@ function ReviewDrawer({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -105,6 +105,15 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
+// Runs in the page head, before the app's own code loads: someone who opens
+// /login while already signed in (the installed app's start page, a bookmark, a
+// reload) goes straight to their role's home page instead of sitting on the
+// sign-in form. Only a direct load of /login is affected; moving to /login from
+// inside the app (sign out, "sign in again") is ordinary navigation and never
+// runs this. The role names are the same ones getAuth() accepts, and the
+// destination is built from a fixed list, never from stored text.
+const SIGNED_IN_REDIRECT = `try{var r=localStorage.getItem("zennith_auth");if(location.pathname==="/login"&&["admin","doctor","nurse","pharmacist","receptionist","patient","super_admin"].indexOf(r)>-1){location.replace("/"+r.replace("_","-"))}}catch(e){}`;
+
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
     meta: [
@@ -118,12 +127,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "" },
+      // The browser's address-bar / title-bar colour for the installed app.
+      { name: "theme-color", content: "#0F1B3D" },
     ],
+    scripts: [{ children: SIGNED_IN_REDIRECT }],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
       },
+      // Installability ("Add to Home Screen"): the manifest names the app and
+      // lists its icons; all of these files live in public/.
+      { rel: "manifest", href: "/manifest.webmanifest" },
+      { rel: "icon", href: "/favicon.ico", sizes: "any" },
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/icons/apple-touch-icon.png" },
     ],
   }),
   shellComponent: RootShell,

@@ -1,6 +1,14 @@
-// Server-only: text-message sign-in codes for patients, the alternative
-// second factor for people without an authenticator app. Called through the
-// server functions in src/lib/sms-otp.ts.
+// Server-only: text-message sign-in codes for patients, offered alongside the
+// authenticator app. Called through the server functions in src/lib/sms-otp.ts.
+//
+// Any patient may use it (and may switch between it and their authenticator on
+// the sign-in screen themselves). It used to be available only to patients who
+// had no authenticator and no method set, which is why it appeared for some
+// accounts and not others.
+//
+// Nothing here is allowed to throw out of an exported function: an unexpected
+// failure becomes the "server-error" reason, so the page can say what happened
+// instead of "something went wrong".
 //
 // Everything that matters happens here: the code is generated, hashed,
 // stored, sent and checked without ever reaching the browser. The caller is
@@ -23,8 +31,18 @@
 //                                      haven't verified it
 //   smsGlobalLimits/{day}              all such unverified sends, app-wide,
 //                                      per UTC day
-import type { SendSmsCodeResult, SmsCodeFailure, VerifySmsCodeResult } from "../lib/sms-otp";
-import { isSmsConfigured, isSmsTestMode, sendSms, toSouthAfricanMobile, withoutPhoneNumbers } from "../lib/smsportal";
+import type {
+  SendSmsCodeResult,
+  SmsCodeFailure,
+  VerifySmsCodeResult,
+} from "../lib/sms-otp";
+import {
+  isSmsConfigured,
+  isSmsTestMode,
+  sendSms,
+  toSouthAfricanMobile,
+  withoutPhoneNumbers,
+} from "../lib/smsportal";
 import { readEnv } from "./env";
 import { verifyIdToken } from "./firebase-auth";
 import {
@@ -63,7 +81,8 @@ const VERIFIED_FOR_MS = 90 * 24 * 60 * 60_000;
 // What a number's listed accounts can use between them. Only reached by
 // cycling new accounts through the list, which would otherwise give one SIM a
 // fresh allowance per account.
-const MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY = MAX_VERIFIED_ACCOUNTS_PER_PHONE * MAX_VERIFIED_SENDS_PER_DAY;
+const MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY =
+  MAX_VERIFIED_ACCOUNTS_PER_PHONE * MAX_VERIFIED_SENDS_PER_DAY;
 const DAY_MS = 24 * 60 * 60_000;
 const DEFAULT_UNVERIFIED_SENDS_PER_DAY = 200;
 // Writes pinned to what was read can lose a race; retry, with a short random
@@ -73,7 +92,16 @@ const MAX_WRITE_TRIES = 5;
 // The challenge fields a send changes, split by whether a send that is taken
 // back gets them back: a text that failed keeps its hourly counts, which
 // bounds retries; a send refused at a daily cap gets those back too.
-const CODE_FIELDS = ["codeHash", "salt", "expiresAt", "attempts", "phone", "sentAt", "verifiedDay", "verifiedDaySends"];
+const CODE_FIELDS = [
+  "codeHash",
+  "salt",
+  "expiresAt",
+  "attempts",
+  "phone",
+  "sentAt",
+  "verifiedDay",
+  "verifiedDaySends",
+];
 const HOURLY_FIELDS = ["windowStart", "sends"];
 
 /** SMS_OTP_UNVERIFIED_DAILY_LIMIT as a whole number (0 = none), else the default. */
@@ -81,7 +109,9 @@ function unverifiedDailyLimit(env: unknown): number {
   const raw = readEnv(env, "SMS_OTP_UNVERIFIED_DAILY_LIMIT");
   if (raw == null) return DEFAULT_UNVERIFIED_SENDS_PER_DAY;
   if (/^\d+$/.test(raw.trim())) return Number(raw.trim());
-  console.warn(`[sms-otp] SMS_OTP_UNVERIFIED_DAILY_LIMIT "${raw}" isn't a whole number; using ${DEFAULT_UNVERIFIED_SENDS_PER_DAY}`);
+  console.warn(
+    `[sms-otp] SMS_OTP_UNVERIFIED_DAILY_LIMIT "${raw}" isn't a whole number; using ${DEFAULT_UNVERIFIED_SENDS_PER_DAY}`,
+  );
   return DEFAULT_UNVERIFIED_SENDS_PER_DAY;
 }
 
@@ -100,12 +130,19 @@ function randomCode(): string {
 }
 
 function randomHex(bytes: number): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 async function hashCode(salt: string, code: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}:${code}`));
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${salt}:${code}`),
+  );
+  return Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 function sameHash(a: string, b: string): boolean {
@@ -125,9 +162,17 @@ function adminOrNull(env: unknown): FirestoreAdmin | null {
 }
 
 /** A rolling counter: when its window opened, and the count still inside it. */
-function rolling(start: unknown, count: unknown, windowMs: number, now: number) {
+function rolling(
+  start: unknown,
+  count: unknown,
+  windowMs: number,
+  now: number,
+) {
   const open = now - Number(start ?? 0) < windowMs;
-  return { start: open ? Number(start) : now, count: open ? Number(count ?? 0) : 0 };
+  return {
+    start: open ? Number(start) : now,
+    count: open ? Number(count ?? 0) : 0,
+  };
 }
 
 /** The UTC day `now` is in ("2026-10-07"), which names the daily counters, and when it ends. */
@@ -137,12 +182,17 @@ function utcDay(now: number) {
 }
 
 /** The accounts on a smsVerifiedPhones doc that still count as verified, with when each last verified. */
-function verifiedAccounts(doc: FirestoreDoc | null, now: number): Map<string, number> {
+function verifiedAccounts(
+  doc: FirestoreDoc | null,
+  now: number,
+): Map<string, number> {
   const recorded = doc?.data.accounts;
   const found = new Map<string, number>();
-  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) return found;
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded))
+    return found;
   for (const [uid, at] of Object.entries(recorded)) {
-    if (typeof at === "number" && now - at < VERIFIED_FOR_MS) found.set(uid, at);
+    if (typeof at === "number" && now - at < VERIFIED_FOR_MS)
+      found.set(uid, at);
   }
   return found;
 }
@@ -153,7 +203,9 @@ function pinnedTo(doc: FirestoreDoc | null) {
 }
 
 function waitBeforeRetry(tries: number) {
-  return new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40 * tries));
+  return new Promise((resolve) =>
+    setTimeout(resolve, 10 + Math.random() * 40 * tries),
+  );
 }
 
 /** An error for the log, without the phone numbers that name some documents. */
@@ -162,40 +214,53 @@ function forLog(error: unknown): string {
 }
 
 /**
- * Resolves the caller to a patient allowed to use text-message codes: a
- * patient profile that is either already on SMS or not yet enrolled in any
- * method. Accounts on an authenticator app can't switch themselves; an admin
- * resets them first.
+ * Resolves the caller to a patient. Any patient may use text-message codes,
+ * whether or not they also have an authenticator app: the choice of method is
+ * theirs, made on the sign-in screen. `enrolled` is whether text message is
+ * already the method recorded on the profile.
  */
 async function eligiblePatient(
   fs: FirestoreAdmin,
   idToken: unknown,
-): Promise<{ ok: false; reason: SmsCodeFailure } | { ok: true; uid: string; legacyUserId: unknown; enrolled: boolean }> {
+): Promise<
+  | { ok: false; reason: SmsCodeFailure }
+  | { ok: true; uid: string; legacyUserId: unknown; enrolled: boolean }
+> {
   const uid = await verifyIdToken(idToken, fs.projectId);
   if (!uid) return { ok: false, reason: "unauthenticated" };
 
   const p = (await fs.get("profiles", uid))?.data;
-  const hasTotp = typeof p?.totpSecret === "string" && p.totpSecret !== "";
-  if (!p || p.role !== "patient" || hasTotp || (p.twoFactorMethod != null && p.twoFactorMethod !== "sms")) {
-    return { ok: false, reason: "not-eligible" };
-  }
-  return { ok: true, uid, legacyUserId: p.legacyUserId, enrolled: p.twoFactorMethod === "sms" };
+  if (!p || p.role !== "patient") return { ok: false, reason: "not-eligible" };
+  return {
+    ok: true,
+    uid,
+    legacyUserId: p.legacyUserId,
+    enrolled: p.twoFactorMethod === "sms",
+  };
 }
 
 /* ---------------- send ---------------- */
 
-export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<SendSmsCodeResult> {
+async function requestSmsCodeInner(
+  idToken: unknown,
+  env?: unknown,
+): Promise<SendSmsCodeResult> {
   const fs = adminOrNull(env);
   if (!fs || (!isSmsConfigured(env) && !isSmsTestMode(env))) {
-    console.warn("[sms-otp] SMSPortal or FIREBASE_SERVICE_ACCOUNT not configured; code not sent");
+    console.warn(
+      "[sms-otp] SMSPortal or FIREBASE_SERVICE_ACCOUNT not configured; code not sent",
+    );
     return { ok: false, reason: "not-configured" };
   }
 
   const patient = await eligiblePatient(fs, idToken);
   if (!patient.ok) return { ok: false, reason: patient.reason };
 
-  const legacyUserId = patient.legacyUserId == null ? "" : String(patient.legacyUserId);
-  const user = USER_ID.test(legacyUserId) ? await fs.get("users", legacyUserId) : null;
+  const legacyUserId =
+    patient.legacyUserId == null ? "" : String(patient.legacyUserId);
+  const user = USER_ID.test(legacyUserId)
+    ? await fs.get("users", legacyUserId)
+    : null;
   const phone = toSouthAfricanMobile(user?.data.contactNum);
   if (!phone) return { ok: false, reason: "no-phone" };
 
@@ -208,9 +273,20 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
   const codeHash = await hashCode(salt, code);
   let reserved: Reserved | undefined;
   for (let tries = 1; !reserved; tries++) {
-    const outcome = await reserveSend(fs, patient.uid, phone, { codeHash, salt }, env);
+    const outcome = await reserveSend(
+      fs,
+      patient.uid,
+      phone,
+      { codeHash, salt },
+      env,
+    );
     if ("reserved" in outcome) reserved = outcome.reserved;
-    else if (outcome.result.ok || outcome.result.reason !== "busy" || tries >= MAX_WRITE_TRIES) return outcome.result;
+    else if (
+      outcome.result.ok ||
+      outcome.result.reason !== "busy" ||
+      tries >= MAX_WRITE_TRIES
+    )
+      return outcome.result;
     else await waitBeforeRetry(tries);
   }
 
@@ -227,13 +303,20 @@ export async function requestSmsCode(idToken: unknown, env?: unknown): Promise<S
     // straight away, put back any earlier code, and give back the daily slots
     // the send used (failed texts aren't billed).
     await undoReservation(fs, patient.uid, reserved, { refundHourly: false });
-    return { ok: false, reason: "send-failed" };
+    return { ok: false, reason: sendFailureReason(sent.reason) };
   }
   // Test mode sends nothing, so the code is only in the server log. Never
   // enable SMSPORTAL_TEST_MODE in production.
-  if (testMode) console.info(`[sms-otp] TEST MODE, not delivered. Code for ${patient.uid}: ${code}`);
+  if (testMode)
+    console.info(
+      `[sms-otp] TEST MODE, not delivered. Code for ${patient.uid}: ${code}`,
+    );
 
-  return { ok: true, phoneLast4: phone.slice(-4), resendAt: reserved.sentAt + RESEND_COOLDOWN_MS };
+  return {
+    ok: true,
+    phoneLast4: phone.slice(-4),
+    resendAt: reserved.sentAt + RESEND_COOLDOWN_MS,
+  };
 }
 
 interface Reserved {
@@ -254,35 +337,59 @@ interface Reserved {
  * still valid works again, and takes it off the daily counters. Hourly counts
  * come back only with `refundHourly`. Best effort, and never throws.
  */
-async function undoReservation(fs: FirestoreAdmin, uid: string, reserved: Reserved, { refundHourly }: { refundHourly: boolean }) {
-  const fields = refundHourly ? [...CODE_FIELDS, ...HOURLY_FIELDS] : CODE_FIELDS;
-  const data = Object.fromEntries(fields.map((field) => [field, reserved.before[field]]));
+async function undoReservation(
+  fs: FirestoreAdmin,
+  uid: string,
+  reserved: Reserved,
+  { refundHourly }: { refundHourly: boolean },
+) {
+  const fields = refundHourly
+    ? [...CODE_FIELDS, ...HOURLY_FIELDS]
+    : CODE_FIELDS;
+  const data = Object.fromEntries(
+    fields.map((field) => [field, reserved.before[field]]),
+  );
   let version: string | undefined = reserved.challengeVersion;
   for (let tries = 1; version && tries <= MAX_WRITE_TRIES; tries++) {
     try {
-      await fs.write("smsChallenges", uid, data, { mask: fields, precondition: { updateTime: version } });
+      await fs.write("smsChallenges", uid, data, {
+        mask: fields,
+        precondition: { updateTime: version },
+      });
       break;
     } catch (error) {
       if (!(error instanceof WriteConflict)) break;
       // Changed since, e.g. by a code typed while the text was in flight. Only
       // put things back while this send's code is still the current one.
       const latest = await fs.get("smsChallenges", uid).catch(() => null);
-      version = latest?.data.codeHash === reserved.codeHash ? latest.updateTime : undefined;
+      version =
+        latest?.data.codeHash === reserved.codeHash
+          ? latest.updateTime
+          : undefined;
     }
   }
 
   // Increments never conflict, so these come back even if the challenge
   // couldn't. Not retried: a commit whose response was lost may have been
   // applied, and giving a slot back twice would raise the cap.
-  const decrements: FirestoreWrite[] = reserved.counters.map(([collection, id]) => ({
-    increment: [collection, id],
-    by: { sends: -1 },
-  }));
+  const decrements: FirestoreWrite[] = reserved.counters.map(
+    ([collection, id]) => ({
+      increment: [collection, id],
+      by: { sends: -1 },
+    }),
+  );
   if (refundHourly && reserved.phoneKey) {
-    decrements.push({ increment: ["smsPhoneLimits", reserved.phoneKey], by: { sends: -1 } });
+    decrements.push({
+      increment: ["smsPhoneLimits", reserved.phoneKey],
+      by: { sends: -1 },
+    });
   }
   if (decrements.length > 0) {
-    await fs.commit(decrements).catch((error) => console.error("[sms-otp] couldn't give back a send:", forLog(error)));
+    await fs
+      .commit(decrements)
+      .catch((error) =>
+        console.error("[sms-otp] couldn't give back a send:", forLog(error)),
+      );
   }
 }
 
@@ -300,32 +407,55 @@ async function reserveSend(
   const prev = challenge?.data ?? {};
 
   // Locked after too many wrong codes: a new code would only let guessing continue.
-  const attemptWindowOpen = now - Number(prev.attemptWindowStart ?? 0) < ATTEMPT_WINDOW_MS;
-  if (attemptWindowOpen && Number(prev.attemptsInWindow ?? 0) >= MAX_ATTEMPTS_PER_ATTEMPT_WINDOW) {
-    return { result: { ok: false, reason: "rate-limited", retryAt: Number(prev.attemptWindowStart) + ATTEMPT_WINDOW_MS } };
+  const attemptWindowOpen =
+    now - Number(prev.attemptWindowStart ?? 0) < ATTEMPT_WINDOW_MS;
+  if (
+    attemptWindowOpen &&
+    Number(prev.attemptsInWindow ?? 0) >= MAX_ATTEMPTS_PER_ATTEMPT_WINDOW
+  ) {
+    return {
+      result: {
+        ok: false,
+        reason: "rate-limited",
+        retryAt: Number(prev.attemptWindowStart) + ATTEMPT_WINDOW_MS,
+      },
+    };
   }
 
   const previousSentAt = Number(prev.sentAt ?? 0);
   if (now - previousSentAt < RESEND_COOLDOWN_MS) {
     // Still valid for someone who refreshed the page: the code already sent works.
     return {
-      result: { ok: false, reason: "cooldown", retryAt: previousSentAt + RESEND_COOLDOWN_MS, phoneLast4: phone.slice(-4) },
+      result: {
+        ok: false,
+        reason: "cooldown",
+        retryAt: previousSentAt + RESEND_COOLDOWN_MS,
+        phoneLast4: phone.slice(-4),
+      },
     };
   }
   const own = rolling(prev.windowStart, prev.sends, SEND_WINDOW_MS, now);
   if (own.count >= MAX_SENDS_PER_WINDOW) {
-    return { result: { ok: false, reason: "rate-limited", retryAt: own.start + SEND_WINDOW_MS } };
+    return {
+      result: {
+        ok: false,
+        reason: "rate-limited",
+        retryAt: own.start + SEND_WINDOW_MS,
+      },
+    };
   }
 
   const writes: FirestoreWrite[] = [];
   const phoneKey = phone.slice(1);
   const verified =
-    prev.verifiedPhone === phone && verifiedAccounts(await fs.get("smsVerifiedPhones", phoneKey), now).has(uid);
+    prev.verifiedPhone === phone &&
+    verifiedAccounts(await fs.get("smsVerifiedPhones", phoneKey), now).has(uid);
 
   // Daily counters are incremented rather than pinned, so sends from
   // different accounts never conflict over them, and the count each increment
   // returns is checked after the commit: [counter, index of its write, cap].
-  const counted: Array<{ counter: [string, string]; at: number; cap: number }> = [];
+  const counted: Array<{ counter: [string, string]; at: number; cap: number }> =
+    [];
   const count = (counter: [string, string], cap: number) => {
     counted.push({ counter, at: writes.length, cap });
     writes.push({ increment: counter, by: { sends: 1 } });
@@ -335,27 +465,52 @@ async function reserveSend(
   // account's sends can use it up.
   let ownDaySends: number | undefined;
   if (verified) {
-    ownDaySends = prev.verifiedDay === day.id ? Number(prev.verifiedDaySends ?? 0) : 0;
+    ownDaySends =
+      prev.verifiedDay === day.id ? Number(prev.verifiedDaySends ?? 0) : 0;
     if (ownDaySends >= MAX_VERIFIED_SENDS_PER_DAY) {
-      return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
+      return {
+        result: { ok: false, reason: "rate-limited", retryAt: day.endsAt },
+      };
     }
     const phoneDayId = `${phoneKey}_${day.id}`;
     const phoneDay = await fs.get("smsVerifiedPhoneDays", phoneDayId);
-    if (Number(phoneDay?.data.sends ?? 0) >= MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY) {
-      return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
+    if (
+      Number(phoneDay?.data.sends ?? 0) >= MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY
+    ) {
+      return {
+        result: { ok: false, reason: "rate-limited", retryAt: day.endsAt },
+      };
     }
-    count(["smsVerifiedPhoneDays", phoneDayId], MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY);
+    count(
+      ["smsVerifiedPhoneDays", phoneDayId],
+      MAX_VERIFIED_SENDS_PER_PHONE_PER_DAY,
+    );
   } else {
     const phoneDoc = await fs.get("smsPhoneLimits", phoneKey);
-    const perPhone = rolling(phoneDoc?.data.windowStart, phoneDoc?.data.sends, SEND_WINDOW_MS, now);
+    const perPhone = rolling(
+      phoneDoc?.data.windowStart,
+      phoneDoc?.data.sends,
+      SEND_WINDOW_MS,
+      now,
+    );
     if (perPhone.count >= MAX_UNVERIFIED_SENDS_PER_PHONE) {
-      return { result: { ok: false, reason: "rate-limited", retryAt: perPhone.start + SEND_WINDOW_MS } };
+      return {
+        result: {
+          ok: false,
+          reason: "rate-limited",
+          retryAt: perPhone.start + SEND_WINDOW_MS,
+        },
+      };
     }
     const dailyLimit = unverifiedDailyLimit(env);
     const globalDoc = await fs.get("smsGlobalLimits", day.id);
     if (Number(globalDoc?.data.sends ?? 0) >= dailyLimit) {
-      console.warn(`[sms-otp] app-wide daily limit of ${dailyLimit} unverified sends reached`);
-      return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
+      console.warn(
+        `[sms-otp] app-wide daily limit of ${dailyLimit} unverified sends reached`,
+      );
+      return {
+        result: { ok: false, reason: "rate-limited", retryAt: day.endsAt },
+      };
     }
     writes.push({
       set: ["smsPhoneLimits", phoneKey],
@@ -377,11 +532,17 @@ async function reserveSend(
       windowStart: own.start,
       sends: own.count + 1,
       verifiedDay: ownDaySends === undefined ? prev.verifiedDay : day.id,
-      verifiedDaySends: ownDaySends === undefined ? prev.verifiedDaySends : ownDaySends + 1,
+      verifiedDaySends:
+        ownDaySends === undefined ? prev.verifiedDaySends : ownDaySends + 1,
       // Carried over: these outlive any one code.
-      verifiedPhone: typeof prev.verifiedPhone === "string" ? prev.verifiedPhone : undefined,
-      attemptWindowStart: attemptWindowOpen ? Number(prev.attemptWindowStart) : undefined,
-      attemptsInWindow: attemptWindowOpen ? Number(prev.attemptsInWindow ?? 0) : undefined,
+      verifiedPhone:
+        typeof prev.verifiedPhone === "string" ? prev.verifiedPhone : undefined,
+      attemptWindowStart: attemptWindowOpen
+        ? Number(prev.attemptWindowStart)
+        : undefined,
+      attemptsInWindow: attemptWindowOpen
+        ? Number(prev.attemptsInWindow ?? 0)
+        : undefined,
     },
     precondition: pinnedTo(challenge),
   });
@@ -390,14 +551,17 @@ async function reserveSend(
   try {
     results = await fs.commit(writes);
   } catch (error) {
-    if (error instanceof WriteConflict) return { result: { ok: false, reason: "busy" } };
+    if (error instanceof WriteConflict)
+      return { result: { ok: false, reason: "busy" } };
     throw error;
   }
   const reserved: Reserved = {
     sentAt: now,
     codeHash: material.codeHash,
     challengeVersion: results.at(-1)?.updateTime ?? "",
-    before: Object.fromEntries([...CODE_FIELDS, ...HOURLY_FIELDS].map((field) => [field, prev[field]])),
+    before: Object.fromEntries(
+      [...CODE_FIELDS, ...HOURLY_FIELDS].map((field) => [field, prev[field]]),
+    ),
     counters: counted.map(({ counter }) => counter),
     phoneKey: verified ? undefined : phoneKey,
   };
@@ -405,18 +569,28 @@ async function reserveSend(
   // Sends that read a daily count at the same moment can all get this far;
   // the count after each one's increment says whether it fits. One that
   // doesn't is taken back completely, as if it had been refused up front.
-  const over = counted.find(({ at, cap }) => !(Number(results[at]?.transformResults[0]) <= cap));
+  const over = counted.find(
+    ({ at, cap }) => !(Number(results[at]?.transformResults[0]) <= cap),
+  );
   if (over) {
-    console.warn(`[sms-otp] daily limit reached on ${over.counter[0]}; send refused`);
+    console.warn(
+      `[sms-otp] daily limit reached on ${over.counter[0]}; send refused`,
+    );
     await undoReservation(fs, uid, reserved, { refundHourly: true });
-    return { result: { ok: false, reason: "rate-limited", retryAt: day.endsAt } };
+    return {
+      result: { ok: false, reason: "rate-limited", retryAt: day.endsAt },
+    };
   }
   return { reserved };
 }
 
 /* ---------------- verify ---------------- */
 
-export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unknown): Promise<VerifySmsCodeResult> {
+async function checkSmsCodeInner(
+  idToken: unknown,
+  rawCode: unknown,
+  env?: unknown,
+): Promise<VerifySmsCodeResult> {
   const fs = adminOrNull(env);
   if (!fs) return { ok: false, reason: "not-configured" };
 
@@ -434,10 +608,18 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
   }
 
   const attempts = Number(c.attempts ?? 0);
-  const attemptWindowOpen = now - Number(c.attemptWindowStart ?? 0) < ATTEMPT_WINDOW_MS;
-  const attemptWindowStart = attemptWindowOpen ? Number(c.attemptWindowStart) : now;
-  const attemptsInWindow = attemptWindowOpen ? Number(c.attemptsInWindow ?? 0) : 0;
-  if (attempts >= MAX_ATTEMPTS || attemptsInWindow >= MAX_ATTEMPTS_PER_ATTEMPT_WINDOW) {
+  const attemptWindowOpen =
+    now - Number(c.attemptWindowStart ?? 0) < ATTEMPT_WINDOW_MS;
+  const attemptWindowStart = attemptWindowOpen
+    ? Number(c.attemptWindowStart)
+    : now;
+  const attemptsInWindow = attemptWindowOpen
+    ? Number(c.attemptsInWindow ?? 0)
+    : 0;
+  if (
+    attempts >= MAX_ATTEMPTS ||
+    attemptsInWindow >= MAX_ATTEMPTS_PER_ATTEMPT_WINDOW
+  ) {
     return { ok: false, reason: "too-many-attempts" };
   }
 
@@ -448,8 +630,15 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
     counted = await fs.write(
       "smsChallenges",
       patient.uid,
-      { attempts: attempts + 1, attemptWindowStart, attemptsInWindow: attemptsInWindow + 1 },
-      { mask: ["attempts", "attemptWindowStart", "attemptsInWindow"], precondition: { updateTime: challenge.updateTime } },
+      {
+        attempts: attempts + 1,
+        attemptWindowStart,
+        attemptsInWindow: attemptsInWindow + 1,
+      },
+      {
+        mask: ["attempts", "attemptWindowStart", "attemptsInWindow"],
+        precondition: { updateTime: challenge.updateTime },
+      },
     );
   } catch (error) {
     if (error instanceof WriteConflict) return { ok: false, reason: "busy" };
@@ -457,7 +646,11 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
   }
 
   if (!sameHash(await hashCode(String(c.salt), code), String(c.codeHash))) {
-    const attemptsLeft = Math.min(MAX_ATTEMPTS - attempts, MAX_ATTEMPTS_PER_ATTEMPT_WINDOW - attemptsInWindow) - 1;
+    const attemptsLeft =
+      Math.min(
+        MAX_ATTEMPTS - attempts,
+        MAX_ATTEMPTS_PER_ATTEMPT_WINDOW - attemptsInWindow,
+      ) - 1;
     return attemptsLeft > 0
       ? { ok: false, reason: "invalid-code", attemptsLeft }
       : { ok: false, reason: "too-many-attempts" };
@@ -474,7 +667,13 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
       patient.uid,
       { verifiedPhone, attemptsInWindow },
       {
-        mask: ["codeHash", "salt", "expiresAt", "attemptsInWindow", ...(verifiedPhone ? ["verifiedPhone"] : [])],
+        mask: [
+          "codeHash",
+          "salt",
+          "expiresAt",
+          "attemptsInWindow",
+          ...(verifiedPhone ? ["verifiedPhone"] : []),
+        ],
         precondition: { updateTime: counted },
       },
     );
@@ -487,15 +686,28 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
   // can't be recorded the sign-in still succeeds; the account just stays on
   // the shared limits until it next verifies.
   if (verifiedPhone) {
-    await recordVerifiedAccount(fs, verifiedPhone.slice(1), patient.uid, now).catch((error) =>
-      console.error("[sms-otp] couldn't record the verified number:", forLog(error)),
+    await recordVerifiedAccount(
+      fs,
+      verifiedPhone.slice(1),
+      patient.uid,
+      now,
+    ).catch((error) =>
+      console.error(
+        "[sms-otp] couldn't record the verified number:",
+        forLog(error),
+      ),
     );
   }
 
   // The first verified code turns text-message sign-in on for this account.
   // Only the server writes this field; firestore.rules stop the owner changing it.
   if (!patient.enrolled) {
-    await fs.write("profiles", patient.uid, { twoFactorMethod: "sms" }, { mask: ["twoFactorMethod"], precondition: { exists: true } });
+    await fs.write(
+      "profiles",
+      patient.uid,
+      { twoFactorMethod: "sms" },
+      { mask: ["twoFactorMethod"], precondition: { exists: true } },
+    );
   }
   return { ok: true };
 }
@@ -507,16 +719,31 @@ export async function checkSmsCode(idToken: unknown, rawCode: unknown, env?: unk
  * verified longest ago. Only someone who receives texts on the number can get
  * onto the list, so nobody else can push a patient off it.
  */
-async function recordVerifiedAccount(fs: FirestoreAdmin, phoneKey: string, uid: string, now: number) {
+async function recordVerifiedAccount(
+  fs: FirestoreAdmin,
+  phoneKey: string,
+  uid: string,
+  now: number,
+) {
   for (let tries = 1; ; tries++) {
     const doc = await fs.get("smsVerifiedPhones", phoneKey);
-    let others = [...verifiedAccounts(doc, now)].filter(([other]) => other !== uid);
+    let others = [...verifiedAccounts(doc, now)].filter(
+      ([other]) => other !== uid,
+    );
     if (others.length >= MAX_VERIFIED_ACCOUNTS_PER_PHONE) {
       // An account that moved to another number gets nothing from this list.
-      const challenges = await fs.getMany("smsChallenges", others.map(([other]) => other));
-      others = others.filter(([other]) => challenges.get(other)?.data.verifiedPhone === `+${phoneKey}`);
+      const challenges = await fs.getMany(
+        "smsChallenges",
+        others.map(([other]) => other),
+      );
+      others = others.filter(
+        ([other]) =>
+          challenges.get(other)?.data.verifiedPhone === `+${phoneKey}`,
+      );
     }
-    others = others.sort((a, b) => b[1] - a[1]).slice(0, MAX_VERIFIED_ACCOUNTS_PER_PHONE - 1);
+    others = others
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_VERIFIED_ACCOUNTS_PER_PHONE - 1);
     try {
       await fs.write(
         "smsVerifiedPhones",
@@ -526,8 +753,76 @@ async function recordVerifiedAccount(fs: FirestoreAdmin, phoneKey: string, uid: 
       );
       return;
     } catch (error) {
-      if (!(error instanceof WriteConflict) || tries >= MAX_WRITE_TRIES) throw error;
+      if (!(error instanceof WriteConflict) || tries >= MAX_WRITE_TRIES)
+        throw error;
       await waitBeforeRetry(tries);
     }
   }
+}
+
+/* ---------------- what the page is told ---------------- */
+
+/** Why SMSPortal (or our own guard) refused a send, in terms the page can explain. */
+function sendFailureReason(reason: string | undefined): SmsCodeFailure {
+  if (reason === "not-on-sms-only-to") return "limited-to-test-numbers";
+  if (reason === "sms-provider:401" || reason === "sms-provider:403")
+    return "provider-rejected";
+  if (reason === "sms-not-enqueued") return "number-rejected";
+  return "send-failed";
+}
+
+/** Maps anything that escaped the work above onto a reason, never a stack trace. */
+function failureFor(error: unknown): { ok: false; reason: SmsCodeFailure } {
+  if (error instanceof FirestoreConfigError)
+    return { ok: false, reason: "not-configured" };
+  console.error("[sms-otp] unexpected failure:", forLog(error));
+  return { ok: false, reason: "server-error" };
+}
+
+export async function requestSmsCode(
+  idToken: unknown,
+  env?: unknown,
+): Promise<SendSmsCodeResult> {
+  try {
+    return await requestSmsCodeInner(idToken, env);
+  } catch (error) {
+    return failureFor(error);
+  }
+}
+
+export async function checkSmsCode(
+  idToken: unknown,
+  rawCode: unknown,
+  env?: unknown,
+): Promise<VerifySmsCodeResult> {
+  try {
+    return await checkSmsCodeInner(idToken, rawCode, env);
+  } catch (error) {
+    return failureFor(error);
+  }
+}
+
+/**
+ * Can text-message codes work on this server right now? Answered up front so
+ * the sign-in screen can say "SMS isn't configured" before anyone presses a
+ * button, rather than failing after. Which settings are missing goes to the
+ * server log (names only, never values); the browser just gets yes or no.
+ */
+export function smsAvailability(env?: unknown): {
+  available: boolean;
+  missing: string[];
+} {
+  const missing: string[] = [];
+  if (!isSmsTestMode(env)) {
+    if (!readEnv(env, "SMSPORTAL_CLIENT_ID"))
+      missing.push("SMSPORTAL_CLIENT_ID");
+    if (!readEnv(env, "SMSPORTAL_API_SECRET"))
+      missing.push("SMSPORTAL_API_SECRET");
+  }
+  if (!adminOrNull(env)) missing.push("FIREBASE_SERVICE_ACCOUNT");
+  if (missing.length > 0)
+    console.warn(
+      `[sms-otp] text-message codes unavailable; not set: ${missing.join(", ")}`,
+    );
+  return { available: missing.length === 0, missing };
 }

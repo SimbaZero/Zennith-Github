@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell } from "@/components/AppShell";
 import {
   usePatientFiles,
@@ -117,7 +118,7 @@ function NursePatients() {
           clinic's patients before the scoped query takes over. */}
       {nurseLoading ? (
         <div className="bg-white rounded-xl border p-8 text-center text-sm text-muted-foreground">
-          Loading your clinic's patients…
+          <Loading label="Loading your clinic's patients" />
         </div>
       ) : (
         <PatientFilesTable
@@ -171,28 +172,30 @@ export function PatientFilesTable({
 
   return (
     <div className="bg-white rounded-xl border overflow-hidden">
-      <div className="flex items-center justify-between p-5 border-b">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-b">
         <div>
           <h3 className="font-semibold">Patient Files</h3>
           <p
             className={`text-xs mt-0.5 ${pageError ? "text-destructive" : "text-muted-foreground"}`}
           >
-            {pageError
-              ? `Could not load patients: ${pageError}`
-              : pageLoading
-                ? "Loading patients…"
-                : idQuery
-                  ? "Looking up Patient ID"
-                  : isSearching
-                    ? `${page.length}${hasMore ? "+" : ""} match${page.length === 1 && !hasMore ? "" : "es"} — searching by name (start of first name or surname)`
-                    : `Showing ${page.length}${hasMore ? "+" : ""} patients — search by name or exact Patient ID`}
+            {pageError ? (
+              `Could not load patients: ${pageError}`
+            ) : pageLoading ? (
+              <Loading label="Loading patients" size={12} />
+            ) : idQuery ? (
+              "Looking up Patient ID"
+            ) : isSearching ? (
+              `${page.length}${hasMore ? "+" : ""} match${page.length === 1 && !hasMore ? "" : "es"} — searching by name (start of first name or surname)`
+            ) : (
+              `Showing ${page.length}${hasMore ? "+" : ""} patients — search by name or exact Patient ID`
+            )}
           </p>
         </div>
         <input
           placeholder="Search name or Pat-###…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-64"
+          className="border rounded-md px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] w-full sm:w-64"
         />
       </div>
       <div className="overflow-x-auto">
@@ -262,7 +265,11 @@ export function PatientFilesTable({
             disabled={loadingMore}
             className="border px-4 py-1.5 rounded-md text-sm hover:bg-secondary disabled:opacity-50"
           >
-            {loadingMore ? "Loading…" : "Load more"}
+            {loadingMore ? (
+              <Loading label="Loading" size={14} className="!text-inherit" />
+            ) : (
+              "Load more"
+            )}
           </button>
         </div>
       )}

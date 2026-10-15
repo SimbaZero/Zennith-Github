@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Loading } from "@/components/Loading";
 import {
   AlertCircle,
   Bell,
@@ -11,19 +12,30 @@ import {
 import { toast } from "sonner";
 import {
   logSelfReportedDose,
-  notifyReminderDue,
   saveReminderTimes,
-  todayIsoDate,
   undoSelfReportedDose,
   useTodayDoseStatus,
+  UndoWindowClosedError,
   type DoseSlotWrite,
 } from "@/lib/patient-service";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   MAX_REMINDER_TIMES,
   cleanReminderTimes,
   doseSlots,
   formatTime12h,
   nextReminder,
+  takenAtKey,
+  undoTimeLeftMs,
 } from "@/lib/reminders";
 
 // ---------------------------------------------------------------------------
@@ -35,7 +47,7 @@ import {
 // The reminder itself only appears while this page is open in a browser tab
 // (see reminders.ts for why a true push notification isn't possible yet).
 // "I took it" is the patient's own claim, tagged as such wherever it's used —
-// see fetchAdherenceHistory and the fast-lane evidence panel.
+// see fetchAdherenceHistory and the stable-patient evidence panel.
 //
 // One rule runs through this file: NOTHING acts on "the dose hasn't been
 // taken" until the database has actually said so (`dose.loaded`). Before that
@@ -47,27 +59,6 @@ const PRIMARY_BUTTON =
   "inline-flex items-center justify-center gap-1.5 rounded-md bg-[oklch(0.18_0.06_260)] px-4 py-2 text-sm font-medium text-white hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-60";
 const SECONDARY_BUTTON =
   "inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-secondary disabled:opacity-60";
-
-/** Remembers, in this browser, that today's reminder for this time already
- *  produced a bell notification — so coming back to the page doesn't send it
- *  (and mark it unread again) every time. */
-function notifiedKey(userId: number, time: string): string {
-  return `zennith:reminder-notified:${userId}:${todayIsoDate()}:${time}`;
-}
-function alreadyNotified(userId: number, time: string): boolean {
-  try {
-    return window.localStorage.getItem(notifiedKey(userId, time)) !== null;
-  } catch {
-    return false; // storage unavailable — the write itself is idempotent
-  }
-}
-function rememberNotified(userId: number, time: string): void {
-  try {
-    window.localStorage.setItem(notifiedKey(userId, time), "1");
-  } catch {
-    /* nothing to do */
-  }
-}
 
 export function MedicationReminders({
   patientId,
@@ -111,28 +102,15 @@ export function MedicationReminders({
   const takenCount = slots.filter((s) => s.state === "taken").length;
   const next = useMemo(() => nextReminder(times, now), [times, now]);
 
-  // Times that are due right now AND confirmed not-taken. Only these ever
-  // produce a bell notification.
-  const dueKey = known
-    ? slots
-        .filter((s) => s.state === "due")
-        .map((s) => s.time)
-        .join(",")
-    : "";
-  const sending = useRef<Set<string>>(new Set());
+  // The notification + toast for a due dose is NOT sent from here any more: this
+  // card only exists on the dashboard, so reminders went quiet on every other
+  // page. useMedicationReminderNotifier (run from the app shell) does that.
   useEffect(() => {
-    if (!dueKey || userId == null) return;
-    for (const time of dueKey.split(",")) {
-      if (alreadyNotified(userId, time) || sending.current.has(time)) continue;
-      sending.current.add(time);
-      notifyReminderDue(userId, med, time)
-        .then(() => rememberNotified(userId, time))
-        .catch((err) => {
-          sending.current.delete(time); // let a later visit try again
-          console.error("Reminder notification failed:", err);
-        });
-    }
-  }, [dueKey, userId, med]);
+    if (dose.loaded && dose.failed && times.length > 0)
+      console.warn(
+        "Medication reminders paused: today's dose log couldn't be read (see the 'Dose status listener failed' error above - usually a firestore.rules refusal).",
+      );
+  }, [dose.loaded, dose.failed, times.length]);
 
   const persist = async (nextTimes: string[]) => {
     const cleaned = cleanReminderTimes(nextTimes);
@@ -189,34 +167,103 @@ export function MedicationReminders({
     }
   };
 
-  const markSlot = (time: string) =>
-    run(
+  // Marking a dose is a two-step action: pressing "I took it" only asks. The
+  // time is recorded when they say yes, not when they pressed the first button.
+  const [confirming, setConfirming] = useState<{ time: string | null } | null>(
+    null,
+  );
+  const askSlot = (time: string) => setConfirming({ time });
+  const askDay = () => setConfirming({ time: null });
+
+  const confirmTaken = () => {
+    const target = confirming;
+    setConfirming(null);
+    if (!target) return;
+    if (target.time === null)
+      return run(
+        "day",
+        () => logSelfReportedDose(patientId, med),
+        "Marked as taken for today",
+        "Couldn't save that. Please try again.",
+      );
+    const time = target.time;
+    return run(
       time,
       () => logSelfReportedDose(patientId, med, slotWrite(time)),
       `Marked your ${formatTime12h(time)} dose as taken`,
       "Couldn't save that. Please try again.",
     );
+  };
+
+  // Undo is only offered for a few minutes after confirming; the service
+  // refuses it after that too, so a stale tab can't get around the button.
+  const undo = async (key: string, action: () => Promise<void>, ok: string) => {
+    setBusy(key);
+    try {
+      await action();
+      toast.success(ok);
+    } catch (err) {
+      if (err instanceof UndoWindowClosedError) {
+        toast.error(
+          "Too late to undo — it was confirmed more than a few minutes ago.",
+        );
+      } else {
+        console.error(err);
+        toast.error("Couldn't undo that. Please try again.");
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
   const undoSlot = (time: string) =>
-    run(
+    undo(
       time,
-      () => undoSelfReportedDose(patientId, med, slotWrite(time)),
+      () =>
+        undoSelfReportedDose(
+          patientId,
+          med,
+          slotWrite(time),
+          dose.takenAtByTime[takenAtKey(time)],
+        ),
       `Marked your ${formatTime12h(time)} dose as not taken`,
-      "Couldn't undo that. Please try again.",
-    );
-  const markDay = () =>
-    run(
-      "day",
-      () => logSelfReportedDose(patientId, med),
-      "Marked as taken for today",
-      "Couldn't save that. Please try again.",
     );
   const undoDay = () =>
-    run(
+    undo(
       "day",
-      () => undoSelfReportedDose(patientId, med),
+      () => undoSelfReportedDose(patientId, med, undefined, dose.takenAt),
       "Marked as not taken",
-      "Couldn't undo that. Please try again.",
     );
+
+  // While any undo window is open, tick every second so the countdown is
+  // honest and the button disappears the moment the window closes.
+  const anyUndoOpen =
+    dose.source === "patient" &&
+    (undoTimeLeftMs(dose.takenAt, now) > 0 ||
+      Object.values(dose.takenAtByTime).some(
+        (t) => undoTimeLeftMs(t, now) > 0,
+      ));
+  const [undoNow, setUndoNow] = useState(() => new Date());
+  useEffect(() => {
+    if (!anyUndoOpen) return;
+    setUndoNow(new Date());
+    const id = setInterval(() => setUndoNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, [anyUndoOpen]);
+  const undoLeft = (takenAt: string | null | undefined) =>
+    undoTimeLeftMs(takenAt, undoNow);
+  const undoLabel = (ms: number) =>
+    `Undo (${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")})`;
+  const clockTime = (iso: string | null | undefined) => {
+    if (!iso) return null;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? null
+      : d.toLocaleTimeString("en-ZA", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
+  };
 
   const canUndo = dose.source === "patient";
 
@@ -264,24 +311,25 @@ export function MedicationReminders({
                   : known && dose.taken
                     ? dose.source === "nurse"
                       ? "Confirmed by your nurse."
-                      : "You marked this yourself."
+                      : `You marked this yourself${clockTime(dose.takenAt) ? ` at ${clockTime(dose.takenAt)}` : ""}.`
                     : "Add a reminder time below to be reminded."}
               </p>
             </div>
           </div>
           {known && dose.taken ? (
-            canUndo && (
+            canUndo &&
+            undoLeft(dose.takenAt) > 0 && (
               <button
                 onClick={undoDay}
                 disabled={busy !== null}
                 className="inline-flex items-center gap-1 text-xs hover:underline disabled:opacity-60"
               >
-                <Undo2 size={13} /> Undo
+                <Undo2 size={13} /> {undoLabel(undoLeft(dose.takenAt))}
               </button>
             )
           ) : (
             <button
-              onClick={markDay}
+              onClick={askDay}
               disabled={busy !== null}
               className={PRIMARY_BUTTON}
             >
@@ -298,23 +346,27 @@ export function MedicationReminders({
             <p className="text-sm font-semibold">Today's doses</p>
             <div className="flex items-center gap-3">
               <p className="text-xs text-muted-foreground">
-                {!dose.loaded
-                  ? "Checking…"
-                  : dayCovered
-                    ? dose.source === "nurse"
-                      ? "Confirmed by your nurse"
-                      : "Marked taken for the whole day"
-                    : known
-                      ? `${takenCount} of ${slots.length} taken`
-                      : ""}
+                {!dose.loaded ? (
+                  <Loading label="Checking" size={12} />
+                ) : dayCovered ? (
+                  dose.source === "nurse" ? (
+                    "Confirmed by your nurse"
+                  ) : (
+                    "Marked taken for the whole day"
+                  )
+                ) : known ? (
+                  `${takenCount} of ${slots.length} taken`
+                ) : (
+                  ""
+                )}
               </p>
-              {dayCovered && canUndo && (
+              {dayCovered && canUndo && undoLeft(dose.takenAt) > 0 && (
                 <button
                   onClick={undoDay}
                   disabled={busy !== null}
                   className="inline-flex items-center gap-1 text-xs hover:underline disabled:opacity-60"
                 >
-                  <Undo2 size={13} /> Undo
+                  <Undo2 size={13} /> {undoLabel(undoLeft(dose.takenAt))}
                 </button>
               )}
             </div>
@@ -366,7 +418,10 @@ export function MedicationReminders({
                               : "text-muted-foreground"
                         }`}
                       >
-                        {state === "taken" && "Taken"}
+                        {state === "taken" &&
+                          (clockTime(dose.takenAtByTime[takenAtKey(s.time)])
+                            ? `Taken at ${clockTime(dose.takenAtByTime[takenAtKey(s.time)])}`
+                            : "Taken")}
                         {state === "due" &&
                           "Due now — time for your medication"}
                         {state === "missed" && "Not marked yet"}
@@ -378,7 +433,7 @@ export function MedicationReminders({
                   <div className="flex items-center gap-2">
                     {state === "due" && (
                       <button
-                        onClick={() => markSlot(s.time)}
+                        onClick={() => askSlot(s.time)}
                         disabled={busy !== null}
                         className={PRIMARY_BUTTON}
                       >
@@ -387,22 +442,28 @@ export function MedicationReminders({
                     )}
                     {state === "missed" && (
                       <button
-                        onClick={() => markSlot(s.time)}
+                        onClick={() => askSlot(s.time)}
                         disabled={busy !== null}
                         className={SECONDARY_BUTTON}
                       >
                         {busy === s.time ? "Saving…" : "I took it"}
                       </button>
                     )}
-                    {state === "taken" && !dayCovered && canUndo && (
-                      <button
-                        onClick={() => undoSlot(s.time)}
-                        disabled={busy !== null}
-                        className="inline-flex items-center gap-1 text-xs hover:underline disabled:opacity-60"
-                      >
-                        <Undo2 size={13} /> Undo
-                      </button>
-                    )}
+                    {state === "taken" &&
+                      !dayCovered &&
+                      canUndo &&
+                      undoLeft(dose.takenAtByTime[takenAtKey(s.time)]) > 0 && (
+                        <button
+                          onClick={() => undoSlot(s.time)}
+                          disabled={busy !== null}
+                          className="inline-flex items-center gap-1 text-xs hover:underline disabled:opacity-60"
+                        >
+                          <Undo2 size={13} />{" "}
+                          {undoLabel(
+                            undoLeft(dose.takenAtByTime[takenAtKey(s.time)]),
+                          )}
+                        </button>
+                      )}
                     <button
                       onClick={() => removeTime(s.time)}
                       aria-label={`Remove ${formatTime12h(s.time)} reminder`}
@@ -426,6 +487,25 @@ export function MedicationReminders({
               </p>
             )}
         </div>
+      )}
+
+      {/* Reminders go quiet if today's dose log can't be read, or if there is no
+          account to send the alert to. Both used to fail silently, which looks
+          exactly like "reminders stopped working". */}
+      {dose.loaded && dose.failed && times.length > 0 && (
+        <p
+          role="alert"
+          className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          We couldn't check today's doses, so reminders are paused. Reload the
+          page; if it keeps happening, tell the clinic.
+        </p>
+      )}
+      {userId == null && times.length > 0 && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          Reminders will show on this page, but they can't be added to your
+          alerts because your account isn't fully linked yet.
+        </p>
       )}
 
       {/* ---- add a reminder time ---- */}
@@ -457,6 +537,36 @@ export function MedicationReminders({
           </button>
         </div>
       )}
+
+      <AlertDialog
+        open={confirming !== null}
+        onOpenChange={(o) => {
+          if (!o) setConfirming(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Are you sure you took your medicine?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This records that you took your {med.trim()}
+              {confirming?.time
+                ? ` (${formatTime12h(confirming.time)} dose)`
+                : ""}{" "}
+              just now, at {clockTime(new Date().toISOString())}. Your clinic
+              can see it. You can undo it for the next 5 minutes; after that it
+              stays on your record.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not yet</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmTaken}>
+              Yes, I took it
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <p className="mt-3 text-[11px] text-muted-foreground">
         This reminder only shows while Zennith is open in your browser. It can't

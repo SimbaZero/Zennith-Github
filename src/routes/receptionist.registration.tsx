@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading, Spinner } from "@/components/Loading";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import {
@@ -16,6 +17,14 @@ import {
 } from "@/lib/sa-id";
 import { useState } from "react";
 import { toast } from "sonner";
+import {
+  PatientRegisteredDialog,
+  type RegisteredPatient,
+} from "@/components/PatientRegisteredDialog";
+import { checkContactInUse, contactCheckVerdict } from "@/lib/contact-check";
+import { looksLikeEmail } from "@/lib/login-identifier";
+import { preferMobileNumber } from "@/lib/patient-invite";
+import { useContactCheck } from "@/lib/use-contact-check";
 
 export const Route = createFileRoute("/receptionist/registration")({
   component: Registration,
@@ -38,6 +47,7 @@ const initial = {
   town: "",
   telHome: "",
   telAlt: "",
+  email: "",
   residential: "",
   mailing: "",
   headman: "",
@@ -70,6 +80,12 @@ const initial = {
   consent: false,
 };
 
+const EMAIL_IN_USE = "This email is already registered to another patient.";
+const PHONE_IN_USE =
+  "This number is already registered to another patient. That's allowed (a parent and child can share one) — just check it's not the same person.";
+const BOTH_IN_USE_MESSAGE =
+  "This e-mail address and phone number are both already registered to existing patients. This looks like someone who is already on the system — search Patient Profiles instead of registering them again, or change one of the two.";
+
 function Registration() {
   const queryClient = useQueryClient();
   const [f, setF] = useState(initial);
@@ -79,6 +95,17 @@ function Registration() {
     queryKey: ["next-patient-id"],
     queryFn: peekNextPatientId,
   });
+  // Set after a successful registration: the confirmation dialog that offers
+  // the patient a login (a set-password link by text and/or e-mail).
+  const [registered, setRegistered] = useState<RegisteredPatient | null>(null);
+
+  // Live check of the contact details against patients already registered.
+  const phonesTyped = [f.telHome.trim(), f.telAlt.trim()].filter(Boolean);
+  const contact = useContactCheck(f.email, phonesTyped);
+  const found = contact.status === "done" ? contact.result : null;
+  const verdict = found
+    ? contactCheckVerdict({ email: f.email, phones: phonesTyped }, found)
+    : "clear";
   const set =
     <K extends keyof typeof initial>(k: K) =>
     (v: (typeof initial)[K]) =>
@@ -153,7 +180,10 @@ function Registration() {
               ? f.idNumber.replace(/\s+/g, "")
               : f.idNumber.replace(/\s+/g, "").toUpperCase(),
         idType: f.idType,
-        contactNum: f.telHome || f.telAlt,
+        // A text can only reach a mobile, so a mobile given as the alternate
+        // number is kept over a landline typed first.
+        contactNum: preferMobileNumber(f.telHome, f.telAlt),
+        email: f.email.trim(),
         city: f.district,
         suburb: f.town,
         emergencyContactName: f.emName,
@@ -176,9 +206,14 @@ function Registration() {
         actorId: receptionist?.receptionistId,
       }),
     onSuccess: (patientId) => {
-      toast.success(
-        `${f.patientName} registered successfully — Patient ID ${patientId}`,
-      );
+      // The dialog always appears: it confirms the registration, and offers a
+      // login link when there is a number or address to send one to.
+      setRegistered({
+        patientId,
+        name: f.patientName,
+        phone: preferMobileNumber(f.telHome, f.telAlt),
+        email: f.email.trim(),
+      });
       setF(initial);
       queryClient.invalidateQueries({ queryKey: ["next-patient-id"] });
     },
@@ -193,10 +228,14 @@ function Registration() {
       ),
   });
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!f.patientName) {
       toast.error("Patient name is required");
+      return;
+    }
+    if (f.email.trim() && !looksLikeEmail(f.email)) {
+      toast.error("That e-mail address doesn't look right");
       return;
     }
     if (f.idType !== "none") {
@@ -210,6 +249,27 @@ function Registration() {
       toast.error("Patient/Guardian consent is required");
       return;
     }
+    // The live check may not have finished (or may be stale); look again now.
+    if (verdict === "block") {
+      toast.error(BOTH_IN_USE_MESSAGE);
+      return;
+    }
+    try {
+      const fresh = await checkContactInUse({
+        email: f.email,
+        phones: phonesTyped,
+      });
+      if (
+        contactCheckVerdict({ email: f.email, phones: phonesTyped }, fresh) ===
+        "block"
+      ) {
+        toast.error(BOTH_IN_USE_MESSAGE);
+        return;
+      }
+    } catch (error) {
+      // Not being able to check must not stop someone being registered.
+      console.warn("Contact check unavailable at submit:", error);
+    }
     register.mutate();
   };
 
@@ -220,6 +280,20 @@ function Registration() {
       clinicNameOverride={receptionist?.clinicName}
     >
       <form onSubmit={submit} className="space-y-6">
+        {registered && (
+          <PatientRegisteredDialog
+            key={registered.patientId}
+            patient={registered}
+            onClose={(outcome) => {
+              toast.success(
+                outcome === "sent"
+                  ? `${registered.name} registered — login link sent`
+                  : `${registered.name} registered — Patient ID ${registered.patientId}. No login link sent.`,
+              );
+              setRegistered(null);
+            }}
+          />
+        )}
         <div className="rounded-xl bg-[oklch(0.18_0.06_260)] text-white p-6 flex items-start justify-between">
           <div>
             <p className="text-[10px] tracking-[0.2em] text-white/60">
@@ -253,7 +327,8 @@ function Registration() {
           <Grid cols={2}>
             <Field
               label="PATIENT NO"
-              value={nextPatientId ?? "Loading…"}
+              value={nextPatientId ?? ""}
+              loading={nextPatientId == null}
               onChange={() => {}}
               disabled
             />
@@ -291,12 +366,30 @@ function Registration() {
               value={f.telHome}
               onChange={set("telHome")}
               placeholder="011 234 5678"
+              warning={
+                found?.phones[f.telHome.trim()]
+                  ? PHONE_IN_USE
+                  : undefined
+              }
             />
             <Field
               label="TEL (ALTERNATE)"
               value={f.telAlt}
               onChange={set("telAlt")}
               placeholder="082 123 4567"
+              warning={
+                found?.phones[f.telAlt.trim()] ? PHONE_IN_USE : undefined
+              }
+            />
+          </Grid>
+          <Grid cols={2}>
+            <Field
+              label="EMAIL (OPTIONAL — FOR THEIR LOGIN)"
+              type="email"
+              value={f.email}
+              onChange={set("email")}
+              placeholder="name@example.com"
+              warning={found?.email ? EMAIL_IN_USE : undefined}
             />
           </Grid>
           <Grid cols={2}>
@@ -563,10 +656,29 @@ function Registration() {
           </label>
         </div>
 
+        {verdict === "block" && (
+          <p
+            role="alert"
+            data-testid="duplicate-block"
+            className="rounded-md border border-[oklch(0.8_0.12_25)] bg-[oklch(0.97_0.03_25)] px-4 py-3 text-sm text-[oklch(0.35_0.15_25)]"
+          >
+            {BOTH_IN_USE_MESSAGE}
+          </p>
+        )}
+        {contact.status === "unavailable" && (
+          <p className="text-xs text-muted-foreground">
+            Couldn't check whether these contact details are already
+            registered.
+          </p>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-3 sticky bottom-0 bg-[oklch(0.97_0.01_240)] py-3 border-t">
           <p className="text-xs text-muted-foreground">
-            Clerk: <strong>{receptionist?.name ?? "Loading…"}</strong>. All
-            fields above will be saved to the patient master record.
+            Clerk:{" "}
+            <strong>
+              {receptionist?.name ?? <Loading label="Loading" size={12} />}
+            </strong>
+            . All fields above will be saved to the patient master record.
           </p>
           <div className="flex gap-2">
             <button
@@ -578,7 +690,7 @@ function Registration() {
             </button>
             <button
               type="submit"
-              disabled={register.isPending}
+              disabled={register.isPending || verdict === "block"}
               className="bg-[oklch(0.55_0.18_245)] text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-[oklch(0.5_0.18_245)] disabled:opacity-60"
             >
               {register.isPending ? "Registering…" : "Register Patient"}
@@ -631,6 +743,8 @@ function Field({
   type = "text",
   required,
   disabled,
+  loading,
+  warning,
 }: {
   label: string;
   value: string;
@@ -639,21 +753,43 @@ function Field({
   type?: string;
   required?: boolean;
   disabled?: boolean;
+  /** Waiting for the value to arrive: shows a spinner in the box. */
+  loading?: boolean;
+  /** Something worth knowing about what was typed; doesn't stop anything. */
+  warning?: string;
 }) {
   return (
     <div>
       <label className="text-[11px] tracking-wider text-muted-foreground block mb-1.5">
         {label}
       </label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        required={required}
-        disabled={disabled}
-        className={`w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] ${disabled ? "bg-secondary text-muted-foreground" : ""}`}
-      />
+      <div className="relative">
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          required={required}
+          disabled={disabled}
+          aria-busy={loading || undefined}
+          className={`w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] ${disabled ? "bg-secondary text-muted-foreground" : ""}`}
+        />
+        {loading && (
+          <Spinner
+            label="Loading"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+          />
+        )}
+      </div>
+      {warning && (
+        <p
+          role="status"
+          className="mt-1 text-[11px] leading-snug text-amber-800"
+          data-testid="field-warning"
+        >
+          {warning}
+        </p>
+      )}
     </div>
   );
 }

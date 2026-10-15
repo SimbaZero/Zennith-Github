@@ -1,0 +1,289 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- helpers -------------------------------------------------------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+    }
+
+    function role() {
+      return signedIn() ? profile().role : "";
+    }
+
+    function isStaff() {
+      return role() in ["doctor", "nurse", "pharmacist", "receptionist", "admin"];
+    }
+
+    function isSuperAdmin() {
+      return role() == "super_admin";
+    }
+
+    function myPatientId() {
+      return profile().get("patientId", "");
+    }
+
+
+    // A real sign-in, not the anonymous session the app opens to read the
+    // public clinic list.
+    function isRealUser() {
+      return signedIn()
+        && request.auth.token.firebase.sign_in_provider != "anonymous";
+    }
+
+    // The signed-in patient's own patient document.
+    function myPatient() {
+      return get(/databases/$(database)/documents/patients/$(myPatientId())).data;
+    }
+
+    // Does this medicalRecords document id belong to the signed-in patient?
+    // The record number is a number on the patient document; the id is text.
+    function ownsRecordId(recordId) {
+      let n = myPatient().get("medicalRecordNo", null);
+      return role() == "patient" && myPatientId() != ""
+        && ((n is int && string(n) == recordId)
+            || (n is string && n == recordId));
+    }
+
+    // ---- public --------------------------------------------------------
+    match /clinics/{clinicId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /queue/{entryId} {
+      allow read: if true;
+      allow write: if isStaff();
+      allow update: if role() == "patient"
+                    && resource.data.patientId == myPatientId()
+                    && request.resource.data.diff(resource.data)
+                       .affectedKeys().hasOnly(["patientAcknowledgedAt"]);
+    }
+
+    match /counters/{id} {
+      allow read, write: if true;
+    }
+
+    // ---- patient data --------------------------------------------------
+    match /patients/{patientId} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && patientId == myPatientId());
+      allow create: if isStaff() || isSuperAdmin()
+                    || (isRealUser()
+                        && patientId.matches("Pat-[0-9]+")
+                        && request.resource.data.patientId == patientId
+                        && request.resource.data.get("ownerUid", "") == request.auth.uid);
+      allow update: if isStaff() || isSuperAdmin()
+                    || (role() == "patient" && patientId == myPatientId());
+      allow delete: if isStaff() || isSuperAdmin();
+    }
+
+    match /patients/{patientId}/adherenceLogs/{logId} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && patientId == myPatientId());
+      allow write: if isStaff() || isSuperAdmin();
+      allow create: if role() == "patient" && patientId == myPatientId()
+                    && request.resource.data.source == "patient";
+      allow update: if role() == "patient" && patientId == myPatientId()
+                    && request.resource.data.source == "patient"
+                    && resource.data.get("source", "nurse") == "patient";
+    }
+
+    match /patients/{patientId}/{sub=**} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && patientId == myPatientId());
+      allow write: if isStaff() || isSuperAdmin();
+    }
+
+    match /medicalRecords/{recordId} {
+      allow read: if isStaff() || isSuperAdmin() || ownsRecordId(recordId);
+      // Self-signup checks whether a record number is free before using it.
+      allow get: if isRealUser() && resource == null;
+      allow create: if isStaff() || isSuperAdmin()
+                    || (isRealUser()
+                        && request.resource.data.medicalRecordNo is int
+                        && string(request.resource.data.medicalRecordNo) == recordId);
+      allow update, delete: if isStaff() || isSuperAdmin();
+    }
+
+    match /medicalRecordsHistory/{id} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && myPatientId() != ""
+                      && resource.data.medicalRecordNo == myPatient().medicalRecordNo);
+      allow create, update, delete: if isStaff() || isSuperAdmin();
+    }
+
+    match /appointments/{id} {
+      function patientStatusOnly() {
+        return role() == "patient" && myPatientId() != ""
+          && resource.data.get("patientId", "") == myPatientId()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+          && resource.data.get("status", "Scheduled") in ["Scheduled", "Confirmed", "Cancelled"]
+          && request.resource.data.status in ["Scheduled", "Confirmed", "Cancelled"];
+      }
+      allow read: if signedIn();
+      allow create, delete: if isStaff() || isSuperAdmin();
+      allow update: if isStaff() || isSuperAdmin() || patientStatusOnly();
+    }
+
+    match /rescheduleRequests/{id} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && resource.data.patientUid == request.auth.uid);
+      allow create: if role() == "patient"
+                    && request.resource.data.patientUid == request.auth.uid
+                    && request.resource.data.patientId == myPatientId()
+                    && request.resource.data.status == "pending";
+      allow update: if isStaff() || isSuperAdmin()
+                    || (role() == "patient" && resource.data.patientUid == request.auth.uid
+                        && resource.data.status == "pending"
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+                        && request.resource.data.status == "withdrawn");
+      allow delete: if false;
+    }
+
+    match /notifications/{id} {
+      allow read, write: if signedIn();
+    }
+
+    match /patientDispensing/{id} {
+      allow read: if signedIn();
+      allow write: if isStaff() || isSuperAdmin();
+    }
+
+    // ---- staff-only ----------------------------------------------------
+    match /inventory/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /stockDeliveries/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /distributions/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /handoverEntries/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /shifts/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /queueAudit/{id} {
+      allow read, write: if isStaff() || isSuperAdmin();
+    }
+
+    match /reorders/{id} {
+      function receiptFields() {
+        return ["receivedQty","receivedBy","receivedByUid","receivedByRole",
+                "receivedAt","hasDiscrepancy","discrepancyNote"];
+      }
+      allow read, create, delete: if isStaff() || isSuperAdmin();
+      allow update: if (isStaff() || isSuperAdmin())
+        && (role() in ["pharmacist","admin"]
+            || (request.resource.data.status != "received"
+                && !request.resource.data.diff(resource.data)
+                     .affectedKeys().hasAny(receiptFields())));
+    }
+        match /clinicAssignmentRequests/{id} {
+      allow read:   if role() == "admin" || isSuperAdmin();
+      allow create: if (role() == "admin" || isSuperAdmin())
+                    && request.resource.data.status == "pending";
+      allow update: if (role() == "admin" || isSuperAdmin())
+                    && resource.data.status == "pending"
+                    && request.resource.data.status in ["approved", "denied"];
+      allow delete: if false;
+    }
+    match /systemAudit/{id} {
+      allow read: if role() == "admin" || isSuperAdmin();
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+
+    // ---- identity ------------------------------------------------------
+    match /users/{id} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isStaff() || isSuperAdmin();
+    }
+
+    match /profiles/{uid} {
+      // Staff and super admins, or the profile's own owner. Not any signed-in
+      // session, and not the anonymous one.
+      allow read: if isStaff() || isSuperAdmin()
+                  || (isRealUser() && request.auth.uid == uid);
+      // Staff accounts are made by an admin or super admin. A patient makes
+      // their OWN profile when signing up, and only for a patient record that
+      // same sign-in created (ownerUid), so a profile can't be pointed at
+      // someone else's patientId. The profile is written after that record.
+      allow create: if isSuperAdmin() || role() == "admin"
+                    || (isRealUser()
+                        && request.auth.uid == uid
+                        && request.resource.data.role == "patient"
+                        && request.resource.data.keys().hasOnly(
+                             ["username", "role", "fullName", "email",
+                              "legacyUserId", "patientId", "builtin", "createdAt"])
+                        && request.resource.data.get("patientId", "") is string
+                        && request.resource.data.get("patientId", "").matches("Pat-[0-9]+")
+                        && get(/databases/$(database)/documents/patients/$(request.resource.data.patientId))
+                             .data.get("ownerUid", "") == uid);
+      allow update: if isSuperAdmin() || role() == "admin"
+                    || (request.auth.uid == uid
+                        && request.resource.data.role == resource.data.role
+                        && request.resource.data.get("clinicId", -1)
+                           == resource.data.get("clinicId", -1)
+                        && request.resource.data.get("patientId", "")
+                           == resource.data.get("patientId", ""));
+      allow delete: if isSuperAdmin() || role() == "admin";
+    }
+
+    // Text-message sign-in codes (hashed) and send counters. Only the server
+    // touches these, as the service account; no browser may read a code hash
+    // or reset a counter.
+    match /smsChallenges/{uid} {
+      allow read, write: if false;
+    }
+    match /smsPhoneLimits/{phone} {
+      allow read, write: if false;
+    }
+    match /smsVerifiedPhones/{phone} {
+      allow read, write: if false;
+    }
+    match /smsVerifiedPhoneDays/{id} {
+      allow read, write: if false;
+    }
+    match /smsGlobalLimits/{id} {
+      allow read, write: if false;
+    }
+    match /smsBookingLimits/{id} {
+      allow read, write: if false;
+    }
+    match /doctors/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+    match /nurses/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+    match /pharmacists/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+    match /receptionists/{id} {
+      allow read: if signedIn();
+      allow write: if role() == "admin" || isSuperAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

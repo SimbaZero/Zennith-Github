@@ -1,29 +1,64 @@
 ﻿import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { DateField } from "@/components/DateField";
+import { Loading } from "@/components/Loading";
+import { useEffect, useMemo, useState } from "react";
 import {
   AppShell,
   StatusBadge,
   type AppointmentStatus,
 } from "@/components/AppShell";
-import { useCurrentDoctor, useDoctorAppointments } from "@/lib/doctor-service";
+import {
+  useCurrentDoctor,
+  useDoctorAppointments,
+  useDoctorScopeClinic,
+} from "@/lib/doctor-service";
+import { useRealActiveClinic } from "@/lib/active-clinic";
 import { setAppointmentStatus, createAppointment } from "@/lib/clinic-data";
+import {
+  OUTCOME_STATUSES,
+  bookingTimeProblem,
+  isOutcomeLocked,
+  isPastDay,
+} from "@/lib/appointment-time";
+import { useClinicianReschedules } from "@/lib/reschedule";
+import { RescheduleRequests } from "@/components/RescheduleRequests";
+import { PatientPicker } from "@/components/PatientPicker";
+import { UpcomingAppointmentAlert } from "@/components/UpcomingAppointmentAlert";
 import {
   Plus,
   Check,
   Clock,
   X,
+  Lock,
   AlertCircle,
   ChevronLeft,
   ChevronRight,
   CalendarDays,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export const Route = createFileRoute("/doctor/appointments")({
   validateSearch: (s: Record<string, unknown>): { date?: string } =>
     typeof s.date === "string" ? { date: s.date } : {},
   component: DoctorAppointments,
 });
+
+// The calendar hands back a Date at LOCAL midnight; read its local parts. (toIso
+// below uses UTC, which would move the chosen day back one in South Africa.)
+function toIsoDay(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function fromIsoDay(iso: string): Date | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
+}
 
 function toIso(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -50,10 +85,27 @@ const DAY_LABEL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function DoctorAppointments() {
   const { date: searchDate } = Route.useSearch();
   const { doctor } = useCurrentDoctor();
-  const { appointments, loading } = useDoctorAppointments(doctor?.doctorId);
+  // A doctor at several clinics sees the appointments of the clinic chosen in
+  // the header switcher; at one clinic, everything addressed to them.
+  const scopeClinic = useDoctorScopeClinic(doctor);
+  const { activeClinicId } = useRealActiveClinic(doctor?.clinicIds, "doctor");
+  const { appointments, loading } = useDoctorAppointments(
+    doctor?.doctorId,
+    scopeClinic,
+  );
+  const reschedules = useClinicianReschedules(doctor?.doctorId);
+  const patientNames = useMemo(
+    () =>
+      Object.fromEntries(appointments.map((a) => [a.patientId, a.patientName])),
+    [appointments],
+  );
 
   const today = toIso(new Date());
   const [selected, setSelected] = useState(searchDate ?? today);
+  // Already on this page when a notification links to another day.
+  useEffect(() => {
+    if (searchDate) setSelected(searchDate);
+  }, [searchDate]);
   const weekDates = useMemo(() => weekDatesFor(selected), [selected]);
 
   const apptsByDate = useMemo(() => {
@@ -73,6 +125,20 @@ function DoctorAppointments() {
     setSelected(toIso(d));
   };
 
+  // Complete / No-show / Incomplete stay greyed out until the appointment's time
+  // has arrived, and unlock by themselves (no reload) once it does.
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const outcomeLocked = (a: { date: string; time: string }, status: string) =>
+    OUTCOME_STATUSES.includes(status) && isOutcomeLocked(a.date, a.time, clock);
+
+  // Once an appointment's day has passed it is closed: no status changes at all.
+  const dayClosed = (a: { date: string }) => isPastDay(a.date, clock);
+
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [staged, setStaged] = useState<Record<string, AppointmentStatus>>({});
 
@@ -92,6 +158,15 @@ function DoctorAppointments() {
   const confirmStatus = async (docId: string) => {
     const status = staged[docId];
     if (!status) return;
+    const appt = appointments.find((x) => x.docId === docId);
+    if (appt && dayClosed(appt)) {
+      toast.error("That appointment's day has passed, so it can't be changed");
+      return;
+    }
+    if (appt && outcomeLocked(appt, status)) {
+      toast.error(`That can't be recorded before ${appt.time}`);
+      return;
+    }
     setPendingId(docId);
     try {
       await setAppointmentStatus(docId, status);
@@ -117,12 +192,19 @@ function DoctorAppointments() {
     type: "Follow-up",
   });
 
+  // Re-checked every half minute (the clock above), so a slot that was fine
+  // when the form was opened is refused once its time has passed.
+  const timeProblem = bookingTimeProblem(draft.date, draft.time, clock);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!draft.patientId.trim())
-      return toast.error("Patient ID is required (e.g. Pat-828)");
+      return toast.error(
+        "Choose a patient: enter their Patient ID (e.g. Pat-828) or search by name",
+      );
     if (!draft.date || !draft.time)
       return toast.error("Date and time are required");
+    if (timeProblem) return toast.error(timeProblem);
 
     setSaving(true);
     try {
@@ -166,6 +248,18 @@ function DoctorAppointments() {
 
   return (
     <AppShell role="doctor" title="Appointments">
+      <UpcomingAppointmentAlert
+        appointments={appointments}
+        clinicianId={doctor?.doctorId}
+        actorId={doctor?.doctorId ?? ""}
+        onStart={(docId) => setAppointmentStatus(docId, "In-progress")}
+        onNoShow={(docId) => setAppointmentStatus(docId, "No-show")}
+      />
+      <RescheduleRequests
+        requests={reschedules}
+        patientNames={patientNames}
+        actorId={doctor?.doctorId ?? ""}
+      />
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <button
@@ -186,20 +280,47 @@ function DoctorAppointments() {
             <ChevronRight size={16} />
           </button>
         </div>
-        <label className="flex items-center gap-1.5 text-sm border rounded-md px-2 py-1.5 cursor-pointer hover:bg-secondary bg-white">
-          <CalendarDays size={14} className="text-muted-foreground" />
-          <input
-            type="date"
-            value={selected}
-            onChange={(e) => e.target.value && setSelected(e.target.value)}
-            className="outline-none bg-transparent cursor-pointer"
-          />
-        </label>
+        {/* Not a native <input type="date">: the browser draws that picker
+            itself, outside the page, and it can run off the edge of a small or
+            narrow window with nothing we can do about it. This popover flips and
+            shifts to stay inside the window, and scrolls if there isn't room. */}
+        <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Choose a date"
+              className="flex items-center gap-1.5 text-sm border rounded-md px-2 py-1.5 hover:bg-secondary bg-white"
+            >
+              <CalendarDays size={14} className="text-muted-foreground" />
+              {selected}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            collisionPadding={8}
+            className="w-auto p-0 overflow-auto"
+            style={{
+              maxHeight: "var(--radix-popover-content-available-height)",
+              maxWidth: "var(--radix-popover-content-available-width)",
+            }}
+          >
+            <Calendar
+              mode="single"
+              selected={fromIsoDay(selected)}
+              defaultMonth={fromIsoDay(selected)}
+              onSelect={(d) => {
+                if (!d) return;
+                setSelected(toIsoDay(d));
+                setCalendarOpen(false);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
 
       {loading && (
         <p className="text-sm text-muted-foreground mb-2">
-          Loading appointments…
+          <Loading label="Loading appointments" />
         </p>
       )}
 
@@ -244,7 +365,7 @@ function DoctorAppointments() {
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="flex items-center justify-between p-5 border-b">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-5 border-b">
           <h3 className="font-semibold">Appointments · {selected || "—"}</h3>
           <button
             onClick={() => setShowForm((v) => !v)}
@@ -259,24 +380,33 @@ function DoctorAppointments() {
             onSubmit={submit}
             className="p-5 border-b bg-secondary/40 grid grid-cols-1 md:grid-cols-4 gap-3"
           >
-            <Field
-              label="Patient ID"
+            <PatientPicker
               value={draft.patientId}
               onChange={(v) => setDraft({ ...draft, patientId: v })}
-              placeholder="e.g. Pat-828"
+              clinicId={activeClinicId ?? doctor?.clinicId}
             />
-            <Field
+            <DateField
               label="Date"
-              type="date"
               value={draft.date}
               onChange={(v) => setDraft({ ...draft, date: v })}
             />
-            <Field
-              label="Time"
-              type="time"
-              value={draft.time}
-              onChange={(v) => setDraft({ ...draft, time: v })}
-            />
+            <div>
+              <Field
+                label="Time"
+                type="time"
+                value={draft.time}
+                onChange={(v) => setDraft({ ...draft, time: v })}
+              />
+              {timeProblem && (
+                <p
+                  role="alert"
+                  data-testid="booking-time-problem"
+                  className="mt-1 text-xs text-destructive"
+                >
+                  {timeProblem}
+                </p>
+              )}
+            </div>
             <Field
               label="Type"
               value={draft.type}
@@ -292,7 +422,7 @@ function DoctorAppointments() {
               </button>
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || !!timeProblem}
                 className="bg-[oklch(0.55_0.18_245)] text-white px-3 py-1.5 rounded-md text-sm disabled:opacity-60"
               >
                 {saving ? "Saving…" : "Save appointment"}
@@ -330,39 +460,62 @@ function DoctorAppointments() {
                     <td className="px-5 py-3.5">{a.type}</td>
                     <td className="px-5 py-3.5">
                       <StatusBadge status={a.status} />
+                      {reschedules.some(
+                        (r) =>
+                          r.appointmentId === a.docId && r.status === "pending",
+                      ) && (
+                        <span className="ml-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-900">
+                          Reschedule requested
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        {actions.map(({ status, icon: Icon, cls }) => {
-                          const isCurrent = a.status === status;
-                          const isStaged = staged[a.docId] === status;
-                          return (
-                            <button
-                              key={status}
-                              disabled={isPending}
-                              onClick={() =>
-                                stageStatus(a.docId, status, a.status)
-                              }
-                              title={
-                                isCurrent
-                                  ? `Currently ${status}`
-                                  : `Stage: ${status}`
-                              }
-                              className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 ${
-                                isStaged
-                                  ? cls +
-                                    " ring-2 ring-offset-1 ring-[oklch(0.55_0.18_245)]"
-                                  : isCurrent
-                                    ? cls + " opacity-60"
-                                    : "border bg-white hover:bg-secondary text-foreground"
-                              }`}
-                            >
-                              <Icon size={12} />
-                              <span className="hidden xl:inline">{status}</span>
-                            </button>
-                          );
-                        })}
-                        {staged[a.docId] && (
+                        {(dayClosed(a) ? [] : actions).map(
+                          ({ status, icon: Icon, cls }) => {
+                            const isCurrent = a.status === status;
+                            const isStaged = staged[a.docId] === status;
+                            const locked = outcomeLocked(a, status);
+                            return (
+                              <button
+                                key={status}
+                                disabled={isPending || locked}
+                                onClick={() =>
+                                  stageStatus(a.docId, status, a.status)
+                                }
+                                title={
+                                  locked
+                                    ? `Available once the appointment time (${a.time}) has arrived`
+                                    : isCurrent
+                                      ? `Currently ${status}`
+                                      : `Stage: ${status}`
+                                }
+                                className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                                  isStaged
+                                    ? cls +
+                                      " ring-2 ring-offset-1 ring-[oklch(0.55_0.18_245)]"
+                                    : isCurrent
+                                      ? cls + " opacity-60"
+                                      : "border bg-white hover:bg-secondary text-foreground"
+                                }`}
+                              >
+                                <Icon size={12} />
+                                <span className="hidden xl:inline">
+                                  {status}
+                                </span>
+                              </button>
+                            );
+                          },
+                        )}
+                        {dayClosed(a) && (
+                          <span
+                            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+                            title="This appointment's day has passed, so its status can no longer be changed"
+                          >
+                            <Lock size={12} /> Locked · day has passed
+                          </span>
+                        )}
+                        {staged[a.docId] && !dayClosed(a) && (
                           <button
                             onClick={() => confirmStatus(a.docId)}
                             disabled={isPending}

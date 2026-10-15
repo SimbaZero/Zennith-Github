@@ -37,10 +37,20 @@ import {
   signInAnonymously,
 } from "firebase/auth";
 import { auth, db, firebaseConfig } from "@/firebase";
+import { emailKey, phoneKey } from "@/lib/contact-key";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { notifyUser, userIdForStaff } from "@/lib/notify";
 import { logAction } from "@/lib/audit";
 import { clinicIdVariants } from "@/lib/clinic-id";
+import { normalisePatientId } from "@/lib/patient-id";
+import { otherTabsForAccount } from "@/lib/tab-presence";
+import { toBadgeStatus } from "@/lib/appointment-status";
+import {
+  OUTCOME_STATUSES,
+  bookingTimeProblem,
+  isPastDay,
+  isUpcomingAppointmentStrict,
+} from "@/lib/appointment-time";
 import { textBookingConfirmation } from "@/lib/booking-sms";
 import { resolvePrivacy, gate } from "@/lib/privacy";
 import type { PrivacySettings } from "@/lib/patient-service";
@@ -86,21 +96,6 @@ export interface DoctorDashboardData {
     weekPatients: number;
     upcoming: number;
   };
-}
-
-function toBadgeStatus(s: string): AppointmentStatus {
-  const v = s.toLowerCase();
-  if (v.startsWith("complet")) return "Complete";
-  if (v.includes("progress")) return "In-progress";
-  if (v.includes("no-show") || v.includes("no show") || v.includes("cancel"))
-    return "No-show";
-  // Was previously the unconditional fallback for EVERYTHING else,
-  // including perfectly normal "Scheduled"/"Confirmed" appointments — they
-  // displayed as "Incomplete" even though nothing was wrong. See #20 in
-  // docs/db-issues.md.
-  if (v.includes("confirm")) return "Confirmed";
-  if (v.includes("schedul")) return "Scheduled";
-  return "Incomplete";
 }
 
 async function patientNames(
@@ -449,6 +444,8 @@ export async function callPatient(
       : `Please proceed to the consulting room. ${entry.reason}`.trim(),
     isRead: false,
     timeSent: deliverAt.toISOString(),
+    // The card for answering the call lives on the alerts page.
+    link: "/patient/alerts",
   });
 
   await logQueueEvent({
@@ -515,6 +512,7 @@ export async function setQueueStatus(
             : `Please proceed to the consulting room. ${entry.reason}`.trim(),
           isRead: false,
           timeSent: new Date().toISOString(),
+          link: "/patient/alerts",
         });
       }
     }
@@ -944,6 +942,9 @@ export async function findPatient(
   pid: string,
   clinicId?: number | null,
 ): Promise<PatientSummary | null> {
+  // "pat-828" and "PAT-828" are the same patient as "Pat-828".
+  pid = normalisePatientId(pid);
+  if (!pid) return null;
   const snap = await getDoc(doc(db, "patients", pid));
   if (!snap.exists()) return null;
   // Direct-ID lookup bypasses the clinic-scoped browse list (fetchPatientPage,
@@ -1067,8 +1068,9 @@ export interface PatientRecord {
   lastVisit: string;
   nextAppointment: string;
   history: { id: string; description: string }[];
-  /** Set only by a nurse or doctor — see src/lib/fast-lane.ts. */
-  fastLane: boolean;
+  /** Stable patient (CCMDD-eligible). Set only by a nurse or doctor — see
+   *  src/lib/stable-patient.ts. */
+  stablePatient: boolean;
 }
 
 /** Reception's view of a patient — administrative fields only (see the
@@ -1286,6 +1288,7 @@ const FROM_BADGE: Record<AppointmentStatus, string> = {
   "No-show": "No-Show",
   Scheduled: "Scheduled",
   Confirmed: "Confirmed",
+  Cancelled: "Cancelled",
 };
 
 export async function setAppointmentStatus(
@@ -1296,6 +1299,24 @@ export async function setAppointmentStatus(
     const ref = doc(db, "appointments", apptDocId);
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Appointment not found");
+    // The pages grey these buttons out until the appointment's time; this is
+    // the same rule where a stale tab or a direct call can't walk around it.
+    const startsAt = snap.data().appointDateTime;
+    // A day that has gone by is closed to status changes altogether.
+    if (typeof startsAt === "string" && isPastDay(startsAt)) {
+      throw new Error(
+        "That appointment's day has passed, so its status can no longer be changed",
+      );
+    }
+    if (
+      OUTCOME_STATUSES.includes(status) &&
+      typeof startsAt === "string" &&
+      isUpcomingAppointmentStrict(startsAt)
+    ) {
+      throw new Error(
+        "That appointment hasn't happened yet - its outcome can be recorded once its time has arrived",
+      );
+    }
     tx.update(ref, { status: FROM_BADGE[status] });
   });
 }
@@ -1305,8 +1326,13 @@ async function textPatientAboutBooking(appointmentId: string): Promise<void> {
   try {
     const idToken = await auth.currentUser?.getIdToken();
     if (!idToken) return;
-    const res = await textBookingConfirmation({ data: { idToken, appointmentId } });
-    if (!res.sent) console.info(`Booking text for appointment ${appointmentId} not sent: ${res.reason}`);
+    const res = await textBookingConfirmation({
+      data: { idToken, appointmentId },
+    });
+    if (!res.sent)
+      console.info(
+        `Booking text for appointment ${appointmentId} not sent: ${res.reason}`,
+      );
   } catch (err) {
     console.warn("Booking text request failed:", err);
   }
@@ -1326,6 +1352,12 @@ export async function createAppointment(input: {
   // and would happily double-book. Assert first so the user is told they're
   // offline, rather than getting "Patient not found" from an empty cache.
   assertOnline();
+  // The same rule the forms apply, held here so a stale tab or a direct call
+  // can't walk around it: no booking at a time that has already passed.
+  const pastProblem = bookingTimeProblem(input.date, input.time);
+  if (pastProblem) throw new Error(pastProblem);
+  // Typed by a person: accept any capitalisation of the ID.
+  input = { ...input, patientId: normalisePatientId(input.patientId) };
   const patient = await getDoc(doc(db, "patients", input.patientId));
   if (!patient.exists())
     throw new Error(`Patient "${input.patientId}" not found`);
@@ -1420,8 +1452,8 @@ export async function createAppointment(input: {
         userId: uid,
         title: "New appointment booked",
         message: `${input.date} at ${input.time} — ${input.patientId} (${input.type})`,
-        link:
-          col === "doctors" ? "/doctor/appointments" : "/nurse/appointments",
+        // Opens that day and highlights this appointment.
+        link: `${col === "doctors" ? "/doctor/appointments" : "/nurse/appointments"}?date=${input.date}#appt-${nextId}`,
       });
     }
   }
@@ -1435,7 +1467,7 @@ export async function createAppointment(input: {
       userId: Number(rawPatientUserId),
       title: "Appointment booked",
       message: `Your ${input.type} appointment is booked for ${input.date} at ${input.time}.`,
-      link: "/patient/appointments",
+      link: `/patient/appointments#appt-${nextId}`,
     }).catch((err) =>
       console.error("Patient booking notification failed:", err),
     );
@@ -1648,6 +1680,16 @@ export async function peekNextPatientId(): Promise<string> {
   return `Pat-${patientNo}`;
 }
 
+/** The comparable forms of a contact number / e-mail, for the fields that exist. */
+function contactKeys(email?: string | null, phone?: string | null) {
+  const e = emailKey(email);
+  const p = phoneKey(phone);
+  return {
+    ...(e ? { emailLower: e } : {}),
+    ...(p ? { contactKey: p } : {}),
+  };
+}
+
 /** `{ key: value }` when there is a value to store, otherwise nothing at all. */
 const optionalText = (key: string, value?: string) =>
   value?.trim() ? { [key]: value.trim() } : {};
@@ -1701,6 +1743,9 @@ export async function registerPatient(
       city: input.city,
       suburb: input.suburb,
       email: input.email || "",
+      // Comparable forms, so "is this already registered?" is an exact lookup
+      // (see contact-check.ts) whatever spacing or capitals were typed.
+      ...contactKeys(input.email, input.contactNum),
       DOB: input.dob || null,
       Gender: input.gender || null,
       Age: age,
@@ -1788,6 +1833,8 @@ export interface RealClinic {
   clinicId: number;
   clinicName: string;
   type?: string;
+  /** Stored location, e.g. "26.1946 S, 28.0473 E" (the clinic's `Coordinates` field). */
+  coordinates?: string;
 }
 export async function fetchRealClinics(): Promise<RealClinic[]> {
   // Firestore rules require request.auth != null for ANY read, but this
@@ -1815,6 +1862,8 @@ export async function fetchRealClinics(): Promise<RealClinic[]> {
           clinicId: Number(data.clinicId),
           clinicName: data.clinicName ?? `Clinic ${data.clinicId}`,
           type: data.type,
+          coordinates:
+            typeof data.Coordinates === "string" ? data.Coordinates : undefined,
         };
       })
       .sort((a, b) => a.clinicName.localeCompare(b.clinicName))
@@ -1926,6 +1975,7 @@ export async function signUpPatient(
           city: "",
           suburb: "",
           email,
+          ...contactKeys(email, input.phone),
           DOB: input.dob || null,
           Age: ageFromDob(input.dob),
         }),
@@ -1956,8 +2006,18 @@ export async function signUpPatient(
           clinicId: input.clinicId,
           // Query-only — see nameTokens / searchPatientsByName.
           nameTokensLower: nameTokens(input.fullName),
+          // Who made this record. The rules only let a new account claim a
+          // patient record (in its own profile) that it created itself, so
+          // nobody can point their profile at someone else's patientId.
+          ownerUid: cred.user.uid,
         }),
       ),
+    ]);
+
+    // The profile is written only after the patient record exists: the rules
+    // check that record's ownerUid when the profile is created, so the two
+    // can't be written at the same time.
+    await Promise.all([
       tag(
         "profiles",
         setDoc(doc(fdb, "profiles", cred.user.uid), {
@@ -2061,9 +2121,10 @@ export interface PatientUpdateInput {
   // too. Don't "deduplicate" them back.
   lastVisit?: string;
   insurancePolicyNumber?: string | null;
-  /** A nurse or doctor's clinical judgement — see src/lib/fast-lane.ts. Never
-   *  set by reception, which this interface is also used by. */
-  fastLane?: boolean;
+  /** Stable patient (CCMDD-eligible): a nurse or doctor's clinical judgement —
+   *  see src/lib/stable-patient.ts. Never set by reception, which this
+   *  interface is also used by. */
+  stablePatient?: boolean;
   /**
    * The patient's name as lowercase words, so a name can be searched (see
    * nameTokens). Query-only: written by registration, self-signup and a name
@@ -2156,8 +2217,45 @@ export async function updateUser(
 ): Promise<void> {
   await updateDoc(doc(db, "users", String(userId)), {
     ...stripUndefined(input),
+    // Kept in step with the contact fields, so the duplicate check (which
+    // compares these) sees an edited number or address. A cleared value
+    // clears its key too.
+    ...(input.email !== undefined
+      ? { emailLower: emailKey(input.email) || null }
+      : {}),
+    ...(input.contactNum !== undefined
+      ? { contactKey: phoneKey(input.contactNum) || null }
+      : {}),
     lastUpdated: new Date().toISOString(),
   });
+}
+
+/** The numeric user id behind a patient record, or null if it can't be found. */
+export async function patientUserIdOf(
+  patientId: string,
+): Promise<number | null> {
+  const snap = await getDoc(doc(db, "patients", normalisePatientId(patientId)));
+  const id = snap.exists() ? Number(snap.data().userId) : NaN;
+  return Number.isFinite(id) ? id : null;
+}
+
+/**
+ * Corrects a patient's e-mail and/or contact number on their record. Used by
+ * the "send login link" step, where the address or number turns out to be
+ * wrong or already taken and reception fixes it on the spot.
+ */
+export async function updatePatientContact(
+  patientId: string,
+  input: { email?: string; contactNum?: string },
+): Promise<void> {
+  assertOnline();
+  const snap = await getDoc(doc(db, "patients", normalisePatientId(patientId)));
+  const userId = snap.exists() ? snap.data().userId : null;
+  if (userId == null) throw new Error("That patient record couldn't be found.");
+  const next: UserUpdateInput = {};
+  if (input.email !== undefined) next.email = input.email.trim();
+  if (input.contactNum !== undefined) next.contactNum = input.contactNum.trim();
+  await updateUser(userId, next);
 }
 
 export async function updateMedicalRecord(
@@ -2393,6 +2491,99 @@ export async function rejectClinicApplication(clinicId: number): Promise<void> {
   await deleteDoc(doc(db, "clinics", String(clinicId)));
 }
 
+// ---------------------------------------------------------------------------
+// Which clinics a doctor or pharmacist works at.
+//
+// `doctors/{id}` and `pharmacists/{id}` carry `clinicIds` (the first entry is
+// their home clinic). `clinicId` is kept equal to that first entry, because
+// older readers - and queries such as "doctors where clinicId == N" - still look
+// at the single field. The person chooses which of these they are working at
+// today with the clinic switcher in the header (see active-clinic.ts).
+//
+// ADDING a clinic goes through a request that an admin approves (see
+// clinic-assignment.ts), which ends in setStaffClinics below. Removing one is
+// applied straight away.
+// ---------------------------------------------------------------------------
+
+/** The roles that can work at several clinics. */
+export type MultiClinicRole = "doctor" | "pharmacist";
+
+const MULTI_CLINIC_COLLECTION: Record<MultiClinicRole, string> = {
+  doctor: "doctors",
+  pharmacist: "pharmacists",
+};
+
+/** Every clinic a doctor or pharmacist is assigned to, home clinic first. */
+export async function getStaffClinicIds(
+  role: MultiClinicRole,
+  staffId: string,
+): Promise<number[]> {
+  const snap = await getDoc(doc(db, MULTI_CLINIC_COLLECTION[role], staffId));
+  if (!snap.exists()) throw new Error("That staff record couldn't be found.");
+  const data = snap.data();
+  const list: unknown[] = Array.isArray(data.clinicIds)
+    ? data.clinicIds
+    : data.clinicId != null
+      ? [data.clinicId]
+      : [];
+  return [...new Set(list.map(Number).filter(Number.isFinite))];
+}
+
+/**
+ * Replaces a doctor's or pharmacist's clinic list. The first entry becomes
+ * their home clinic. This is the write that takes effect: adding a clinic
+ * reaches it only through an approved request.
+ */
+export async function setStaffClinics(input: {
+  role: MultiClinicRole;
+  staffId: string;
+  clinicIds: number[];
+}): Promise<void> {
+  assertOnline();
+  const ids = [...new Set(input.clinicIds.map(Number))].filter((n) =>
+    Number.isInteger(n),
+  );
+  if (ids.length === 0) {
+    throw new Error("A staff member must be assigned to at least one clinic.");
+  }
+  // Every id has to be a real clinic: a typo here would quietly give the person
+  // a clinic that has nothing in it.
+  const checks = await Promise.all(
+    ids.map((id) => getDoc(doc(db, "clinics", String(id)))),
+  );
+  const missing = ids.filter((_, i) => !checks[i].exists());
+  if (missing.length > 0) {
+    throw new Error(`Clinic ${missing.join(", ")} couldn't be found.`);
+  }
+  await updateDoc(doc(db, MULTI_CLINIC_COLLECTION[input.role], input.staffId), {
+    clinicIds: ids,
+    clinicId: ids[0],
+  });
+  logAction({
+    clinicId: ids[0],
+    actor_id: getUsername() || "system",
+    action_type: "staff.clinics_changed",
+    description: `Set ${input.staffId}'s clinics to ${ids.join(", ")}`,
+  });
+}
+
+/** Every clinic a doctor is assigned to, home clinic first. */
+export function getDoctorClinicIds(doctorId: string): Promise<number[]> {
+  return getStaffClinicIds("doctor", doctorId);
+}
+
+/** Replaces a doctor's clinic list. See setStaffClinics. */
+export function setDoctorClinics(input: {
+  doctorId: string;
+  clinicIds: number[];
+}): Promise<void> {
+  return setStaffClinics({
+    role: "doctor",
+    staffId: input.doctorId,
+    clinicIds: input.clinicIds,
+  });
+}
+
 // Only blocks on real staff (doctor/nurse/pharmacist/receptionist) still
 // assigned to this clinic — does NOT check patients, appointments, or
 // inventory. Flagging that honestly rather than pretending this is a full
@@ -2436,13 +2627,38 @@ export async function deleteClinicIfEmpty(
 // when nobody is logged in — not something the app itself can do.
 // ---------------------------------------------------------------------------
 
-export function useDatabaseReachable(): "checking" | "online" | "offline" {
-  const [state, setState] = useState<"checking" | "online" | "offline">(
-    "checking",
-  );
+export type DatabaseState =
+  | "checking"
+  | "online"
+  | "offline"
+  // The check failed, but not because the connection is down - see below.
+  | "error"
+  // The check failed while the SAME account is open in another tab of this browser.
+  | "other-tab";
+
+export function useDatabaseReachable(): DatabaseState {
+  const [state, setState] = useState<DatabaseState>("checking");
 
   useEffect(() => {
     let cancelled = false;
+
+    /**
+     * What a failed read means. This used to call every failure "offline", so a
+     * permission problem, a quota error or a second tab's session all read as
+     * "Can't reach the database". Now only a real lack of connection does; when
+     * it failed but another tab for this account is open, that is said instead.
+     */
+    function explain(err: unknown): DatabaseState {
+      const code = String((err as { code?: string })?.code ?? "");
+      const msg = String((err as { message?: string })?.message ?? "");
+      if (otherTabsForAccount(auth.currentUser?.uid) > 0) return "other-tab";
+      const connectionDown =
+        code === "unavailable" ||
+        code === "deadline-exceeded" ||
+        /client is offline|network|failed to fetch/i.test(msg) ||
+        (typeof navigator !== "undefined" && navigator.onLine === false);
+      return connectionDown ? "offline" : "error";
+    }
 
     async function check() {
       // The browser's own offline flag is instant and free — trust it first.
@@ -2456,8 +2672,9 @@ export function useDatabaseReachable(): "checking" | "online" | "offline" {
         // network off. This forces a real round trip to the server.
         await getDocFromServer(doc(db, "counters", "registration"));
         if (!cancelled) setState("online");
-      } catch {
-        if (!cancelled) setState("offline");
+      } catch (err) {
+        console.warn("Database reachability check failed:", err);
+        if (!cancelled) setState(explain(err));
       }
     }
 
@@ -2558,6 +2775,7 @@ export async function alertOverdueQueueEntry(
     }`,
     isRead: false,
     timeSent: new Date().toISOString(),
+    link: "/receptionist/queue",
   });
 
   await logQueueEvent({
@@ -2807,55 +3025,97 @@ const STAFF_COLLECTIONS = [
   ["receptionists", "receptionist"],
 ] as const;
 
+/** Splits a list into runs of at most 30: the most a Firestore "in" takes. */
+function inBatches<T>(values: T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < values.length; i += 30) out.push(values.slice(i, i + 30));
+  return out;
+}
+
 export async function fetchClinicStaff(
   clinicId: number,
 ): Promise<ClinicStaffMember[]> {
-  const [profileSnap, userSnap] = await Promise.all([
-    getDocs(collection(db, "profiles")),
-    getDocs(collection(db, "users")),
-  ]);
+  // Only this clinic's staff are read (by home clinic, or by the list of
+  // clinics they serve), and then only the users/profiles of those people.
+  // This used to read all of `profiles`, all of `users` (thousands of
+  // documents) and the four staff collections whole, on every visit to the
+  // Admin dashboard and All Staff. The id is matched as a number and as text
+  // because older records stored it either way.
+  const asText = String(clinicId);
+  const staff = new Map<
+    string,
+    { role: ClinicStaffMember["role"]; data: Record<string, unknown> }
+  >();
+  await Promise.all(
+    STAFF_COLLECTIONS.flatMap(([colName]) => [
+      getDocs(
+        query(
+          collection(db, colName),
+          where("clinicId", "in", [clinicId, asText]),
+        ),
+      ),
+      getDocs(
+        query(
+          collection(db, colName),
+          where("clinicIds", "array-contains-any", [clinicId, asText]),
+        ),
+      ),
+    ]).map(async (pending, i) => {
+      const role = STAFF_COLLECTIONS[Math.floor(i / 2)][1];
+      for (const d of (await pending).docs)
+        staff.set(`${role}:${d.id}`, { role, data: d.data() });
+    }),
+  );
 
+  const userIds = [
+    ...new Set(
+      [...staff.values()]
+        .map((s) => (s.data.userId != null ? Number(s.data.userId) : NaN))
+        .filter((n) => Number.isFinite(n)),
+    ),
+  ];
   const usernameByUserId = new Map<number, string>();
-  for (const p of profileSnap.docs) {
-    const d = p.data();
-    if (d.legacyUserId != null)
-      usernameByUserId.set(Number(d.legacyUserId), d.username ?? "");
-  }
   const nameByUserId = new Map<number, string>();
-  for (const u of userSnap.docs) {
-    const d = u.data();
-    const name = [d.names, d.surname].filter(Boolean).join(" ");
-    if (d.userId != null && name) nameByUserId.set(Number(d.userId), name);
-  }
+  await Promise.all(
+    inBatches(userIds).flatMap((ids) => [
+      getDocs(
+        query(collection(db, "profiles"), where("legacyUserId", "in", ids)),
+      ).then((snap) => {
+        for (const p of snap.docs) {
+          const d = p.data();
+          if (d.legacyUserId != null)
+            usernameByUserId.set(Number(d.legacyUserId), d.username ?? "");
+        }
+      }),
+      getDocs(
+        query(collection(db, "users"), where("userId", "in", ids)),
+      ).then((snap) => {
+        for (const u of snap.docs) {
+          const d = u.data();
+          const name = [d.names, d.surname].filter(Boolean).join(" ");
+          if (d.userId != null && name)
+            nameByUserId.set(Number(d.userId), name);
+        }
+      }),
+    ]),
+  );
 
   const out: ClinicStaffMember[] = [];
-
-  for (const [colName, role] of STAFF_COLLECTIONS) {
-    const snap = await getDocs(collection(db, colName));
-    for (const d of snap.docs) {
-      const data = d.data();
-      const primary = Number(data.clinicId);
-      const serves = Array.isArray(data.clinicIds)
-        ? data.clinicIds.map(Number)
-        : [];
-      const isHere = primary === clinicId || serves.includes(clinicId);
-      if (!isHere) continue;
-
-      const userId = data.userId != null ? Number(data.userId) : undefined;
-      const username =
-        userId != null ? usernameByUserId.get(userId) : undefined;
-
-      out.push({
-        staffId: d.id,
-        role,
-        fullName:
-          (userId != null ? nameByUserId.get(userId) : undefined) ?? d.id,
-        userId,
-        username: username || undefined,
-        hasLogin: !!username,
-        visiting: primary !== clinicId,
-      });
-    }
+  for (const [key, { role, data }] of staff) {
+    const primary = Number(data.clinicId);
+    const userId = data.userId != null ? Number(data.userId) : undefined;
+    const username = userId != null ? usernameByUserId.get(userId) : undefined;
+    const staffId = key.slice(role.length + 1);
+    out.push({
+      staffId,
+      role,
+      fullName:
+        (userId != null ? nameByUserId.get(userId) : undefined) ?? staffId,
+      userId,
+      username: username || undefined,
+      hasLogin: !!username,
+      visiting: primary !== clinicId,
+    });
   }
 
   return out.sort((a, b) => a.fullName.localeCompare(b.fullName));

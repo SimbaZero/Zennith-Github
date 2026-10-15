@@ -1,61 +1,70 @@
-// PROTOTYPE ONLY — see conversation notes.
-// TODO(security): the Gemini API key is exposed in the client bundle
-// (VITE_-prefixed env vars are public — same as Firebase's key, but
-// unlike RESEND_API_KEY there's no server here to hide this one behind).
-// Anyone who opens DevTools can read and reuse this key. Move this
-// behind a real backend (Firebase Cloud Function) before real use.
-// TODO(compliance): Google's Gemini API free tier terms allow prompts/
-// images sent through it to be used to improve Google's products. Do
-// NOT run a real patient's real photo through this until this is on a
-// paid tier or moved server-side. Fake/synthetic test patients only.
-
+import { createServerFn } from "@tanstack/react-start";
+import { auth } from "@/lib/firebase";
 import type { DigitizedPatientData } from "@/lib/nurse-service";
 
-// If this model name ever 404s, check https://ai.google.dev/gemini-api/docs/models
-// for the current free-tier model list and swap it in here.
-const GEMINI_MODEL = "gemini-flash-lite-latest";
+// Reading a scanned patient form. The reading itself happens on the server
+// (src/server/gemini-ocr.ts, loaded inside the handler so neither it nor its
+// API key can end up in the browser bundle): this file sends the photo there
+// and turns the answer back into the fields the digitize page fills in.
 
-// Expanded to match the real Medical Record page's Personal Information +
-// Medical History sections, not just the original 7-field subset — so a
-// scan can populate a record as fully as the paper form allows.
-const PROMPT = `You are reading a scanned or photographed handwritten or
-printed clinic patient intake/history form. Extract the following fields
-as JSON only:
+export type ScanResult =
+  | { ok: true; data: DigitizedPatientData; confidence: number }
+  | {
+      ok: false;
+      kind: "unreadable" | "unavailable" | "unauthenticated" | "not-eligible";
+      detail: string;
+    };
 
-{
-  "fullName": string,
-  "idNumber": string,          // digits only, South African 13-digit ID if present
-  "dateOfBirth": string,       // YYYY-MM-DD if determinable, else ""
-  "cellphone": string,         // digits only
-  "email": string,
-  "address": string,           // whatever address is written, as one string
-  "emergencyContactName": string,
-  "emergencyContactNo": string,
-  "diagnosis": string,         // primary condition
-  "bloodType": string,
-  "allergies": string,
-  "currentMedication": string,
-  "dosage": string,            // as written, e.g. "500mg" — digits get extracted separately
-  "bloodPressure": string,     // e.g. "120/80"
-  "glucose": string,           // as written, digits get extracted separately
-  "notes": string,             // anything else relevant that doesn't fit above
-  "confidence": number         // your own 0-100 estimate of extraction confidence
-}
-
-If a field isn't visible in the image, use an empty string for it. Never
-invent information that isn't visible in the image.`;
+export const readScannedForm = createServerFn({ method: "POST" })
+  .inputValidator(
+    (d: { idToken: string; imageBase64: string; mimeType: string }) => d,
+  )
+  .handler(async ({ data }): Promise<ScanResult> => {
+    try {
+      const { readScan } = await import("../server/gemini-ocr");
+      return await readScan({
+        idToken: data?.idToken,
+        imageBase64: data?.imageBase64,
+        mimeType: data?.mimeType,
+      });
+    } catch (error) {
+      console.error("[gemini-ocr] failed:", error);
+      return { ok: false, kind: "unavailable", detail: "server error" };
+    }
+  });
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // strip the "data:image/jpeg;base64," prefix — Gemini wants raw base64
+      // strip the "data:image/jpeg;base64," prefix — the reader wants raw base64
       resolve(result.split(",")[1] ?? "");
     };
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(blob);
   });
+}
+
+/**
+ * What a person is told when a scan can't be read. The technical cause (which
+ * service, the HTTP status, a missing setting) is kept in `detail` for the
+ * console and never put in front of the user: it is not something they can act
+ * on, and it shouldn't reveal how the reading is done.
+ */
+export class ScanReadError extends Error {
+  readonly kind: "unreadable" | "unavailable";
+  readonly detail: string;
+  constructor(kind: "unreadable" | "unavailable", detail: string) {
+    super(
+      kind === "unavailable"
+        ? "Scan reading isn't available right now. Please enter the details by hand, or try again later."
+        : "Couldn't read this scan clearly — try retaking the photo.",
+    );
+    this.name = "ScanReadError";
+    this.kind = kind;
+    this.detail = detail;
+  }
 }
 
 export interface GeminiExtractionResult {
@@ -66,74 +75,27 @@ export interface GeminiExtractionResult {
 export async function extractPatientDataWithGemini(
   image: Blob,
 ): Promise<GeminiExtractionResult> {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-  if (!apiKey) {
-    throw new Error(
-      "VITE_GEMINI_API_KEY is not set — add it to your .env file, then restart the dev server.",
+  const idToken = (await auth.currentUser?.getIdToken()) ?? "";
+  const imageBase64 = await blobToBase64(image);
+
+  let result: ScanResult;
+  try {
+    result = await readScannedForm({
+      data: { idToken, imageBase64, mimeType: image.type || "image/jpeg" },
+    });
+  } catch (err) {
+    // Offline, blocked, DNS: the request never completed.
+    throw new ScanReadError(
+      "unavailable",
+      `request failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
-  const base64 = await blobToBase64(image);
-  const mimeType = image.type || "image/jpeg";
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: PROMPT },
-              { inline_data: { mime_type: mimeType, data: base64 } },
-            ],
-          },
-        ],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`Gemini API error ${res.status}: ${errText.slice(0, 200)}`);
+  if (!result.ok) {
+    throw new ScanReadError(
+      result.kind === "unreadable" ? "unreadable" : "unavailable",
+      result.detail,
+    );
   }
-
-  const json = await res.json();
-  const text: string | undefined =
-    json?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned no extractable text");
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("Gemini response wasn't valid JSON — try scanning again");
-  }
-
-  const str = (v: unknown) => (typeof v === "string" ? v : "");
-  const num = (v: unknown) => (typeof v === "number" ? v : 0);
-
-  return {
-    data: {
-      fullName: str(parsed.fullName),
-      idNumber: str(parsed.idNumber).replace(/\D/g, ""),
-      dateOfBirth: str(parsed.dateOfBirth),
-      cellphone: str(parsed.cellphone).replace(/\D/g, ""),
-      email: str(parsed.email),
-      address: str(parsed.address),
-      emergencyContactName: str(parsed.emergencyContactName),
-      emergencyContactNo: str(parsed.emergencyContactNo).replace(/\D/g, ""),
-      diagnosis: str(parsed.diagnosis),
-      bloodType: str(parsed.bloodType),
-      allergies: str(parsed.allergies),
-      currentMedication: str(parsed.currentMedication),
-      dosage: str(parsed.dosage),
-      bloodPressure: str(parsed.bloodPressure),
-      glucose: str(parsed.glucose),
-      notes: str(parsed.notes),
-    },
-    confidence: Math.round(num(parsed.confidence)),
-  };
+  return { data: result.data, confidence: result.confidence };
 }

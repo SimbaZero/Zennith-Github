@@ -61,9 +61,12 @@ export interface AppointmentContext {
   when: string;
 }
 
+// Every appointment text starts with this, so patients can see who it's from.
+export const FROM = "Zennith- ";
+
 export function reminderText(c: AppointmentContext): string {
   return [
-    `Hello ${c.firstName ?? "Patient"},`,
+    `${FROM}Hello ${c.firstName ?? "Patient"},`,
     `Please confirm your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when}`,
     "Reply 1: Yes",
     "2: No",
@@ -73,22 +76,22 @@ export function reminderText(c: AppointmentContext): string {
 /** Sent when the appointment is booked. The last line is left out if no reminder is still to come. */
 export function bookedText(c: AppointmentContext, reminderToCome: boolean): string {
   return [
-    `Hello ${c.firstName ?? "Patient"},`,
+    `${FROM}Hello ${c.firstName ?? "Patient"},`,
     `Your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when} is booked.`,
-    ...(reminderToCome ? ["We'll send you a reminder before your appointment."] : []),
+    ...(reminderToCome ? ["We'll remind you before your appointment."] : []),
   ].join("\n");
 }
 
 export function confirmedText(c: AppointmentContext): string {
-  return `Thank you. Your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when} is confirmed.`;
+  return `${FROM}Thank you. Your appointment at ${c.clinicName ?? "your clinic"} with ${c.clinicianName ?? "your clinician"} on ${c.when} is confirmed.`;
 }
 
 export function remindAgainText(nextReminder: string): string {
-  return `Thank you for letting us know. We'll remind you again at ${nextReminder}.`;
+  return `${FROM}Thank you for letting us know. We'll remind you again at ${nextReminder}.`;
 }
 
 export function cancelledText(c: AppointmentContext): string {
-  return `Thank you for letting us know. Your appointment has been cancelled. Please contact ${c.clinicName ?? "the clinic"} to rebook.`;
+  return `${FROM}Thank you for letting us know. Your appointment has been cancelled. Please contact ${c.clinicName ?? "the clinic"} to rebook.`;
 }
 
 /**

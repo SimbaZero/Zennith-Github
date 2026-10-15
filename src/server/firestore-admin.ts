@@ -77,6 +77,10 @@ export class FirestoreConfigError extends Error {}
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DATASTORE_SCOPE = "https://www.googleapis.com/auth/datastore";
+// Looking up, deleting and updating sign-in accounts (Firebase Auth) is a
+// different Google API from Firestore and needs its own scope on the token.
+const IDENTITY_SCOPE =
+  "https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/cloud-platform";
 
 // Access tokens last an hour; reuse them across requests in the same isolate.
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -290,8 +294,37 @@ export class FirestoreAdmin {
     return res;
   }
 
-  private async accessToken(): Promise<string> {
-    const cached = tokenCache.get(this.account.client_email);
+  /**
+   * Calls the Identity Toolkit admin API for this project, as the service
+   * account: `accounts:lookup`, `accounts:delete`, `accounts:update`. Returns
+   * the HTTP result rather than throwing, since "no such account" is an
+   * ordinary answer. Requires the service account to be allowed to manage
+   * Firebase Authentication users (the default Firebase Admin SDK account is).
+   */
+  async identity(
+    method: "accounts:lookup" | "accounts:delete" | "accounts:update",
+    body: Record<string, unknown>,
+  ): Promise<{ ok: boolean; status: number; json: Record<string, any> }> {
+    const token = await this.accessToken(IDENTITY_SCOPE);
+    this.requestCount++;
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/projects/${this.account.project_id}/${method}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const json = (await res.json().catch(() => ({}))) as Record<string, any>;
+    return { ok: res.ok, status: res.status, json };
+  }
+
+  private async accessToken(scope: string = DATASTORE_SCOPE): Promise<string> {
+    const cacheKey = `${this.account.client_email}|${scope}`;
+    const cached = tokenCache.get(cacheKey);
     if (cached && cached.expiresAt - 60_000 > Date.now()) return cached.token;
 
     this.requestCount++;
@@ -300,7 +333,7 @@ export class FirestoreAdmin {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        assertion: await signServiceAccountJwt(this.account),
+        assertion: await signServiceAccountJwt(this.account, scope),
       }),
     });
     if (!res.ok) {
@@ -311,7 +344,7 @@ export class FirestoreAdmin {
       access_token: string;
       expires_in: number;
     };
-    tokenCache.set(this.account.client_email, {
+    tokenCache.set(cacheKey, {
       token: access_token,
       expiresAt: Date.now() + expires_in * 1000,
     });
@@ -319,12 +352,15 @@ export class FirestoreAdmin {
   }
 }
 
-async function signServiceAccountJwt(account: ServiceAccount): Promise<string> {
+async function signServiceAccountJwt(
+  account: ServiceAccount,
+  scope: string,
+): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
   const claims = {
     iss: account.client_email,
-    scope: DATASTORE_SCOPE,
+    scope,
     aud: TOKEN_URL,
     iat: now,
     exp: now + 3600,

@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell } from "@/components/AppShell";
 import {
   StaffSearchSelect,
@@ -24,6 +25,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNow } from "@/lib/store";
+import { calledAttention, CALLED_ALERT_MIN } from "@/lib/called-attention";
 import type { QueueEntry, TriageLevel } from "@/lib/clinic-data";
 import {
   resolveCurrentReceptionist,
@@ -114,10 +116,9 @@ const BTN_BASE =
 const BTN_PRIMARY = `${BTN_BASE} bg-[oklch(0.55_0.18_245)] text-white hover:bg-[oklch(0.49_0.18_245)] disabled:opacity-50`;
 const BTN_OUTLINE = `${BTN_BASE} border bg-white hover:bg-secondary`;
 
-// How long a called patient can stay "called" before reception is prompted.
-// Someone called but never marked as arrived stalls the queue silently —
-// they're no longer waiting, but they're not being seen either.
-const NO_SHOW_AFTER_MIN = 5;
+// How long a called patient can stay "called" before reception is prompted: see
+// called-attention.ts, which also decides when the row starts to stand out.
+const NO_SHOW_AFTER_MIN = CALLED_ALERT_MIN;
 
 // Guided triage. Reception is not clinically trained, so they should not be
 // choosing "Critical" from a dropdown — they answer observable yes/no
@@ -217,7 +218,8 @@ async function getClinicData() {
 }
 
 function QueuePage() {
-  const now = useNow(60_000);
+  // 15s, not 60s: a called patient turns amber at 3 minutes and red at 5.
+  const now = useNow(15_000);
 
   const { data: receptionist } = useQuery({
     queryKey: ["current-receptionist"],
@@ -395,12 +397,37 @@ function QueuePage() {
     (q) => q.status === "waiting" || q.status === "called",
   );
   const stalled = active.filter(
-    (q) =>
-      q.status === "called" &&
-      q.calledAt &&
-      (now.getTime() - new Date(q.calledAt).getTime()) / 60000 >
-        NO_SHOW_AFTER_MIN,
+    (q) => calledAttention(q, now).level === "alert",
   );
+
+  // Tell reception once when a called patient crosses into "not responding",
+  // like the overdue-wait alert below - a toast, so it's seen even if the
+  // Called section is collapsed or scrolled out of view.
+  const alertedCalledRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const stillStalled = new Set(stalled.map((q) => q.id));
+    for (const id of alertedCalledRef.current)
+      if (!stillStalled.has(id)) alertedCalledRef.current.delete(id);
+    for (const q of stalled) {
+      if (alertedCalledRef.current.has(q.id)) continue;
+      alertedCalledRef.current.add(q.id);
+      const a = calledAttention(q, now);
+      toast.warning(
+        a.acknowledged
+          ? `${q.patientName} said they were coming ${a.minutes} min ago but isn't here yet`
+          : `${q.patientName} hasn't responded to the call (${a.minutes} min)`,
+        { duration: 12000, id: `called-stalled-${q.id}` },
+      );
+    }
+  }, [stalled, now]);
+
+  // Every section starts folded: the counts (and any "needs attention" badge)
+  // on the headers are the overview, and a section opens when reception clicks
+  // it. This is deliberately NOT remembered between visits.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const isCollapsed = (key: string) => !expanded[key];
+  const toggleGroup = (key: string) =>
+    setExpanded((e) => ({ ...e, [key]: !e[key] }));
 
   const escalatedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -582,7 +609,7 @@ function QueuePage() {
         clinicNameOverride={receptionist?.clinicName}
       >
         <div className="flex items-center justify-center h-64">
-          <p className="text-muted-foreground">Loading queue system...</p>
+          <Loading label="Loading the queue" size={20} />
         </div>
       </AppShell>
     );
@@ -606,7 +633,14 @@ function QueuePage() {
       icon: Megaphone,
       hint: "Paged — not in the room yet",
       empty: "No one called right now",
-      rows: indexedActive.filter(({ q }) => q.status === "called"),
+      // Longest since the call first: that's who has gone quiet.
+      rows: indexedActive
+        .filter(({ q }) => q.status === "called")
+        .sort(
+          (a, b) =>
+            (a.q.calledAt ?? "").localeCompare(b.q.calledAt ?? "") ||
+            a.idx - b.idx,
+        ),
     },
     {
       key: "in-room",
@@ -620,6 +654,15 @@ function QueuePage() {
     },
   ];
 
+  // How many rows in each section need attention (only "Called" can).
+  const queueGroupsWithAlerts = queueGroups.map((g) => ({
+    ...g,
+    alerts: g.rows.filter(({ q }) => calledAttention(q, now).level === "alert")
+      .length,
+    watches: g.rows.filter(({ q }) => calledAttention(q, now).level === "watch")
+      .length,
+  }));
+
   // One queue row. `idx` is the patient's index in `active`, NOT in their
   // group: the "in queue" number is counted from that index, so splitting the
   // list into sections must hand each row the same index it had before.
@@ -627,6 +670,7 @@ function QueuePage() {
     const waitMin = getWaitTime(q.joinedAt);
     const overdue = isOverdue(q);
     const target = TRIAGE_MAX_WAIT_MINUTES[q.triage];
+    const attention = calledAttention(q, now);
     const position =
       q.status === "waiting"
         ? active.filter((o, i) => o.status === "waiting" && i <= idx).length
@@ -652,7 +696,14 @@ function QueuePage() {
     return (
       <li
         key={q.id}
-        className={`relative overflow-hidden rounded-xl border transition-shadow hover:shadow-sm ${TRIAGE_ROW_TINT[q.triage]}`}
+        data-attention={attention.level}
+        className={`relative overflow-hidden rounded-xl border transition-shadow hover:shadow-sm ${TRIAGE_ROW_TINT[q.triage]} ${
+          attention.level === "alert"
+            ? "!border-red-300"
+            : attention.level === "watch"
+              ? "!border-amber-300"
+              : ""
+        }`}
       >
         {/* Urgency before the text: a 5px edge in the triage
                       colour, with a faint matching tint on red and orange. */}
@@ -694,6 +745,29 @@ function QueuePage() {
               >
                 {STATUS_TEXT[q.status] ?? q.status}
               </span>
+              {attention.level !== "none" && (
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ${
+                    attention.level === "alert"
+                      ? "border-red-200 bg-red-50 text-red-800"
+                      : "border-amber-200 bg-amber-50 text-amber-900"
+                  }`}
+                >
+                  <span
+                    aria-hidden
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      attention.level === "alert"
+                        ? "bg-red-500"
+                        : "bg-amber-500"
+                    }`}
+                  />
+                  {attention.level === "alert"
+                    ? attention.acknowledged
+                      ? `Said they're coming · not here after ${attention.minutes} min`
+                      : `No response · called ${attention.minutes} min ago`
+                    : `Called ${attention.minutes} min ago`}
+                </span>
+              )}
               {/* The patient tapped "I'm on my way". Informational
                             only — it says the call was heard, not that anyone
                             has arrived, so no button reads it and the no-show
@@ -721,7 +795,10 @@ function QueuePage() {
                     {Math.round(
                       (now.getTime() - new Date(q.calledAt).getTime()) / 60000,
                     )}{" "}
-                    min ago but hasn't arrived.
+                    min ago{" "}
+                    {attention.acknowledged
+                      ? "and said they were on their way, but hasn't arrived."
+                      : "and hasn't responded or arrived."}
                   </p>
                   <div className="flex flex-wrap gap-2 mt-2">
                     <button
@@ -1135,11 +1212,23 @@ function QueuePage() {
             always visible. Handoffs sit in "In Room": they're with a clinician
             and being passed to another. */}
         <div className="space-y-6">
-          {queueGroups.map((g) => {
+          {queueGroupsWithAlerts.map((g) => {
             const GroupIcon = g.icon;
             return (
               <section key={g.key} aria-labelledby={`queue-group-${g.key}`}>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pb-2 mb-2 border-b">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(g.key)}
+                  aria-expanded={!isCollapsed(g.key)}
+                  aria-controls={`queue-group-body-${g.key}`}
+                  className="w-full flex flex-wrap items-center gap-x-2 gap-y-1 pb-2 mb-2 border-b text-left min-h-[40px]"
+                >
+                  <ChevronDown
+                    size={16}
+                    className={`text-muted-foreground transition-transform ${
+                      isCollapsed(g.key) ? "-rotate-90" : ""
+                    }`}
+                  />
                   <GroupIcon size={16} className="text-muted-foreground" />
                   <h4
                     id={`queue-group-${g.key}`}
@@ -1155,16 +1244,44 @@ function QueuePage() {
                   <span className="text-xs text-muted-foreground">
                     {g.hint}
                   </span>
+                  {/* Stays visible with the section folded: the whole point of
+                      the highlight is that nobody has to go looking. */}
+                  {g.alerts > 0 && (
+                    <span
+                      role="status"
+                      className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs text-red-800"
+                    >
+                      <span
+                        aria-hidden
+                        className="h-1.5 w-1.5 rounded-full bg-red-500"
+                      />
+                      {g.alerts} not responding
+                    </span>
+                  )}
+                  {g.alerts === 0 && g.watches > 0 && (
+                    <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-900">
+                      <span
+                        aria-hidden
+                        className="h-1.5 w-1.5 rounded-full bg-amber-500"
+                      />
+                      {g.watches} slow to arrive
+                    </span>
+                  )}
+                </button>
+                <div
+                  id={`queue-group-body-${g.key}`}
+                  hidden={isCollapsed(g.key)}
+                >
+                  {g.rows.length === 0 ? (
+                    <p className="text-sm text-muted-foreground px-1 py-2">
+                      {g.empty}
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {g.rows.map(({ q, idx }) => renderRow(q, idx))}
+                    </ul>
+                  )}
                 </div>
-                {g.rows.length === 0 ? (
-                  <p className="text-sm text-muted-foreground px-1 py-2">
-                    {g.empty}
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {g.rows.map(({ q, idx }) => renderRow(q, idx))}
-                  </ul>
-                )}
               </section>
             );
           })}
@@ -1193,7 +1310,7 @@ function QueuePage() {
             <div className="mt-2 border rounded-lg overflow-hidden">
               {auditLogLoading && (
                 <p className="px-5 py-4 text-sm text-muted-foreground">
-                  Loading…
+                  <Loading label="Loading the activity log" />
                 </p>
               )}
               {auditLogError && (

@@ -7,13 +7,14 @@ import {
   useCurrentNurse,
   type DigitizedPatientData,
 } from "@/lib/nurse-service";
-import { extractPatientDataWithGemini } from "@/lib/gemini-ocr";
+import { ScanReadError, extractPatientDataWithGemini } from "@/lib/gemini-ocr";
 import {
   DOCUMENT_CHECK_NOTE,
   SA_ID_CHECK_NOTE,
   validateUntypedId,
 } from "@/lib/sa-id";
 import { toast } from "sonner";
+import { describeOcrConfidence } from "@/lib/ocr-confidence";
 
 export const Route = createFileRoute("/nurse/digitize")({
   component: Digitize,
@@ -40,6 +41,7 @@ function Digitize() {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<DigitizedPatientData | null>(null);
   const [confidence, setConfidence] = useState<number | null>(null);
+  const reading = describeOcrConfidence(confidence);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -120,11 +122,16 @@ function Digitize() {
       setResult(withDobFromId(data));
     } catch (err) {
       if (cancelledRef.current) return;
-      console.error("Gemini extraction failed:", err);
+      // The technical cause goes to the console only. What the nurse sees is a
+      // plain instruction: no service names, status codes or scores.
+      console.error(
+        "Scan reading failed:",
+        err instanceof ScanReadError ? err.detail : err,
+      );
       toast.error(
-        err instanceof Error
+        err instanceof ScanReadError
           ? err.message
-          : "Extraction failed — try a clearer photo",
+          : "Couldn't read this scan clearly — try retaking the photo.",
       );
       setPreview(null);
     } finally {
@@ -279,21 +286,41 @@ function Digitize() {
           <h3 className="font-semibold mb-1">
             Extracted Data{" "}
             {confidence != null && (
-              <span className="text-sm font-normal text-muted-foreground">
-                ({confidence}% confidence)
+              <span
+                title={reading.detail}
+                className={`ml-1 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 align-middle text-xs font-normal ${
+                  reading.level === "clear"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    : reading.level === "poor"
+                      ? "border-red-200 bg-red-50 text-red-900"
+                      : "border-amber-200 bg-amber-50 text-amber-900"
+                }`}
+              >
+                <span
+                  aria-hidden
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    reading.level === "clear"
+                      ? "bg-emerald-500"
+                      : reading.level === "poor"
+                        ? "bg-red-500"
+                        : "bg-amber-500"
+                  }`}
+                />
+                Scan quality: {reading.label}
               </span>
             )}
           </h3>
           {result && (
             <p
               className={`text-xs mb-4 ${
-                confidence != null && confidence < 85
+                confidence != null && reading.needsExtraCare
                   ? "text-amber-600"
                   : "text-muted-foreground"
               }`}
             >
-              Always double-check every field against the original file before
-              saving — especially names and ID numbers.
+              {reading.needsExtraCare
+                ? "Take extra care: check every field against the original file before saving — especially names and ID numbers."
+                : "Always double-check every field against the original file before saving — especially names and ID numbers. A clear reading can still contain mistakes."}
             </p>
           )}
           {result ? (

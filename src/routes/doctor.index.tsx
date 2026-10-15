@@ -1,6 +1,9 @@
-﻿import { createFileRoute, Link } from "@tanstack/react-router";
+﻿import type { ReactNode } from "react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell, StatusBadge } from "@/components/AppShell";
 import { useDoctorDashboard } from "@/lib/doctor-service";
+import { statusEdgeColour } from "@/lib/appointment-status";
 import { FileText, CalendarPlus, CalendarDays } from "lucide-react";
 
 export const Route = createFileRoute("/doctor/")({
@@ -22,7 +25,13 @@ function DoctorDashboard() {
         <Stat
           label="APPOINTMENTS"
           value={data ? String(data.stats.dayTotal) : "—"}
-          sub={data ? `${data.stats.dayCompleted} completed` : "loading…"}
+          sub={
+            data ? (
+              `${data.stats.dayCompleted} completed`
+            ) : (
+              <Loading label="Loading" size={11} />
+            )
+          }
         />
         <Stat
           label="PATIENTS THIS WEEK"
@@ -50,7 +59,7 @@ function DoctorDashboard() {
           <div className="space-y-2">
             {loading && (
               <p className="text-sm text-muted-foreground py-6 text-center">
-                Loading schedule…
+                <Loading label="Loading schedule" />
               </p>
             )}
             {error && (
@@ -61,15 +70,8 @@ function DoctorDashboard() {
             {data?.schedule.map((a) => (
               <div
                 key={a.docId}
-                className="flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2"
-                style={{
-                  borderColor:
-                    a.status === "Complete" || a.status === "In-progress"
-                      ? "oklch(0.6 0.15 160)"
-                      : a.status === "No-show"
-                        ? "oklch(0.55 0.22 25)"
-                        : "oklch(0.75 0.15 70)",
-                }}
+                className={`flex items-center gap-4 p-3 hover:bg-secondary/50 rounded-md border-l-2 ${a.status === "Cancelled" ? "opacity-60" : ""}`}
+                style={{ borderColor: statusEdgeColour(a.status) }}
               >
                 <div className="font-mono text-sm font-semibold w-12">
                   {a.time}
@@ -142,7 +144,7 @@ function Stat({
 }: {
   label: string;
   value: string;
-  sub: string;
+  sub: ReactNode;
 }) {
   return (
     <div className="bg-white rounded-xl border p-5">

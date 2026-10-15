@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -153,94 +154,98 @@ function SuperFacilities() {
             />
           </div>
           <span className="text-xs text-muted-foreground ml-auto">
-            {isLoading
-              ? "Loading..."
-              : q
-                ? `${filteredActive.length} of ${active.length}`
-                : `${active.length} live`}
+            {isLoading ? (
+              <Loading label="Loading" size={12} />
+            ) : q ? (
+              `${filteredActive.length} of ${active.length}`
+            ) : (
+              `${active.length} live`
+            )}
           </span>
         </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-muted-foreground border-b">
-              <th className="px-5 py-3 font-medium">Clinic</th>
-              <th className="px-5 py-3 font-medium">Type</th>
-              <th className="px-5 py-3 font-medium">Clinic ID</th>
-              <th className="px-5 py-3" />
-            </tr>
-          </thead>
-          <tbody>
-            {filteredActive.map((c) => {
-              const admins = users.filter(
-                (u) => u.role === "admin" && u.clinicId === c.clinicId,
-              );
-              return (
-                <tr key={c.clinicId} className="border-b last:border-0">
-                  <td className="px-5 py-3 font-medium">
-                    {c.clinicName}
-                    <div className="text-[11px] text-muted-foreground mt-1 space-y-0.5">
-                      {admins.length === 0 && <div>No admin assigned</div>}
-                      {admins.map((a) => (
-                        <div
-                          key={a.username}
-                          className="flex items-center gap-1.5"
-                        >
-                          <span>Admin: {a.fullName ?? a.username}</span>
-                          {!a.builtin && (
-                            <button
-                              onClick={() =>
-                                setAdminToRemove({
-                                  username: a.username,
-                                  label: a.fullName ?? a.username,
-                                  clinicName: c.clinicName,
-                                })
-                              }
-                              className="text-destructive hover:bg-destructive/10 p-0.5 rounded"
-                              aria-label={`Remove admin ${a.fullName ?? a.username}`}
-                            >
-                              <Trash2 size={11} />
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-5 py-3 capitalize">{c.type}</td>
-                  <td className="px-5 py-3 text-muted-foreground">
-                    {c.clinicId}
-                  </td>
-                  <td className="px-5 py-3 text-right space-x-1">
-                    <button
-                      onClick={() => setAssign({ open: true, clinic: c })}
-                      className="text-xs border px-2 py-1 rounded hover:bg-secondary inline-flex items-center gap-1"
-                    >
-                      <ShieldCheck size={12} /> Assign Admin
-                    </button>
-                    <button
-                      onClick={() => openStatusChange(c, "deactivated")}
-                      disabled={changeStatus.isPending}
-                      className="text-xs text-destructive border border-destructive/30 px-2 py-1 rounded hover:bg-destructive/10 inline-flex items-center gap-1 disabled:opacity-40"
-                    >
-                      <PowerOff size={12} /> Deactivate
-                    </button>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground border-b">
+                <th className="px-5 py-3 font-medium">Clinic</th>
+                <th className="px-5 py-3 font-medium">Type</th>
+                <th className="px-5 py-3 font-medium">Clinic ID</th>
+                <th className="px-5 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {filteredActive.map((c) => {
+                const admins = users.filter(
+                  (u) => u.role === "admin" && u.clinicId === c.clinicId,
+                );
+                return (
+                  <tr key={c.clinicId} className="border-b last:border-0">
+                    <td className="px-5 py-3 font-medium">
+                      {c.clinicName}
+                      <div className="text-[11px] text-muted-foreground mt-1 space-y-0.5">
+                        {admins.length === 0 && <div>No admin assigned</div>}
+                        {admins.map((a) => (
+                          <div
+                            key={a.username}
+                            className="flex items-center gap-1.5"
+                          >
+                            <span>Admin: {a.fullName ?? a.username}</span>
+                            {!a.builtin && (
+                              <button
+                                onClick={() =>
+                                  setAdminToRemove({
+                                    username: a.username,
+                                    label: a.fullName ?? a.username,
+                                    clinicName: c.clinicName,
+                                  })
+                                }
+                                className="text-destructive hover:bg-destructive/10 p-0.5 rounded"
+                                aria-label={`Remove admin ${a.fullName ?? a.username}`}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3 capitalize">{c.type}</td>
+                    <td className="px-5 py-3 text-muted-foreground">
+                      {c.clinicId}
+                    </td>
+                    <td className="px-5 py-3 text-right space-x-1">
+                      <button
+                        onClick={() => setAssign({ open: true, clinic: c })}
+                        className="text-xs border px-2 py-1 rounded hover:bg-secondary inline-flex items-center gap-1"
+                      >
+                        <ShieldCheck size={12} /> Assign Admin
+                      </button>
+                      <button
+                        onClick={() => openStatusChange(c, "deactivated")}
+                        disabled={changeStatus.isPending}
+                        className="text-xs text-destructive border border-destructive/30 px-2 py-1 rounded hover:bg-destructive/10 inline-flex items-center gap-1 disabled:opacity-40"
+                      >
+                        <PowerOff size={12} /> Deactivate
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!isLoading && filteredActive.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={4}
+                    className="px-5 py-8 text-center text-muted-foreground text-sm"
+                  >
+                    {q
+                      ? `No clinics match "${search}".`
+                      : "No active clinics yet."}
                   </td>
                 </tr>
-              );
-            })}
-            {!isLoading && filteredActive.length === 0 && (
-              <tr>
-                <td
-                  colSpan={4}
-                  className="px-5 py-8 text-center text-muted-foreground text-sm"
-                >
-                  {q
-                    ? `No clinics match "${search}".`
-                    : "No active clinics yet."}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {deactivated.length > 0 && (
@@ -252,42 +257,44 @@ function SuperFacilities() {
               Kept on record, with their invoices
             </span>
           </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-muted-foreground border-b">
-                <th className="px-5 py-3 font-medium">Clinic</th>
-                <th className="px-5 py-3 font-medium">Type</th>
-                <th className="px-5 py-3 font-medium">Inactive from</th>
-                <th className="px-5 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {deactivated.map((c) => (
-                <tr key={c.clinicId} className="border-b last:border-0">
-                  <td className="px-5 py-3 font-medium">
-                    {c.clinicName}
-                    <span className="text-muted-foreground font-normal">
-                      {" "}
-                      · ID {c.clinicId}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 capitalize">{c.type}</td>
-                  <td className="px-5 py-3 text-muted-foreground">
-                    {c.deactivatedOn ? formatDate(c.deactivatedOn) : "—"}
-                  </td>
-                  <td className="px-5 py-3 text-right">
-                    <button
-                      onClick={() => openStatusChange(c, "active")}
-                      disabled={changeStatus.isPending}
-                      className="text-xs border px-2 py-1 rounded hover:bg-secondary inline-flex items-center gap-1 disabled:opacity-40"
-                    >
-                      <Power size={12} /> Reactivate
-                    </button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground border-b">
+                  <th className="px-5 py-3 font-medium">Clinic</th>
+                  <th className="px-5 py-3 font-medium">Type</th>
+                  <th className="px-5 py-3 font-medium">Inactive from</th>
+                  <th className="px-5 py-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {deactivated.map((c) => (
+                  <tr key={c.clinicId} className="border-b last:border-0">
+                    <td className="px-5 py-3 font-medium">
+                      {c.clinicName}
+                      <span className="text-muted-foreground font-normal">
+                        {" "}
+                        · ID {c.clinicId}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 capitalize">{c.type}</td>
+                    <td className="px-5 py-3 text-muted-foreground">
+                      {c.deactivatedOn ? formatDate(c.deactivatedOn) : "—"}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => openStatusChange(c, "active")}
+                        disabled={changeStatus.isPending}
+                        className="text-xs border px-2 py-1 rounded hover:bg-secondary inline-flex items-center gap-1 disabled:opacity-40"
+                      >
+                        <Power size={12} /> Reactivate
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

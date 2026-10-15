@@ -1,16 +1,21 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import {
   useClinicForecasts,
   useCurrentPharmacist,
-  saveReorderThreshold,
+  useStockDeliveries,
   FORECAST_STATUS_STYLE,
   FORECAST_STATUS_TEXT,
+  reorderSuggestions,
+  useOpenReorders,
   type MedForecast,
 } from "@/lib/pharmacist-service";
+import { QuickReorderForm } from "@/components/QuickReorder";
+import { useRestockSplit } from "@/lib/restock-split";
+import { ClinicDeliveryDialog } from "@/components/ClinicDeliverySuggestions";
+import { useMemo, useState } from "react";
+import { Truck } from "lucide-react";
 import { useRealActiveClinic } from "@/lib/active-clinic";
-import { toast } from "sonner";
 
 export const Route = createFileRoute("/pharmacist/stock")({ component: Stock });
 
@@ -28,6 +33,39 @@ function Stock() {
   // here; that's how the two pages ended up disagreeing (this page used to
   // show a fake "Avg/day" of threshold/5).
   const { forecasts } = useClinicForecasts(realClinic.activeClinicId);
+  // Medications that are running low and have no order in hand get a Quick
+  // reorder right on their card; ones already ordered say so instead.
+  const { openByInventoryDoc } = useOpenReorders(realClinic.activeClinicId);
+  // A clinic's own line running low is topped up by SENDING the pharmacy's
+  // stock to the clinic; only when nothing here can supply it is it ORDERED from
+  // a supplier. Each low medicine gets one or the other, never both.
+  const { deliveries } = useStockDeliveries(realClinic.activeClinicId);
+  const onTheWay = useMemo(
+    () =>
+      deliveries
+        .filter((d) => d.status === "Pending")
+        .flatMap((d) => (d.items ?? []).map((i) => i.name)),
+    [deliveries],
+  );
+  const { sendToClinic, sendDocIds, inTransitDocIds } = useRestockSplit(
+    forecasts,
+    realClinic.activeClinicId,
+    onTheWay,
+  );
+  // The delivery dialog is opened right here, from the low card itself, with the
+  // same suggestion the Deliveries page would offer.
+  const [sending, setSending] = useState<string | null>(null);
+  const suggestionFor = (docId: string | undefined) =>
+    docId ? sendToClinic.find((s) => s.forecast.docId === docId) : undefined;
+  const clinicNames = useMemo(
+    () => new Map(realClinic.options.map((o) => [o.clinicId, o.clinicName])),
+    [realClinic.options],
+  );
+  const suggested = new Set(
+    reorderSuggestions(forecasts, openByInventoryDoc)
+      .filter((f) => !f.docId || !sendDocIds.has(f.docId))
+      .map((f) => f.docId),
+  );
 
   const valueColor = (f: MedForecast) =>
     f.status === "critical" || f.onHand <= 0
@@ -51,9 +89,9 @@ function Stock() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
           <p className="text-sm text-muted-foreground">
-            {forecasts.length} medications at{" "}
-            {realClinic.activeClinicName ?? "your clinic"} · live · updates from
-            Deliveries
+            What {realClinic.activeClinicName ?? "your clinic"} has on hand
+            right now, for its own dispensing · {forecasts.length} medications ·
+            live. The pharmacy's own stock is on Deliveries.
           </p>
         </div>
         <button
@@ -70,14 +108,23 @@ function Stock() {
             f.daysRemaining == null
               ? 0
               : Math.min(100, (f.daysRemaining / FULL_BAR_DAYS) * 100);
+          // A low medicine the pharmacy can cover: clicking the card opens the
+          // two-step "send to clinic" flow right here, pre-filled.
+          const restock = suggestionFor(f.docId);
           return (
-            // A <div>, not a <button>: the reorder-level input below has to be
-            // clickable and typeable, and a form control inside a button is
-            // invalid HTML — every click would navigate away mid-edit. The
-            // "Manage in Deliveries" link at the foot keeps the navigation.
+            // A <div>, not a <button>: it holds buttons of its own (Send to
+            // clinic, Order from supplier, Manage in Deliveries), and a button
+            // inside a button is invalid HTML. The card's click is a shortcut
+            // to the same flow the inner button opens, which stays keyboard
+            // reachable.
             <div
               key={f.name}
-              className="text-left bg-white rounded-xl border p-5 hover:border-[oklch(0.55_0.18_245)] hover:shadow-md transition"
+              data-testid="stock-card"
+              data-restockable={restock ? "true" : undefined}
+              onClick={restock ? () => setSending(f.docId ?? null) : undefined}
+              className={`text-left bg-white rounded-xl border p-5 hover:border-[oklch(0.55_0.18_245)] hover:shadow-md transition ${
+                restock ? "cursor-pointer" : ""
+              }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <p className="text-[10px] tracking-wider text-muted-foreground">
@@ -113,9 +160,69 @@ function Stock() {
                   About {f.daysRemaining} days left
                 </p>
               )}
-              <ReorderLevelField forecast={f} />
+              {f.docId && sendDocIds.has(f.docId) && (
+                <div
+                  className="mt-3 rounded-lg border border-[oklch(0.85_0.08_245)] bg-[oklch(0.97_0.03_245)] p-3"
+                  data-testid="restock-from-pharmacy"
+                >
+                  <p className="mb-2 text-[11px] font-medium text-foreground">
+                    {inTransitDocIds.has(f.docId)
+                      ? "Low — a restock is on its way"
+                      : "Low — the pharmacy can restock this clinic"}
+                  </p>
+                  {restock ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSending(f.docId ?? null);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-[oklch(0.18_0.06_260)] px-3 py-1.5 text-xs text-white hover:bg-[oklch(0.25_0.08_260)]"
+                    >
+                      <Truck size={13} /> Send to clinic
+                      <span className="opacity-70">
+                        · suggested {restock.suggestedQty.toLocaleString()}
+                      </span>
+                    </button>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      A delivery from the pharmacy is already on its way.
+                    </p>
+                  )}
+                </div>
+              )}
+              {f.docId && suggested.has(f.docId) && (
+                <div
+                  className={`mt-3 rounded-lg border p-3 ${
+                    f.status === "critical"
+                      ? "border-red-200 bg-red-50"
+                      : "border-amber-200 bg-amber-50"
+                  }`}
+                >
+                  <p className="mb-2 text-[11px] font-medium text-foreground">
+                    {f.status === "critical"
+                      ? "Order now — nothing here can restock it"
+                      : "Low — nothing here can restock it"}
+                  </p>
+                  <QuickReorderForm
+                    forecast={f}
+                    clinicId={realClinic.activeClinicId}
+                    clinicName={realClinic.activeClinicName}
+                  />
+                </div>
+              )}
+              {f.docId && openByInventoryDoc.has(f.docId) && (
+                <p className="mt-3 rounded-md bg-secondary px-3 py-1.5 text-[11px] text-muted-foreground">
+                  {openByInventoryDoc.get(f.docId)?.kind === "pending"
+                    ? "A reorder request is waiting for a decision (Medication Overview)."
+                    : "Ordered — on its way. Stock goes up when you confirm it arrived, on Deliveries."}
+                </p>
+              )}
               <button
-                onClick={() => navigate({ to: "/pharmacist/deliveries" })}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate({ to: "/pharmacist/deliveries" });
+                }}
                 className="text-[11px] text-[oklch(0.55_0.18_245)] mt-3 hover:underline"
               >
                 Manage in Deliveries →
@@ -124,93 +231,20 @@ function Stock() {
           );
         })}
       </div>
-    </AppShell>
-  );
-}
 
-/**
- * The level at which this medication raises an automatic reorder request.
- *
- * Defaults to the COMPUTED reorder point when nobody has set one, so the box
- * opens on a figure derived from real usage rather than 0 — which would read
- * as "never reorder this" and quietly switch the whole feature off for every
- * medication at a new clinic.
- *
- * Saves on blur rather than behind a per-row Save button: there is one value
- * per card, and a button per card would put twelve of them on screen to no
- * purpose. Nothing is written unless the number actually changed.
- */
-function ReorderLevelField({ forecast }: { forecast: MedForecast }) {
-  const configured = forecast.reorderThreshold;
-  const fallback = forecast.reorderPoint;
-  // What is currently persisted (or the computed suggestion when nothing is).
-  const savedValue = configured ?? fallback;
-
-  // `null` means "not being edited" — the box then shows savedValue live.
-  //
-  // This is NOT seeded into useState from savedValue, which would be a real
-  // bug: the computed reorder point starts at 0 and rises once usage history
-  // loads, so a seeded box would still read 0 afterwards, and blurring it
-  // would save 0 — silently switching auto-reorder off for that medication.
-  // Holding the draft separately means the field tracks the live figure until
-  // somebody actually types in it.
-  const [draft, setDraft] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const shown = draft ?? String(savedValue);
-
-  const commit = async () => {
-    if (!forecast.docId || draft === null) return;
-    const next = Number(draft);
-    if (!Number.isFinite(next) || next < 0) {
-      setDraft(null); // put the box back rather than saving junk
-      return;
-    }
-    const rounded = Math.floor(next);
-    if (rounded === savedValue) {
-      setDraft(null);
-      return;
-    }
-    setSaving(true);
-    try {
-      await saveReorderThreshold(forecast.docId, rounded);
-      toast.success(`${forecast.name}: reorder level set to ${rounded} units`);
-      // Back to tracking the saved value, which the live inventory
-      // subscription is about to deliver.
-      setDraft(null);
-    } catch (err) {
-      setDraft(null);
-      toast.error(
-        err instanceof Error ? err.message : "Could not save the reorder level",
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!forecast.docId) return null;
-
-  return (
-    <div className="mt-3 pt-3 border-t">
-      <label className="text-[10px] tracking-wider text-muted-foreground block mb-1">
-        REORDER LEVEL
-      </label>
-      <div className="flex items-center gap-2">
-        <input
-          type="number"
-          min={0}
-          value={shown}
-          disabled={saving}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          className="w-24 border rounded px-2 py-1 text-sm disabled:opacity-50"
+      {/* The same two-step flow as the Suggested zone on Deliveries. */}
+      {sendToClinic.map((sg) => (
+        <ClinicDeliveryDialog
+          key={sg.forecast.docId}
+          open={sending === sg.forecast.docId}
+          onClose={() => setSending(null)}
+          suggestion={sg}
+          clinicId={realClinic.activeClinicId!}
+          clinicName={realClinic.activeClinicName}
+          pharmacistId={pharmacist?.pharmacistId}
+          clinicNames={clinicNames}
         />
-        <span className="text-[11px] text-muted-foreground">
-          {configured == null ? "suggested — not set yet" : "units"}
-        </span>
-      </div>
-      <p className="text-[11px] text-muted-foreground mt-1">
-        Raises a reorder request when stock falls to this.
-      </p>
-    </div>
+      ))}
+    </AppShell>
   );
 }

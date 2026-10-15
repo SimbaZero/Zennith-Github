@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
@@ -13,7 +13,11 @@ import {
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import type { AppointmentStatus } from "@/components/AppShell";
+import { toBadgeStatus } from "@/lib/appointment-status";
 import { registerSessionCache } from "@/lib/session-caches";
+import { isStablePatient } from "@/lib/stable-patient";
+import { useRealActiveClinic } from "@/lib/active-clinic";
+import { sameClinicId } from "@/lib/clinic-id";
 
 // ---------------------------------------------------------------------------
 // AUTH RACE FIX
@@ -50,8 +54,8 @@ export function waitForAuthReady(): Promise<User | null> {
 export interface CurrentDoctor {
   doctorId: string; // e.g. "Doc-1"
   userId?: number;
-  clinicId?: number; // currently-active clinic — first entry of clinicIds, for now
-  clinicIds?: number[]; // NEW — every clinic this doctor belongs to
+  clinicId?: number; // home clinic: the first entry of clinicIds
+  clinicIds?: number[]; // every clinic this doctor works at
   clinicName?: string;
   fullName: string;
   email?: string;
@@ -120,8 +124,9 @@ async function buildCurrentDoctor(
     : doctorData.clinicId != null
       ? [doctorData.clinicId]
       : [];
-  // No switcher UI yet — "active" clinic is just the first one in the
-  // list, so behavior is identical to before this edit.
+  // This is the doctor's HOME clinic (first in the list). Which clinic they
+  // are working at right now is the header switcher's choice - read it with
+  // useRealActiveClinic(doctor.clinicIds, "doctor") or useDoctorScopeClinic.
   const activeClinicId = clinicIds[0];
 
   let clinicName: string | undefined;
@@ -230,16 +235,12 @@ export interface DoctorAppointment {
   patientId: string;
   patientName: string;
   condition: string;
+  /** The patient's clinic, as stored; absent on older appointments. */
+  clinicId?: number | string | null;
 }
 
-export function toBadgeStatus(s: string): AppointmentStatus {
-  const v = (s ?? "").toLowerCase();
-  if (v.startsWith("complet")) return "Complete";
-  if (v.includes("progress")) return "In-progress";
-  if (v.includes("no-show") || v.includes("no show") || v.includes("cancel"))
-    return "No-show";
-  return "Incomplete";
-}
+// The label mapping is shared with clinic-data.ts - see appointment-status.ts.
+export { toBadgeStatus };
 
 // A patient's name and condition CAN change — reception renames a patient, a
 // nurse updates the condition — so a looked-up value is only trusted for a
@@ -263,22 +264,32 @@ export async function resolvePatientNames(
   });
   await Promise.all(
     unique.map(async (pid) => {
-      const pSnap = await getDoc(doc(db, "patients", pid));
-      if (!pSnap.exists()) {
-        patientNameCache.set(pid, { name: pid, condition: "", at: Date.now() });
-        return;
+      // One patient's lookup failing must not take the rest down with it: it is
+      // simply left uncached (shown by id, retried on the next update).
+      try {
+        const pSnap = await getDoc(doc(db, "patients", pid));
+        if (!pSnap.exists()) {
+          patientNameCache.set(pid, {
+            name: pid,
+            condition: "",
+            at: Date.now(),
+          });
+          return;
+        }
+        const p = pSnap.data();
+        const uSnap =
+          p.userId != null
+            ? await getDoc(doc(db, "users", String(p.userId)))
+            : null;
+        const u = uSnap?.exists() ? uSnap.data() : {};
+        patientNameCache.set(pid, {
+          name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
+          condition: p.chronicCondition ?? "",
+          at: Date.now(),
+        });
+      } catch (err) {
+        console.error(`Couldn't look up patient ${pid}:`, err);
       }
-      const p = pSnap.data();
-      const uSnap =
-        p.userId != null
-          ? await getDoc(doc(db, "users", String(p.userId)))
-          : null;
-      const u = uSnap?.exists() ? uSnap.data() : {};
-      patientNameCache.set(pid, {
-        name: [u.names, u.surname].filter(Boolean).join(" ") || pid,
-        condition: p.chronicCondition ?? "",
-        at: Date.now(),
-      });
     }),
   );
   return patientNameCache;
@@ -289,13 +300,26 @@ export async function resolvePatientNames(
  * joined in client-side (Firestore can't join across collections) and kept
  * up to date whenever the appointment list changes.
  */
-export function useDoctorAppointments(doctorId: string | undefined): {
+export function useDoctorAppointments(
+  doctorId: string | undefined,
+  /**
+   * Show only appointments at this clinic. Pass it for a doctor who works at
+   * several clinics (see useDoctorScopeClinic); leave it out to see everything.
+   * An appointment that carries no clinic can't be placed, so it stays visible.
+   */
+  clinicId?: number,
+): {
   appointments: DoctorAppointment[];
   loading: boolean;
 } {
   const [appointments, setAppointments] = useState<DoctorAppointment[]>([]);
   const [loading, setLoading] = useState(true);
   const namesReady = useRef(false);
+  // Looking up patient names is async, so an older snapshot can finish AFTER a
+  // newer one. Only the newest snapshot's result may be shown - otherwise a
+  // patient's confirmation could appear and then be wiped by a slower, staler
+  // update arriving behind it.
+  const latest = useRef(0);
 
   useEffect(() => {
     if (!doctorId) return;
@@ -308,6 +332,7 @@ export function useDoctorAppointments(doctorId: string | undefined): {
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
+        const mine = ++latest.current;
         const raw = snapshot.docs.map((d) => {
           const a = d.data();
           const dt = new Date(a.appointDateTime);
@@ -320,18 +345,38 @@ export function useDoctorAppointments(doctorId: string | undefined): {
             rawStatus: a.status ?? "",
             status: toBadgeStatus(a.status ?? ""),
             patientId: a.patientId ?? "",
+            clinicId: a.clinicId as number | string | null | undefined,
           };
         });
 
-        const names = await resolvePatientNames(raw.map((a) => a.patientId));
+        // A failed name lookup must never stop the list updating: if it threw
+        // here, a newer snapshot (say, a patient confirming) would be dropped
+        // along with the stale one. Fall back to showing patient ids.
+        let names: Map<string, { name: string; condition: string }>;
+        try {
+          names = await resolvePatientNames(raw.map((a) => a.patientId));
+        } catch (err) {
+          console.error("Couldn't look up patient names:", err);
+          names = new Map();
+        }
         const withNames: DoctorAppointment[] = raw
           .map((a) => ({
             ...a,
             patientName: names.get(a.patientId)?.name ?? a.patientId,
             condition: names.get(a.patientId)?.condition ?? "",
           }))
-          .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+          // By day and time, with cancelled appointments last within their day:
+          // they're no longer going to happen, so they shouldn't sit between
+          // the ones that are.
+          .sort(
+            (a, b) =>
+              a.date.localeCompare(b.date) ||
+              Number(a.status === "Cancelled") -
+                Number(b.status === "Cancelled") ||
+              a.time.localeCompare(b.time),
+          );
 
+        if (mine !== latest.current) return; // a newer snapshot has arrived
         namesReady.current = true;
         setAppointments(withNames);
         setLoading(false);
@@ -345,7 +390,31 @@ export function useDoctorAppointments(doctorId: string | undefined): {
     return () => unsubscribe();
   }, [doctorId]);
 
-  return { appointments, loading };
+  const visible = useMemo(
+    () =>
+      clinicId == null
+        ? appointments
+        : appointments.filter(
+            (a) => a.clinicId == null || sameClinicId(a.clinicId, clinicId),
+          ),
+    [appointments, clinicId],
+  );
+
+  return { appointments: visible, loading };
+}
+
+/**
+ * The clinic to scope a doctor's lists to: the one chosen in the header
+ * switcher, but only for a doctor who works at more than one. A doctor with a
+ * single clinic sees everything addressed to them, exactly as before.
+ */
+export function useDoctorScopeClinic(
+  doctor: { clinicIds?: number[] } | null | undefined,
+): number | undefined {
+  const { activeClinicId } = useRealActiveClinic(doctor?.clinicIds, "doctor");
+  return doctor && (doctor.clinicIds?.length ?? 0) > 1
+    ? activeClinicId
+    : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -372,8 +441,10 @@ export function useDoctorDashboard(): {
   error: string | null;
 } {
   const { doctor, loading: doctorLoading, error } = useCurrentDoctor();
+  const scopeClinic = useDoctorScopeClinic(doctor);
   const { appointments, loading: apptsLoading } = useDoctorAppointments(
     doctor?.doctorId,
+    scopeClinic,
   );
 
   const loading = doctorLoading || (!!doctor && apptsLoading);
@@ -492,8 +563,10 @@ export function useDoctorWeekSchedule(): {
   error: string | null;
 } {
   const { doctor, loading: doctorLoading, error } = useCurrentDoctor();
+  const scopeClinic = useDoctorScopeClinic(doctor);
   const { appointments, loading: apptsLoading } = useDoctorAppointments(
     doctor?.doctorId,
+    scopeClinic,
   );
   const now = useMinuteTick();
 
@@ -722,7 +795,9 @@ const SEARCH_RESULT_CAP = 100; // max patients kept per search
 
 function nameVariants(term: string): string[] {
   const cap = term.charAt(0).toUpperCase() + term.slice(1).toLowerCase();
-  return Array.from(new Set([term, term.toLowerCase(), cap, term.toUpperCase()]));
+  return Array.from(
+    new Set([term, term.toLowerCase(), cap, term.toUpperCase()]),
+  );
 }
 
 async function searchPatientsByName(
@@ -751,7 +826,8 @@ async function searchPatientsByName(
   }
   const userIds = new Set<string>();
   for (const s of settled) {
-    if (s.status === "fulfilled") s.value.docs.forEach((d) => userIds.add(d.id));
+    if (s.status === "fulfilled")
+      s.value.docs.forEach((d) => userIds.add(d.id));
   }
 
   // 2. Which of those users are patients at this clinic. patients.userId may
@@ -767,7 +843,11 @@ async function searchPatientsByName(
       const base = collection(db, "patients");
       return getDocs(
         clinicId != null
-          ? query(base, where("clinicId", "==", clinicId), where("userId", "in", values))
+          ? query(
+              base,
+              where("clinicId", "==", clinicId),
+              where("userId", "in", values),
+            )
           : query(base, where("userId", "in", values)),
       );
     }),
@@ -777,7 +857,9 @@ async function searchPatientsByName(
   const docs = patientSnaps
     .flatMap((s) => s.docs)
     .filter((d) => (seen.has(d.id) ? false : (seen.add(d.id), true)));
-  const rows = await Promise.all(docs.map((d) => enrichPatient(d.id, d.data())));
+  const rows = await Promise.all(
+    docs.map((d) => enrichPatient(d.id, d.data())),
+  );
 
   // 3. Every typed word must appear in the full name ("thabo nk" works).
   return rows
@@ -827,7 +909,11 @@ export function usePatientFiles(
             orderBy("userId"),
             limit(limitCount),
           )
-        : query(collection(db, "patients"), orderBy("userId"), limit(limitCount));
+        : query(
+            collection(db, "patients"),
+            orderBy("userId"),
+            limit(limitCount),
+          );
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
@@ -1128,7 +1214,7 @@ export function usePatientRecord(pid: string | undefined): {
         ? `${(nextAppt.appointDateTime ?? "").slice(0, 10)} · ${nextAppt.appointType ?? ""}`
         : "None scheduled",
       history: history.map(({ id, description }) => ({ id, description })),
-      fastLane: p.fastLane === true,
+      stablePatient: isStablePatient(p),
     });
     setLoading(false);
   }, [pid, patientBase, userData, mrData, history, nextAppt]);

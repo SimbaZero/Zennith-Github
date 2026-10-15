@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ShieldCheck, AlertTriangle, Check } from "lucide-react";
@@ -124,7 +125,9 @@ function PatientPrivacy() {
             </p>
           </div>
           {loading ? (
-            <p className="p-5 text-sm text-muted-foreground">Loading…</p>
+            <p className="p-5 text-sm text-muted-foreground">
+              <Loading label="Loading your settings" />
+            </p>
           ) : (
             <ul className="divide-y">
               {FIELDS.map((f) => (
@@ -190,7 +193,7 @@ function PatientPrivacy() {
           {step === 1 && (
             <div className="mt-4 space-y-3">
               <label className="text-sm font-medium block">
-                Why are you leaving? (optional)
+                Why are you deactivating? (optional)
               </label>
               <input
                 value={reason}
@@ -198,6 +201,18 @@ function PatientPrivacy() {
                 placeholder="Helps your clinic understand — not required"
                 className="w-full border rounded-md px-3 py-2 text-sm"
               />
+              {/* Said right where the question is asked, because "deactivate"
+                  is easily read as "delete". It is not: the record stays. */}
+              <p
+                role="note"
+                className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950"
+              >
+                <strong>Deactivating is not deleting.</strong> Your health
+                record is kept, not erased: clinics are required to retain
+                patient records for a set period for compliance and
+                health-record reasons. Deactivation closes your account; it
+                does not remove what is on file.
+              </p>
               <div className="flex gap-2">
                 <button
                   onClick={() => setStep(0)}
@@ -220,7 +235,9 @@ function PatientPrivacy() {
               <p className="text-sm font-medium">Are you sure?</p>
               <p className="text-xs text-muted-foreground mt-1">
                 Your clinic's administrator will be notified and will contact
-                you. You can keep using your account until they respond.
+                you. You can keep using your account until they respond. Your
+                health record is retained either way — deactivating is not
+                deleting.
               </p>
               <div className="flex gap-2 mt-3">
                 <button

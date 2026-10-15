@@ -1,55 +1,65 @@
 import { useEffect, useState } from "react";
+import { Loading } from "@/components/Loading";
 import { ShieldCheck, ShieldOff } from "lucide-react";
 import { toast } from "sonner";
 import { updatePatient } from "@/lib/clinic-data";
 import { logAction } from "@/lib/audit";
 import { getUsername } from "@/lib/auth";
 import { fetchAdherenceHistory } from "@/lib/patient-service";
-import { FAST_LANE_AUDIT_ACTION, fastLaneChangeLogText } from "@/lib/fast-lane";
+import {
+  STABLE_PATIENT_AUDIT_ACTION,
+  STABLE_PATIENT_DISCLAIMER,
+  STABLE_PATIENT_MEANING,
+  stablePatientChangeLogText,
+} from "@/lib/stable-patient";
 import { summarizeAdherence, type AdherenceSummary } from "@/lib/reminders";
 
 // ---------------------------------------------------------------------------
-// A nurse or doctor's own clinical judgement (see src/lib/fast-lane.ts) —
-// never computed automatically. The dose-taking history is shown as evidence
-// to weigh, not as a score that decides anything by itself; most of it may be
-// the patient's own unwitnessed claim, which is labelled as such.
+// Stable patient (CCMDD-eligible): a nurse or doctor's own clinical judgement
+// (see src/lib/stable-patient.ts) - never computed automatically, and not queue
+// priority. The dose-taking history is shown as evidence to weigh, not as a
+// score that decides anything by itself; most of it may be the patient's own
+// unwitnessed claim, which is labelled as such.
+//
+// Kept deliberately quiet: one small card, with the "internal estimate only"
+// line always visible under the status.
 // ---------------------------------------------------------------------------
 
-export function FastLaneToggle({
+export function StablePatientToggle({
   patientId,
   clinicId,
   prescription,
-  fastLane,
+  stablePatient,
 }: {
   patientId: string;
   clinicId?: number;
   prescription?: string;
-  fastLane: boolean;
+  stablePatient: boolean;
 }) {
-  const [on, setOn] = useState(fastLane);
+  const [on, setOn] = useState(stablePatient);
   const [saving, setSaving] = useState(false);
 
   // The record can change from elsewhere (another tab, a reload of the live
   // listener); stay in sync with what's actually saved.
-  useEffect(() => setOn(fastLane), [fastLane]);
+  useEffect(() => setOn(stablePatient), [stablePatient]);
 
   const toggle = async () => {
     const next = !on;
     setSaving(true);
     try {
       const actor = getUsername() || "staff";
-      await updatePatient(patientId, { fastLane: next });
+      await updatePatient(patientId, { stablePatient: next });
       logAction({
         clinicId: clinicId ?? null,
         actor_id: actor,
-        action_type: FAST_LANE_AUDIT_ACTION,
-        description: fastLaneChangeLogText(patientId, next, actor),
+        action_type: STABLE_PATIENT_AUDIT_ACTION,
+        description: stablePatientChangeLogText(patientId, next, actor),
       });
       setOn(next);
       toast.success(
         next
-          ? `${patientId} marked as Fast Lane`
-          : `${patientId} removed from Fast Lane`,
+          ? `${patientId} marked as a stable patient`
+          : `${patientId} removed from stable patient status`,
       );
     } catch (err) {
       console.error(err);
@@ -74,12 +84,20 @@ export function FastLaneToggle({
           )}
           <div>
             <p className="text-sm font-semibold">
-              Fast Lane {on ? "— On" : "— Off"}
+              {on
+                ? "Stable patient — CCMDD-eligible"
+                : "Not marked as a stable patient"}
             </p>
             <p className="text-xs text-muted-foreground">
               {on
-                ? "This patient may collect repeat medication directly from the pharmacist."
-                : "This patient must queue with a nurse to collect medication."}
+                ? `${STABLE_PATIENT_MEANING} They can also have repeat medication handed over directly by the pharmacist.`
+                : "A nurse or doctor can mark a patient as stable once they judge them stable enough for fewer in-person visits. Until then, medication is collected through a nurse."}
+            </p>
+            <p
+              className="mt-1 text-[11px] italic text-muted-foreground"
+              data-testid="stable-patient-disclaimer"
+            >
+              {STABLE_PATIENT_DISCLAIMER}
             </p>
           </div>
         </div>
@@ -92,7 +110,11 @@ export function FastLaneToggle({
               : "bg-[oklch(0.18_0.06_260)] text-white hover:bg-[oklch(0.25_0.08_260)]"
           }`}
         >
-          {saving ? "Saving…" : on ? "Remove from Fast Lane" : "Mark Fast Lane"}
+          {saving
+            ? "Saving…"
+            : on
+              ? "Remove stable patient status"
+              : "Mark as stable patient"}
         </button>
       </div>
 
@@ -144,7 +166,11 @@ function AdherenceEvidence({
       <p className="text-[11px] tracking-wider text-muted-foreground mb-1">
         DOSE HISTORY — LAST 30 DAYS (EVIDENCE, NOT A SCORE)
       </p>
-      {loading && <p className="text-muted-foreground">Loading…</p>}
+      {loading && (
+        <p className="text-muted-foreground">
+          <Loading label="Loading dose history" />
+        </p>
+      )}
       {!loading && failed && (
         <p className="text-muted-foreground">
           Couldn't load dose history. Try again in a moment.

@@ -13,6 +13,9 @@ import {
   type ReorderRequest,
 } from "@/lib/pharmacist-service";
 import { useRealActiveClinic } from "@/lib/active-clinic";
+import { SuggestedReorders } from "@/components/QuickReorder";
+import { useRestockSplit } from "@/lib/restock-split";
+import { SupplierOrderDialog } from "@/components/SupplierOrderDialog";
 import { toast } from "sonner";
 import {
   LineChart,
@@ -45,6 +48,9 @@ function MedicationOverview() {
   // Same hook as the Stock page, so the two can't disagree — and scoped to
   // the selected clinic, usage included.
   const { forecasts } = useClinicForecasts(realClinic.activeClinicId);
+  // Low here, but the pharmacy's own stock can cover it: that is a send to the
+  // clinic, not an order from a supplier.
+  const restock = useRestockSplit(forecasts, realClinic.activeClinicId);
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState("");
 
@@ -119,7 +125,33 @@ function MedicationOverview() {
           events awaiting a decision. Collapsing the two would lose the
           distinction between "the maths says order this" and "stock crossed
           the line on this date and nobody has acted on it yet". */}
-      <ReorderRequestsPanel clinicId={realClinic.activeClinicId} />
+      {/* Anything running low with no order in hand, with a quantity ready to go.
+          Above the recorded requests: this is what to act on first. */}
+      {restock.sendToClinic.length > 0 && (
+        <p
+          className="mb-4 rounded-lg border border-[oklch(0.85_0.08_245)] bg-[oklch(0.97_0.03_245)] px-4 py-2.5 text-sm"
+          data-testid="restock-note"
+        >
+          {restock.sendToClinic.length} medication
+          {restock.sendToClinic.length === 1 ? " is" : "s are"} low at{" "}
+          {realClinic.activeClinicName ?? "this clinic"} but the pharmacy can
+          supply {restock.sendToClinic.length === 1 ? "it" : "them"}: use{" "}
+          <strong>Send to clinic</strong> on the Deliveries page rather than
+          ordering from a supplier.
+        </p>
+      )}
+      <SuggestedReorders
+        forecasts={forecasts.filter(
+          (f) => !f.docId || !restock.sendDocIds.has(f.docId),
+        )}
+        clinicId={realClinic.activeClinicId}
+        clinicName={realClinic.activeClinicName}
+      />
+
+      <ReorderRequestsPanel
+        clinicId={realClinic.activeClinicId}
+        clinicName={realClinic.activeClinicName}
+      />
 
       {/* Overall consumption */}
       <div className="bg-white rounded-xl border p-5 mb-6">
@@ -176,10 +208,12 @@ function MedicationOverview() {
               <thead className="sticky top-0 bg-white">
                 <tr className="text-left text-xs text-muted-foreground border-b">
                   <th className="px-4 py-2.5 font-medium">Medication</th>
+                  <th className="px-4 py-2.5 font-semibold text-foreground">
+                    Suggested order
+                  </th>
                   <th className="px-4 py-2.5 font-medium">On hand</th>
                   <th className="px-4 py-2.5 font-medium">Per day</th>
                   <th className="px-4 py-2.5 font-medium">Days left</th>
-                  <th className="px-4 py-2.5 font-medium">Order</th>
                   <th className="px-4 py-2.5 font-medium">Status</th>
                 </tr>
               </thead>
@@ -193,6 +227,9 @@ function MedicationOverview() {
                     }`}
                   >
                     <td className="px-4 py-3 font-medium">{f.name}</td>
+                    <td className="px-4 py-3">
+                      <SuggestedOrderBadge forecast={f} />
+                    </td>
                     <td className="px-4 py-3">{f.onHand}</td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {f.avgDailyUse || "—"}
@@ -210,13 +247,6 @@ function MedicationOverview() {
                         >
                           {f.daysRemaining}
                         </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {f.suggestedOrder > 0 ? (
-                        <span className="font-medium">{f.suggestedOrder}</span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -282,6 +312,31 @@ function MedicationOverview() {
                 </ResponsiveContainer>
               )}
 
+              {active.suggestedOrder > 0 && (
+                <div
+                  className={`mt-4 rounded-lg border px-4 py-3 ${
+                    active.status === "critical"
+                      ? "border-red-200 bg-red-50"
+                      : active.status === "reorder"
+                        ? "border-amber-200 bg-amber-50"
+                        : "bg-secondary/40"
+                  }`}
+                >
+                  <p className="text-[11px] tracking-wider text-muted-foreground">
+                    SUGGESTED ORDER
+                  </p>
+                  <p className="text-3xl font-bold leading-tight">
+                    {active.suggestedOrder}{" "}
+                    <span className="text-sm font-normal text-muted-foreground">
+                      units
+                    </span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Covers about 30 days at the current rate.
+                  </p>
+                </div>
+              )}
+
               <dl className="mt-4 pt-4 border-t space-y-2 text-sm">
                 <Row label="On hand" value={String(active.onHand)} />
                 <Row
@@ -292,12 +347,6 @@ function MedicationOverview() {
                   label="Reorder point"
                   value={
                     active.reorderPoint ? String(active.reorderPoint) : "—"
-                  }
-                />
-                <Row
-                  label="Suggested order"
-                  value={
-                    active.suggestedOrder ? String(active.suggestedOrder) : "—"
                   }
                 />
               </dl>
@@ -407,7 +456,13 @@ function Summary({
  * reorder level. Each one is either ordered (recorded, nothing added to
  * stock) or dismissed.
  */
-function ReorderRequestsPanel({ clinicId }: { clinicId: number | undefined }) {
+function ReorderRequestsPanel({
+  clinicId,
+  clinicName,
+}: {
+  clinicId: number | undefined;
+  clinicName?: string;
+}) {
   const { reorders, loading } = usePendingReorders(clinicId);
 
   // Nothing pending is the normal, healthy state — an empty panel every day
@@ -430,40 +485,26 @@ function ReorderRequestsPanel({ clinicId }: { clinicId: number | undefined }) {
       </p>
       <ul className="divide-y">
         {reorders.map((r) => (
-          <ReorderRow key={r.docId} reorder={r} />
+          <ReorderRow key={r.docId} reorder={r} clinicName={clinicName} />
         ))}
       </ul>
     </div>
   );
 }
 
-function ReorderRow({ reorder }: { reorder: ReorderRequest }) {
+function ReorderRow({
+  reorder,
+  clinicName,
+}: {
+  reorder: ReorderRequest;
+  clinicName?: string;
+}) {
   const { pharmacist } = useCurrentPharmacist();
-  // Editable before confirming — the suggested figure is a calculation, and
-  // the pharmacist may know the supplier only sells in boxes of 50, or that
-  // another order is already in transit. Same inline-number pattern as the
-  // delivery confirmation flow.
-  const [qty, setQty] = useState(String(reorder.suggestedQty));
+  const [orderOpen, setOrderOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const actor =
     pharmacist?.fullName || pharmacist?.pharmacistId || "pharmacist";
-  const n = Number(qty);
-  const valid = Number.isInteger(n) && n > 0;
-
-  const confirm = async () => {
-    setBusy(true);
-    try {
-      await confirmReorder(reorder.docId, n, actor);
-      toast.success(`Recorded: ${n} × ${reorder.medName} ordered`);
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not record the order",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const cancel = async () => {
     setBusy(true);
@@ -494,35 +535,62 @@ function ReorderRow({ reorder }: { reorder: ReorderRequest }) {
             : ""}
         </p>
       </div>
-      <div className="flex items-center gap-1.5">
-        <label className="text-[11px] text-muted-foreground">Order</label>
-        <input
-          type="number"
-          min={1}
-          value={qty}
-          disabled={busy}
-          onChange={(e) => setQty(e.target.value)}
-          className={`w-20 border rounded px-2 py-1 text-sm disabled:opacity-50 ${
-            !valid ? "border-red-400 bg-red-50" : ""
-          }`}
-        />
-      </div>
+      <span className="text-[11px] text-muted-foreground">
+        Suggested: {reorder.suggestedQty.toLocaleString()}
+      </span>
       <div className="flex items-center gap-2">
         <button
-          onClick={confirm}
-          disabled={busy || !valid}
+          onClick={() => setOrderOpen(true)}
+          disabled={busy}
           className="inline-flex items-center gap-1.5 bg-[oklch(0.18_0.06_260)] text-white text-xs px-3 py-1.5 rounded-md hover:bg-[oklch(0.25_0.08_260)] disabled:opacity-50"
         >
-          <Check size={13} /> Confirm
+          <Check size={13} /> Order…
         </button>
         <button
           onClick={cancel}
           disabled={busy}
           className="inline-flex items-center gap-1.5 border text-xs px-3 py-1.5 rounded-md hover:bg-secondary disabled:opacity-50"
         >
-          <X size={13} /> Cancel
+          <X size={13} /> Dismiss
         </button>
       </div>
+      <SupplierOrderDialog
+        open={orderOpen}
+        onClose={() => setOrderOpen(false)}
+        medName={reorder.medName}
+        clinicId={reorder.clinicId}
+        clinicName={clinicName}
+        inventoryDocId={reorder.inventoryDocId}
+        currentUnits={reorder.currentUnits}
+        suggestedQty={reorder.suggestedQty}
+      />
     </li>
   );
+}
+
+/**
+ * The suggested order quantity, made the thing the eye lands on: a solid pill
+ * for medications that need ordering now, a tinted one for "soon", and plain
+ * text for the rest (a healthy item's suggestion isn't a call to act).
+ */
+function SuggestedOrderBadge({
+  forecast: f,
+}: {
+  forecast: { suggestedOrder: number; status: string };
+}) {
+  if (!(f.suggestedOrder > 0))
+    return <span className="text-muted-foreground">—</span>;
+  if (f.status === "critical")
+    return (
+      <span className="inline-flex min-w-14 justify-center rounded-md bg-red-600 px-2.5 py-1 text-sm font-bold text-white">
+        {f.suggestedOrder}
+      </span>
+    );
+  if (f.status === "reorder")
+    return (
+      <span className="inline-flex min-w-14 justify-center rounded-md border border-amber-300 bg-amber-100 px-2.5 py-1 text-sm font-bold text-amber-900">
+        {f.suggestedOrder}
+      </span>
+    );
+  return <span className="text-muted-foreground">{f.suggestedOrder}</span>;
 }

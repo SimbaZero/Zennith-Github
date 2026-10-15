@@ -189,13 +189,24 @@ function Login() {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="text-xs tracking-wider text-muted-foreground block mb-1.5 uppercase">
-                  username
+                <label
+                  htmlFor="login-identifier"
+                  className="text-xs tracking-wider text-muted-foreground block mb-1.5 uppercase"
+                >
+                  Username / Email
                 </label>
                 <input
+                  id="login-identifier"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="username"
+                  placeholder="username or email"
+                  // Not type="email": a username isn't an address, and the browser
+                  // would refuse to submit one.
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className="w-full px-3 py-2.5 border rounded-md outline-none focus:ring-2 focus:ring-[oklch(0.55_0.18_245)] transition"
                   required
                 />

@@ -300,6 +300,8 @@ for (const c of CLINICS) {
       appointDateTime: dt(dayOffset, hhmm()),
       appointType: pick(APPT_TYPES),
       clinician: rnd() < 0.5 ? c.nurseId : c.docId,
+      // Reception's appointment list filters on clinicId.
+      clinicId: c.clinicId,
       patientId: patId,
       status: dayOffset < 0 ? pick(["Completed", "No-show"]) : "Scheduled",
     });

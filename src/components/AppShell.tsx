@@ -35,9 +35,13 @@ import {
 } from "lucide-react";
 import { clearAuth, displayNameFor, getUsername, type Role } from "@/lib/auth";
 import { useSignedInName } from "@/lib/signed-in-name";
+import { toast } from "sonner";
+import { Loading } from "@/components/Loading";
+import { useMedicationReminderNotifier } from "@/lib/use-reminder-notifier";
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { waitForPendingWrites } from "firebase/firestore";
-import { db } from "@/firebase";
+import { auth, db } from "@/firebase";
+import { useTabPresence } from "@/lib/tab-presence";
 import { useOnline } from "@/lib/offline";
 import { WifiOff, CloudUpload, CheckCircle2 } from "lucide-react";
 import { getRoleSearchIndex, type SearchEntry } from "@/lib/search-index";
@@ -61,6 +65,8 @@ import { useCurrentNurse } from "@/lib/nurse-service";
 import { resolveCurrentReceptionist } from "@/lib/clinic-data";
 import { useCurrentAdmin } from "@/lib/auth";
 import { jumpToSection } from "@/lib/jump-to-section";
+import { openNotification } from "@/lib/notification-link";
+import { useMyNotifications } from "@/lib/use-my-notifications";
 
 export type NavItem = { to: string; label: string; icon: LucideIcon };
 
@@ -89,9 +95,9 @@ const navByRole: Record<Role, NavItem[]> = {
     { to: "/pharmacist/stock", label: "Stock Levels", icon: Boxes },
     {
       to: "/pharmacist/diagnostics",
-      // Covers both halves of the page: looking a Fast Lane patient's
+      // Covers both halves of the page: looking a stable patient's
       // prescription up, and handing the medication to them directly.
-      label: "Fast Lane Handover",
+      label: "Stable Patient Handover",
       icon: Search,
     },
 
@@ -256,6 +262,13 @@ export function AppShell({
 
   const username = typeof window !== "undefined" ? getUsername() : "";
   const { patient: sidebarPatient } = useCurrentPatient();
+  // Medication reminders fire from here so they reach a patient on any page,
+  // not only while the dashboard is open.
+  useMedicationReminderNotifier(sidebarPatient, role === "patient");
+  // Lets another tab for this account notice this one (see tab-presence.ts), so
+  // a second tab can say "already signed in in another tab" rather than a
+  // connection message that isn't true.
+  useTabPresence(() => auth.currentUser?.uid);
   // Real pharmacist data. clinicIds/fullName are undefined for every other
   // role, so this does no Firestore reads when not relevant.
   const { pharmacist } = useCurrentPharmacist();
@@ -298,7 +311,10 @@ export function AppShell({
   const nameLoading = !nameWaitOver && !resolvedName && profileNameLoading;
   const initial = nameLoading ? "" : display.charAt(0).toUpperCase();
   const canSwitch = !!staffCanSwitch[role];
-  const siteLabel =
+  const clinicLoadingLabel = (
+    <Loading label="Loading clinic" size={11} className="!text-inherit" />
+  );
+  const siteLabel: ReactNode =
     role === "super_admin"
       ? "Zennith Platform · All facilities"
       : role === "patient"
@@ -308,11 +324,11 @@ export function AppShell({
         : role === "pharmacist"
           ? (clinicNameOverride ??
             realPharmacistClinic.activeClinicName ??
-            "Loading clinic…")
+            clinicLoadingLabel)
           : role === "doctor"
             ? (clinicNameOverride ??
               realDoctorClinic.activeClinicName ??
-              "Loading clinic…")
+              clinicLoadingLabel)
             : (clinicNameOverride ?? "Zennith");
 
   return (
@@ -379,7 +395,7 @@ export function AppShell({
       )}
 
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="bg-white border-b px-4 lg:px-6 h-16 flex items-center gap-3 sticky top-0 z-20">
+        <header className="bg-white border-b px-4 lg:px-6 min-h-16 py-2 sm:py-0 sm:h-16 flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-2 sticky top-0 z-20">
           <button
             className="lg:hidden p-2"
             onClick={() => setOpen(true)}
@@ -398,10 +414,12 @@ export function AppShell({
               <ChevronLeft size={20} />
             </button>
           )}
-          <h1 className="font-semibold text-base lg:text-lg truncate">
+          {/* On a phone the title takes whatever width is left and truncates,
+              and the clinic switcher drops to its own row below. */}
+          <h1 className="font-semibold text-base lg:text-lg truncate min-w-0 flex-1 basis-0 sm:flex-none sm:basis-auto">
             {title}
           </h1>
-          <div className="flex-1" />
+          <div className="hidden sm:block flex-1" />
           {role === "patient" && sidebarPatient?.clinicName ? (
             <ClinicChip
               clinicId=""
@@ -419,7 +437,7 @@ export function AppShell({
                 clinicName={
                   clinicNameOverride ??
                   realPharmacistClinic.activeClinicName ??
-                  "Loading clinic…"
+                  clinicLoadingLabel
                 }
                 canSwitch={canSwitch && clinicNameOverride == null}
                 onSwitch={(id) =>
@@ -436,7 +454,7 @@ export function AppShell({
                 clinicName={
                   clinicNameOverride ??
                   realDoctorClinic.activeClinicName ??
-                  "Loading clinic…"
+                  clinicLoadingLabel
                 }
                 canSwitch={canSwitch && clinicNameOverride == null}
                 onSwitch={(id) =>
@@ -574,39 +592,13 @@ function NotificationsButton({ role }: { role: Role }) {
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  // Real for EVERY role now. The notifications collection was always keyed
-  // on the numeric users.userId — which every role has — but only Patients
-  // were ever wired to it; the rest rendered a hardcoded fake list.
-  const { patient } = useCurrentPatient();
-  const { nurse } = useCurrentNurse();
-  const { doctor } = useCurrentDoctor();
-  const { pharmacist } = useCurrentPharmacist();
-  const { data: receptionist } = useQuery({
-    queryKey: ["current-receptionist"],
-    queryFn: resolveCurrentReceptionist,
-    enabled: role === "receptionist",
-  });
-  const { admin } = useCurrentAdmin();
-
-  const userId =
-    role === "patient"
-      ? patient?.userId
-      : role === "nurse"
-        ? nurse?.userId
-        : role === "doctor"
-          ? doctor?.userId
-          : role === "pharmacist"
-            ? pharmacist?.userId
-            : role === "receptionist"
-              ? receptionist?.userId
-              : undefined;
-
-  // Admins are addressed by profile id, everyone else by numeric userId.
-  const byUserId = useNotifications(role === "admin" ? undefined : userId);
-  const byProfile = useNotificationsByProfile(
-    role === "admin" ? admin?.profileId : undefined,
+  // Every role's notifications are real: one collection, addressed by the
+  // numeric userId (or profile id for admins). A reminder the person scheduled
+  // ("remind me in 3 hours") appears here by itself when its time comes; say so
+  // with a toast too, so it's seen.
+  const items = useMyNotifications(role, (n) =>
+    toast(n.title, { description: n.message, duration: 15_000 }),
   );
-  const items = role === "admin" ? byProfile : byUserId;
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -634,7 +626,9 @@ function NotificationsButton({ role }: { role: Role }) {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-80 bg-white border rounded-md shadow-lg z-50">
+        // On a phone the panel is pinned across the screen under the header:
+        // anchored to the bell it would run off the left edge.
+        <div className="fixed left-3 right-3 top-[4.25rem] sm:absolute sm:inset-auto sm:right-0 sm:top-auto sm:mt-1 sm:w-80 bg-white border rounded-md shadow-lg z-50">
           <div className="flex items-center justify-between p-3 border-b">
             <span className="font-semibold text-sm">Notifications</span>
             {unread > 0 && (
@@ -667,21 +661,11 @@ function NotificationsButton({ role }: { role: Role }) {
                   key={n.docId}
                   onClick={() => {
                     if (!n.isRead) markRead(n.docId);
-                    // A notification should be a way IN, not just an
-                    // announcement — jump to where you can act on it.
-                    if (n.link) {
-                      setOpen(false);
-                      // "/page#section" goes to the page AND scrolls to
-                      // (and briefly highlights) that section.
-                      const [path, hash] = n.link.split("#");
-                      (
-                        navigate as unknown as (opts: {
-                          to: string;
-                          hash?: string;
-                        }) => void
-                      )({ to: path, hash: hash || undefined });
-                      if (hash) jumpToSection(hash);
-                    }
+                    setOpen(false);
+                    // A notification is a way IN, not just an announcement:
+                    // go to the thing it is about, or - if it has no page of
+                    // its own - to its detail page.
+                    openNotification(navigate, n);
                   }}
                   className={`w-full text-left p-3 border-b last:border-b-0 hover:bg-secondary/50 ${
                     !n.isRead ? "bg-[oklch(0.97_0.03_245)]" : ""
@@ -704,6 +688,19 @@ function NotificationsButton({ role }: { role: Role }) {
                 </button>
               ))
             )}
+          </div>
+          <div className="border-t p-2">
+            <button
+              className="w-full rounded-md py-1.5 text-center text-xs font-medium text-[oklch(0.4_0.15_245)] hover:bg-secondary"
+              onClick={() => {
+                setOpen(false);
+                (navigate as unknown as (opts: { to: string }) => void)({
+                  to: "/notifications",
+                });
+              }}
+            >
+              View all notifications
+            </button>
           </div>
         </div>
       )}
@@ -729,7 +726,7 @@ function ClinicChip({
   options,
 }: {
   clinicId: string | number;
-  clinicName: string;
+  clinicName: ReactNode;
   canSwitch: boolean;
   onSwitch: (id: string | number) => void;
   options: { id: string | number; name: string; area?: string }[];
@@ -752,13 +749,16 @@ function ClinicChip({
     );
   }
   return (
-    <div className="relative" ref={ref}>
+    <div
+      className="relative order-last basis-full sm:order-none sm:basis-auto"
+      ref={ref}
+    >
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border bg-white hover:bg-secondary/60"
+        className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border bg-white hover:bg-secondary/60 max-w-full"
       >
         <Building2 size={12} />{" "}
-        <span className="font-medium">{clinicName}</span>
+        <span className="font-medium truncate">{clinicName}</span>
         <span className="text-muted-foreground">▾</span>
       </button>
       {open && (
@@ -796,7 +796,8 @@ export type AppointmentStatus =
   | "No-show"
   | "In-progress"
   | "Scheduled"
-  | "Confirmed";
+  | "Confirmed"
+  | "Cancelled";
 export type AnyStatus = StockStatus | AppointmentStatus;
 
 /** Compute status from current units vs threshold:
@@ -821,6 +822,7 @@ export function StatusBadge({ status }: { status: AnyStatus }) {
     "No-show": "bg-[oklch(0.55_0.22_25)] text-white",
     Scheduled: "bg-[oklch(0.94_0.05_245)] text-[oklch(0.4_0.15_245)]",
     Confirmed: "bg-[oklch(0.94_0.08_160)] text-[oklch(0.3_0.15_160)]",
+    Cancelled: "bg-[oklch(0.94_0.08_25)] text-[oklch(0.4_0.2_25)]",
   };
   const labels: Record<AnyStatus, string> = {
     OK: "OK",
@@ -832,6 +834,7 @@ export function StatusBadge({ status }: { status: AnyStatus }) {
     "No-show": "No-show",
     Scheduled: "Scheduled",
     Confirmed: "Confirmed",
+    Cancelled: "Cancelled",
   };
   return (
     <span

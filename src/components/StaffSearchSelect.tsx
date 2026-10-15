@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Spinner } from "@/components/Loading";
 import { useQuery } from "@tanstack/react-query";
 import { fetchClinicStaff } from "@/lib/clinic-data";
 
@@ -161,10 +162,11 @@ export function StaffSearchSelect(props: {
         aria-invalid={pending ? true : undefined}
         autoFocus={props.autoFocus}
         disabled={props.loading}
+        aria-busy={props.loading || undefined}
         value={text}
         placeholder={
           props.loading
-            ? "Loading staff…"
+            ? ""
             : props.error
               ? "Couldn't load staff — try again"
               : (props.placeholder ?? "Search by name or ID…")
@@ -201,6 +203,12 @@ export function StaffSearchSelect(props: {
         }}
         className={`${props.inputClassName ?? DEFAULT_INPUT_CLASS} ${pending ? "border-amber-400" : ""}`}
       />
+      {props.loading && (
+        <Spinner
+          label="Loading staff"
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+        />
+      )}
 
       {showList && (
         <ul

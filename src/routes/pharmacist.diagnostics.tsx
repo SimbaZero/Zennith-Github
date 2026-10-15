@@ -1,4 +1,6 @@
+import { DOSING_PRESETS, MAX_DOSING_NOTE } from "@/lib/dispense-notice";
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { StockFallbackBanner } from "@/components/StockFallbackBanner";
@@ -16,7 +18,9 @@ import {
   HANDOVER_AUDIT_ACTION,
   handoverBlockedReason,
   handoverLogText,
-} from "@/lib/fast-lane";
+  STABLE_PATIENT_DISCLAIMER,
+  STABLE_PATIENT_LABEL,
+} from "@/lib/stable-patient";
 import { toast } from "sonner";
 import {
   Search,
@@ -27,12 +31,18 @@ import {
 } from "lucide-react";
 
 export const Route = createFileRoute("/pharmacist/diagnostics")({
-  component: FastLaneHandover,
+  component: StablePatientHandover,
 });
 
-function FastLaneHandover() {
-  const { patients, loading } = usePatientDirectory();
+function StablePatientHandover() {
   const { pharmacist } = useCurrentPharmacist();
+  const directoryClinic = useRealActiveClinic(
+    pharmacist?.clinicIds,
+    "pharmacist",
+  );
+  const { patients, loading } = usePatientDirectory(
+    directoryClinic.activeClinicId ?? pharmacist?.clinicId,
+  );
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<PatientDirectoryEntry | null>(null);
   const [prescription, setPrescription] = useState<string | null>(null);
@@ -69,7 +79,7 @@ function FastLaneHandover() {
   };
 
   return (
-    <AppShell role="pharmacist" title="Fast Lane Handover">
+    <AppShell role="pharmacist" title="Stable Patient Handover">
       <div className="max-w-2xl mx-auto">
         <div className="bg-white rounded-xl border p-6">
           <div className="flex items-center gap-2 mb-1">
@@ -83,7 +93,7 @@ function FastLaneHandover() {
 
           {loading && (
             <p className="text-sm text-muted-foreground">
-              Loading patient directory...
+              <Loading label="Loading patient directory" />
             </p>
           )}
 
@@ -122,10 +132,10 @@ function FastLaneHandover() {
                 <li key={p.patientId}>
                   <button
                     onClick={() => selectPatient(p)}
-                    className="w-full text-left p-3 hover:bg-secondary/50 flex items-center justify-between"
+                    className="w-full text-left p-3 hover:bg-secondary/50 flex items-center justify-between gap-3"
                   >
-                    <span className="font-medium text-sm">{p.fullName}</span>
-                    <span className="text-xs text-muted-foreground font-mono">
+                    <span className="min-w-0 break-words font-medium text-sm">{p.fullName}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground font-mono">
                       {p.patientId}
                     </span>
                   </button>
@@ -160,34 +170,44 @@ function FastLaneHandover() {
               </div>
               <div className="mt-4 pt-4 border-t">
                 <div
-                  className={`flex items-center gap-2 text-sm font-medium mb-3 ${
-                    selected.fastLane ? "text-green-700" : "text-amber-800"
+                  className={`flex items-center gap-2 text-sm font-medium ${
+                    selected.stablePatient ? "text-green-700" : "text-amber-800"
                   }`}
                 >
-                  {selected.fastLane ? (
+                  {selected.stablePatient ? (
                     <ShieldCheck size={15} />
                   ) : (
                     <ShieldOff size={15} />
                   )}
-                  {selected.fastLane ? "Fast Lane patient" : "Not Fast Lane"}
+                  {selected.stablePatient
+                    ? `${STABLE_PATIENT_LABEL} · CCMDD-eligible`
+                    : `Not marked as a ${STABLE_PATIENT_LABEL.toLowerCase()}`}
                 </div>
+                <p
+                  className="mt-0.5 mb-3 text-[11px] italic text-muted-foreground"
+                  data-testid="stable-patient-disclaimer"
+                >
+                  {STABLE_PATIENT_DISCLAIMER}
+                </p>
 
                 <p className="text-[11px] tracking-wider text-muted-foreground">
                   MEDICATION TO HAND OVER
                 </p>
                 <p className="text-lg font-semibold mt-1">
-                  {prescriptionLoading
-                    ? "Loading..."
-                    : (prescription ?? "No prescription on record")}
+                  {prescriptionLoading ? (
+                    <Loading label="Loading" size={14} />
+                  ) : (
+                    (prescription ?? "No prescription on record")
+                  )}
                 </p>
                 <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1.5">
                   <Info size={12} /> Clinical diagnosis is hidden from
                   pharmacist view.
                 </p>
 
-                {handoverBlockedReason(selected.fastLane) ? (
+                {handoverBlockedReason(selected.stablePatient) ? (
                   <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-3">
-                    {handoverBlockedReason(selected.fastLane)}
+                    {handoverBlockedReason(selected.stablePatient)}
                   </p>
                 ) : handedOver ? (
                   <p className="text-sm text-green-800 mt-3">
@@ -234,6 +254,8 @@ function HandoverPanel({
 
   const [docId, setDocId] = useState("");
   const [qty, setQty] = useState("");
+  // How the patient should take it; sent to them with the confirmation.
+  const [dosingNote, setDosingNote] = useState("");
   const [busy, setBusy] = useState(false);
 
   // Stock lines that match the prescription. The pharmacist picks one when
@@ -287,6 +309,7 @@ function HandoverPanel({
         pharmacistId: pharmacist.pharmacistId,
         pharmacistName: actor,
         medicalRecordNo: patient.medicalRecordNo,
+        dosingNote: dosingNote.trim() || undefined,
       });
       logAction({
         clinicId,
@@ -358,6 +381,38 @@ function HandoverPanel({
               : `${chosen.units} in the pharmacy now.`}
           </p>
         )}
+      </div>
+      <div>
+        <label
+          htmlFor="handover-dosing-note"
+          className="text-[11px] tracking-wider text-muted-foreground block mb-1"
+        >
+          HOW SHOULD THEY TAKE IT? (OPTIONAL — SENT TO THE PATIENT)
+        </label>
+        <input
+          id="handover-dosing-note"
+          value={dosingNote}
+          maxLength={MAX_DOSING_NOTE}
+          onChange={(e) => setDosingNote(e.target.value)}
+          placeholder="e.g. Take in the morning"
+          className="w-full border rounded-md px-3 py-2 text-sm"
+        />
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {DOSING_PRESETS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setDosingNote(p)}
+              className={`rounded-full border px-2.5 py-0.5 text-xs hover:bg-secondary ${
+                dosingNote === p
+                  ? "border-[oklch(0.55_0.18_245)] bg-[oklch(0.96_0.04_245)]"
+                  : ""
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </div>
       <button
         onClick={confirm}

@@ -12,10 +12,12 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as TwoFactorRouteImport } from './routes/two-factor'
 import { Route as SuperAdminRouteImport } from './routes/super-admin'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as SetPasswordRouteImport } from './routes/set-password'
 import { Route as ReceptionistRouteImport } from './routes/receptionist'
 import { Route as PharmacistRouteImport } from './routes/pharmacist'
 import { Route as PatientRouteImport } from './routes/patient'
 import { Route as NurseRouteImport } from './routes/nurse'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as DoctorRouteImport } from './routes/doctor'
@@ -77,6 +79,11 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SetPasswordRoute = SetPasswordRouteImport.update({
+  id: '/set-password',
+  path: '/set-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ReceptionistRoute = ReceptionistRouteImport.update({
   id: '/receptionist',
   path: '/receptionist',
@@ -95,6 +102,11 @@ const PatientRoute = PatientRouteImport.update({
 const NurseRoute = NurseRouteImport.update({
   id: '/nurse',
   path: '/nurse',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -333,10 +345,12 @@ export interface FileRoutesByFullPath {
   '/doctor': typeof DoctorRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/nurse': typeof NurseRouteWithChildren
   '/patient': typeof PatientRouteWithChildren
   '/pharmacist': typeof PharmacistRouteWithChildren
   '/receptionist': typeof ReceptionistRouteWithChildren
+  '/set-password': typeof SetPasswordRoute
   '/signup': typeof SignupRoute
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
@@ -385,6 +399,8 @@ export interface FileRoutesByTo {
   '/clinic-signup': typeof ClinicSignupRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
+  '/set-password': typeof SetPasswordRoute
   '/signup': typeof SignupRoute
   '/two-factor': typeof TwoFactorRoute
   '/admin/audit': typeof AdminAuditRoute
@@ -435,10 +451,12 @@ export interface FileRoutesById {
   '/doctor': typeof DoctorRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/nurse': typeof NurseRouteWithChildren
   '/patient': typeof PatientRouteWithChildren
   '/pharmacist': typeof PharmacistRouteWithChildren
   '/receptionist': typeof ReceptionistRouteWithChildren
+  '/set-password': typeof SetPasswordRoute
   '/signup': typeof SignupRoute
   '/super-admin': typeof SuperAdminRouteWithChildren
   '/two-factor': typeof TwoFactorRoute
@@ -491,10 +509,12 @@ export interface FileRouteTypes {
     | '/doctor'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
     | '/nurse'
     | '/patient'
     | '/pharmacist'
     | '/receptionist'
+    | '/set-password'
     | '/signup'
     | '/super-admin'
     | '/two-factor'
@@ -543,6 +563,8 @@ export interface FileRouteTypes {
     | '/clinic-signup'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
+    | '/set-password'
     | '/signup'
     | '/two-factor'
     | '/admin/audit'
@@ -592,10 +614,12 @@ export interface FileRouteTypes {
     | '/doctor'
     | '/forgot-password'
     | '/login'
+    | '/notifications'
     | '/nurse'
     | '/patient'
     | '/pharmacist'
     | '/receptionist'
+    | '/set-password'
     | '/signup'
     | '/super-admin'
     | '/two-factor'
@@ -647,10 +671,12 @@ export interface RootRouteChildren {
   DoctorRoute: typeof DoctorRouteWithChildren
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
+  NotificationsRoute: typeof NotificationsRoute
   NurseRoute: typeof NurseRouteWithChildren
   PatientRoute: typeof PatientRouteWithChildren
   PharmacistRoute: typeof PharmacistRouteWithChildren
   ReceptionistRoute: typeof ReceptionistRouteWithChildren
+  SetPasswordRoute: typeof SetPasswordRoute
   SignupRoute: typeof SignupRoute
   SuperAdminRoute: typeof SuperAdminRouteWithChildren
   TwoFactorRoute: typeof TwoFactorRoute
@@ -679,6 +705,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/set-password': {
+      id: '/set-password'
+      path: '/set-password'
+      fullPath: '/set-password'
+      preLoaderRoute: typeof SetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/receptionist': {
       id: '/receptionist'
       path: '/receptionist'
@@ -705,6 +738,13 @@ declare module '@tanstack/react-router' {
       path: '/nurse'
       fullPath: '/nurse'
       preLoaderRoute: typeof NurseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -1175,10 +1215,12 @@ const rootRouteChildren: RootRouteChildren = {
   DoctorRoute: DoctorRouteWithChildren,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
+  NotificationsRoute: NotificationsRoute,
   NurseRoute: NurseRouteWithChildren,
   PatientRoute: PatientRouteWithChildren,
   PharmacistRoute: PharmacistRouteWithChildren,
   ReceptionistRoute: ReceptionistRouteWithChildren,
+  SetPasswordRoute: SetPasswordRoute,
   SignupRoute: SignupRoute,
   SuperAdminRoute: SuperAdminRouteWithChildren,
   TwoFactorRoute: TwoFactorRoute,

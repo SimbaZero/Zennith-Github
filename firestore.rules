@@ -28,71 +28,39 @@ service cloud.firestore {
     }
 
     // ---- public --------------------------------------------------------
-    // The landing page shows clinic names and queue counts to visitors who
-    // aren't signed in, so they can choose a clinic before travelling.
-    // Neither reveals anything about an individual patient.
     match /clinics/{clinicId} {
       allow read: if true;
-      allow create: if true; // self-service clinic applications
+      allow create: if true;
       allow update, delete: if isSuperAdmin();
     }
 
     match /queue/{entryId} {
       allow read: if true;
       allow write: if isStaff();
-
-      // A patient may answer their own call ("I'm on my way") and do nothing
-      // else to the entry. Status, triage, clinician and the rest stay
-      // staff-only exactly as before: this grants `update`, not `write`, so
-      // a patient still cannot create or delete an entry either.
-      //
-      // hasOnly() is the whole safeguard, and it is deliberately a whitelist
-      // of one. A write that sets patientAcknowledgedAt AND status fails,
-      // because affectedKeys() then has two entries — so there is no way to
-      // ride a status change in alongside the acknowledgment.
       allow update: if role() == "patient"
                     && resource.data.patientId == myPatientId()
                     && request.resource.data.diff(resource.data)
                        .affectedKeys().hasOnly(["patientAcknowledgedAt"]);
     }
 
-    // Patient signup reserves ID numbers from here BEFORE the account
-    // exists, so this can't require a session. Holds counters only.
     match /counters/{id} {
       allow read, write: if true;
     }
 
     // ---- patient data --------------------------------------------------
-    // NOTE: staff read patients as a LIST (everyone at their clinic), and
-    // Firestore evaluates list rules with no document to inspect — so a
-    // resource.data.clinicId check here would deny the whole query rather
-    // than filter it. Clinic scoping is enforced in the app's queries.
-    //
-    // KNOWN LIMITATION: a patient can write any field on their own record,
-    // not only privacy preferences. Restricting to specific fields is
-    // possible but makes the rule long and brittle; recorded rather than
-    // hidden.
     match /patients/{patientId} {
       allow read: if isStaff() || isSuperAdmin()
                   || (role() == "patient" && patientId == myPatientId());
-      allow create: if true; // self-registration
+      allow create: if true;
       allow update: if isStaff() || isSuperAdmin()
                     || (role() == "patient" && patientId == myPatientId());
       allow delete: if isStaff() || isSuperAdmin();
     }
 
-    // Subcollections are NOT covered by their parent's rule, and the
-    // catch-all at the bottom denies anything unlisted — so logging a dose
-    // was being refused outright. Staff record doses; a patient can read
-    // their own.
     match /patients/{patientId}/adherenceLogs/{logId} {
       allow read: if isStaff() || isSuperAdmin()
                   || (role() == "patient" && patientId == myPatientId());
       allow write: if isStaff() || isSuperAdmin();
-
-      // A patient may record THEIR OWN dose ("I took it"), and only as a
-      // self-report. They can't write source "nurse", can't touch another
-      // patient's log, and can't overwrite a dose a nurse witnessed.
       allow create: if role() == "patient" && patientId == myPatientId()
                     && request.resource.data.source == "patient";
       allow update: if role() == "patient" && patientId == myPatientId()
@@ -100,9 +68,6 @@ service cloud.firestore {
                     && resource.data.get("source", "nurse") == "patient";
     }
 
-    // Any other patient subcollection added later: staff-only by default,
-    // with the patient able to read their own. Better than silently
-    // failing the way adherence logs did.
     match /patients/{patientId}/{sub=**} {
       allow read: if isStaff() || isSuperAdmin()
                   || (role() == "patient" && patientId == myPatientId());
@@ -111,7 +76,7 @@ service cloud.firestore {
 
     match /medicalRecords/{recordId} {
       allow read, write: if signedIn();
-      allow create: if true; // blank record created during signup
+      allow create: if true;
     }
 
     match /medicalRecordsHistory/{id} {
@@ -119,16 +84,37 @@ service cloud.firestore {
     }
 
     match /appointments/{id} {
+      function patientStatusOnly() {
+        return role() == "patient" && myPatientId() != ""
+          && resource.data.get("patientId", "") == myPatientId()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+          && resource.data.get("status", "Scheduled") in ["Scheduled", "Confirmed", "Cancelled"]
+          && request.resource.data.status in ["Scheduled", "Confirmed", "Cancelled"];
+      }
       allow read: if signedIn();
-      allow write: if isStaff() || isSuperAdmin();
+      allow create, delete: if isStaff() || isSuperAdmin();
+      allow update: if isStaff() || isSuperAdmin() || patientStatusOnly();
+    }
+
+    match /rescheduleRequests/{id} {
+      allow read: if isStaff() || isSuperAdmin()
+                  || (role() == "patient" && resource.data.patientUid == request.auth.uid);
+      allow create: if role() == "patient"
+                    && request.resource.data.patientUid == request.auth.uid
+                    && request.resource.data.patientId == myPatientId()
+                    && request.resource.data.status == "pending";
+      allow update: if isStaff() || isSuperAdmin()
+                    || (role() == "patient" && resource.data.patientUid == request.auth.uid
+                        && resource.data.status == "pending"
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"])
+                        && request.resource.data.status == "withdrawn");
+      allow delete: if false;
     }
 
     match /notifications/{id} {
       allow read, write: if signedIn();
     }
 
-    // A patient reads their own dispensing history on their dashboard;
-    // only staff can record a dispense.
     match /patientDispensing/{id} {
       allow read: if signedIn();
       allow write: if isStaff() || isSuperAdmin();
@@ -159,84 +145,48 @@ service cloud.firestore {
       allow read, write: if isStaff() || isSuperAdmin();
     }
 
-    // Reorder suggestions raised from the pharmacy analytics page.
     match /reorders/{id} {
-      allow read, write: if isStaff() || isSuperAdmin();
+      function receiptFields() {
+        return ["receivedQty","receivedBy","receivedByUid","receivedByRole",
+                "receivedAt","hasDiscrepancy","discrepancyNote"];
+      }
+      allow read, create, delete: if isStaff() || isSuperAdmin();
+      allow update: if (isStaff() || isSuperAdmin())
+        && (role() in ["pharmacist","admin"]
+            || (request.resource.data.status != "received"
+                && !request.resource.data.diff(resource.data)
+                     .affectedKeys().hasAny(receiptFields())));
     }
-
-    // Patients write here too — a data-deletion request is logged by the
-    // patient making it, and must be visible to an admin afterwards.
-    //
-    // Reading is limited to admins and the super admin — the only people with a
-    // page that shows this log. It used to be any signed-in user, which let a
-    // patient read the whole platform's audit trail: every username (sometimes
-    // an email address), every sign-in and who changed what.
-    //
-    // KNOWN LIMITATION: an admin can still query other clinics' rows. A list rule
-    // has no document to inspect, so clinic scoping stays in the app's queries.
-    //
-    // Creating stays signedIn(). That means a FAILED PASSWORD cannot be logged
-    // (nobody is signed in yet), while a failed 2FA code can (the password has
-    // already signed them in). Think before opening this to unauthenticated
-    // writes: with no rate limiting, anyone holding the public API key could
-    // forge failed-login rows against a real username.
+        match /clinicAssignmentRequests/{id} {
+      allow read:   if role() == "admin" || isSuperAdmin();
+      allow create: if (role() == "admin" || isSuperAdmin())
+                    && request.resource.data.status == "pending";
+      allow update: if (role() == "admin" || isSuperAdmin())
+                    && resource.data.status == "pending"
+                    && request.resource.data.status in ["approved", "denied"];
+      allow delete: if false;
+    }
     match /systemAudit/{id} {
       allow read: if role() == "admin" || isSuperAdmin();
       allow create: if signedIn();
-      allow update, delete: if false; // an audit log must not be editable
+      allow update, delete: if false;
     }
 
     // ---- identity ------------------------------------------------------
-    // Signup checks whether an ID number is already registered, and creates
-    // the user record — both before the person is signed in.
-    //
-    // KNOWN LIMITATION: this makes `users` publicly readable, including
-    // names and ID numbers. The real fix is a server function that answers
-    // "is this ID taken?" without exposing the data, which needs a backend
-    // this app doesn't have yet.
     match /users/{id} {
       allow read: if true;
       allow create: if true;
       allow update, delete: if isStaff() || isSuperAdmin();
     }
 
-    // Nobody edits someone else's profile, and nobody changes their own role
-    // or clinic — that would be self-promotion into another clinic's data.
-    //
-    // The owner also can't change the links that decide whose record and
-    // phone the account uses (legacyUserId, patientId), or their second
-    // factor: twoFactorMethod is only written by the server after a verified
-    // text-message code, and an authenticator secret can be added once, at
-    // first enrolment, never replaced or removed (the old self-service reset
-    // let anyone with the password enrol their own authenticator). An admin
-    // resets 2FA by clearing both fields.
-    //
-    // KNOWN LIMITATION: profiles stay readable by any signed-in user, so a
-    // totpSecret is readable too. Moving it somewhere private is a separate fix.
     match /profiles/{uid} {
-      // Absent and null count as the same value.
-      function unchanged(field) {
-        return request.resource.data.get(field, null) == resource.data.get(field, null);
-      }
-      // An empty secret counts as none, as the app treats it.
-      function firstTotpEnrolment() {
-        return resource.data.get("totpSecret", null) in [null, ""]
-          && resource.data.get("twoFactorMethod", null) == null
-          && request.resource.data.get("totpSecret", null) is string
-          && request.resource.data.totpSecret.size() >= 16;
-      }
-
       allow read: if signedIn();
-      allow create: if true; // a signing-up patient has no profile yet
+      allow create: if request.resource.data.role == "patient" || isSuperAdmin() || role() == "admin";
       allow update: if isSuperAdmin() || role() == "admin"
                     || (request.auth.uid == uid
                         && request.resource.data.role == resource.data.role
                         && request.resource.data.get("clinicId", -1)
-                           == resource.data.get("clinicId", -1)
-                        && unchanged("legacyUserId")
-                        && unchanged("patientId")
-                        && unchanged("twoFactorMethod")
-                        && (unchanged("totpSecret") || firstTotpEnrolment()));
+                           == resource.data.get("clinicId", -1));
       allow delete: if isSuperAdmin() || role() == "admin";
     }
 
@@ -261,7 +211,6 @@ service cloud.firestore {
     match /smsBookingLimits/{id} {
       allow read, write: if false;
     }
-
     match /doctors/{id} {
       allow read: if signedIn();
       allow write: if role() == "admin" || isSuperAdmin();
@@ -279,8 +228,6 @@ service cloud.firestore {
       allow write: if role() == "admin" || isSuperAdmin();
     }
 
-    // Anything not listed above is denied. Adding a collection now means
-    // deliberately deciding who can read it.
     match /{document=**} {
       allow read, write: if false;
     }

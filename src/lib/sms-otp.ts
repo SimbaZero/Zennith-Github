@@ -13,6 +13,10 @@ export type SmsCodeFailure =
   | "cooldown"
   | "rate-limited"
   | "send-failed"
+  | "provider-rejected"
+  | "number-rejected"
+  | "limited-to-test-numbers"
+  | "server-error"
   | "expired"
   | "invalid-code"
   | "too-many-attempts"
@@ -20,9 +24,21 @@ export type SmsCodeFailure =
 
 export type SendSmsCodeResult =
   | { ok: true; phoneLast4: string; resendAt: number }
-  | { ok: false; reason: SmsCodeFailure; retryAt?: number; phoneLast4?: string };
+  | {
+      ok: false;
+      reason: SmsCodeFailure;
+      retryAt?: number;
+      phoneLast4?: string;
+    };
 
-export type VerifySmsCodeResult = { ok: true } | { ok: false; reason: SmsCodeFailure; attemptsLeft?: number };
+export type VerifySmsCodeResult =
+  | { ok: true }
+  | { ok: false; reason: SmsCodeFailure; attemptsLeft?: number };
+
+/** Yes or no: which settings are missing is only ever written to the server log. */
+export interface SmsAvailability {
+  available: boolean;
+}
 
 export const sendSmsCode = createServerFn({ method: "POST" })
   .inputValidator((d: { idToken: string }) => d)
@@ -37,3 +53,16 @@ export const verifySmsCode = createServerFn({ method: "POST" })
     const { checkSmsCode } = await import("../server/sms-otp");
     return checkSmsCode(data?.idToken, data?.code);
   });
+
+/** Whether text-message codes can work right now; see smsAvailability on the server. */
+export const getSmsAvailability = createServerFn({ method: "GET" }).handler(
+  async (): Promise<SmsAvailability> => {
+    try {
+      const { smsAvailability } = await import("../server/sms-otp");
+      return { available: smsAvailability().available };
+    } catch (error) {
+      console.error("[sms-otp] availability check failed:", error);
+      return { available: false };
+    }
+  },
+);

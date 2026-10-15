@@ -9,6 +9,7 @@ import {
   fetchTwoFactorProfile,
   saveTotpSecret,
   currentIdToken,
+  rememberTwoFactorMethod,
   type TwoFactorMethod,
   type TwoFactorProfile,
 } from "@/lib/auth";
@@ -19,8 +20,14 @@ import {
   otpauthUrl,
   formatSecret,
 } from "@/lib/totp";
-import { sendSmsCode, verifySmsCode, type SmsCodeFailure } from "@/lib/sms-otp";
+import {
+  getSmsAvailability,
+  sendSmsCode,
+  verifySmsCode,
+  type SmsCodeFailure,
+} from "@/lib/sms-otp";
 import { logAction } from "@/lib/audit";
+import { getDemoMode } from "@/lib/demo-mode";
 
 export const Route = createFileRoute("/two-factor")({
   // Only the username travels in the URL, for display and the authenticator
@@ -35,57 +42,36 @@ export const Route = createFileRoute("/two-factor")({
 const EMPTY = ["", "", "", "", "", ""];
 
 // ---------------------------------------------------------------------------
-// DEVELOPER SHORTCUT — local testing only.
+// DEMO MODE - for presentations.
 //
-// When VITE_DEV_2FA_BYPASS is "true", this screen shows a "Skip (dev only)"
-// button that signs in without a code. It skips only this client-side step: the
-// password has already been verified by Firebase Auth, the role and facility
-// still come from the signed-in user's own profile, and nothing in
-// firestore.rules or on the server is relaxed.
+// When the server's DEMO_MODE environment variable is exactly "true", this screen
+// shows a "Skip (demo mode)" button that signs in without a code. It skips only
+// this client-side step: the password has already been verified by Firebase
+// Auth, the role and facility still come from the signed-in user's own profile,
+// and nothing in firestore.rules or on the server is relaxed.
 //
-// It is never silent: a bypass is logged as auth.login_dev_bypass (deliberately
-// not auth.login_success), and a red banner is shown for as long as it's active.
+// Off by default and absent when off: no button, no banner, and 2FA behaves
+// exactly as it always does. The flag is read from the SERVER at run time (see
+// src/lib/demo-mode.ts), not baked into the bundle, so a production build can't
+// carry it - and the button asks again when pressed, so it stops working the
+// moment the flag is cleared. NEVER set DEMO_MODE in production.
 //
-// The variable is read at BUILD time, and Vite reads .env for production builds
-// too — so a .env on the machine that builds the deployed bundle would bake it
-// in. To make that harmless, the bypass is also refused unless the page is being
-// served from this machine or a private network address. A deployed site is
-// never on one, so a flag that slips into a production build does nothing there.
+// It is never silent: a skip is logged as auth.login_dev_bypass (deliberately
+// not auth.login_success, so it can't pass for a normal sign-in in the audit
+// log, where super admins see it flagged), and a banner is shown for as long as
+// the mode is on.
 // ---------------------------------------------------------------------------
-const DEV_2FA_BYPASS_FLAG = import.meta.env.VITE_DEV_2FA_BYPASS === "true";
 
-/** localhost, loopback, *.local, and the private IPv4 ranges (a phone on the LAN). */
-function isLocalAddress(host: string): boolean {
-  const h = host.toLowerCase();
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local"))
-    return true;
-  if (h === "[::1]" || h === "::1") return true;
-  const m = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(h);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return (
-    a === 127 ||
-    a === 10 ||
-    (a === 192 && b === 168) ||
-    (a === 172 && b >= 16 && b <= 31)
-  );
-}
-
-/** Is the bypass on? Decided after mount, since it depends on the address bar. */
-function useDevBypass(): boolean {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    if (!DEV_2FA_BYPASS_FLAG) return;
-    if (isLocalAddress(window.location.hostname)) {
-      setOn(true);
-    } else {
-      console.warn(
-        "VITE_DEV_2FA_BYPASS is set in this build but is being ignored: " +
-          "this page isn't served from a local or private address.",
-      );
-    }
-  }, []);
-  return on;
+/** Is demo mode on? false until the server says so, and false if it can't be asked. */
+function useDemoMode(): boolean {
+  const { data } = useQuery({
+    queryKey: ["demo-mode"],
+    queryFn: () => getDemoMode(),
+    // Settled for the session: it is a deployment setting, not live data.
+    staleTime: Infinity,
+    retry: false,
+  });
+  return data?.enabled === true;
 }
 
 const PRIMARY_BUTTON =
@@ -107,11 +93,8 @@ function TwoFactor() {
     // show the wrong method (e.g. the choice screen after enrolling by SMS).
     gcTime: 0,
   });
-  // Patients who haven't enrolled yet pick a method; everyone else uses theirs.
-  const [choice, setChoice] = useState<TwoFactorMethod | null>(null);
-
   // The role and facility come from the profile, never from the URL.
-  const devBypass = useDevBypass();
+  const devBypass = useDemoMode();
   const finish = (p: TwoFactorProfile, opts?: { devBypass?: boolean }) => {
     setAuth(p.role, u, p.facilityId);
     // A completed login: password/SMS code and second factor both accepted —
@@ -132,11 +115,28 @@ function TwoFactor() {
     (navigate as any)({ to: `/${p.role.replace("_", "-")}` });
   };
 
-  const enrolling = !!profile && profile.method === null;
-  // Staff always use the authenticator; only an enrolling patient chooses.
+  // Patients can use a text message or an authenticator app, and choose between
+  // them here. Staff use the authenticator only.
+  const [choice, setChoice] = useState<TwoFactorMethod | null>(null);
+  const isPatient = !!profile?.canUseSms;
+  // Asked up front so "SMS isn't configured" is said before anyone presses a
+  // button, not discovered after.
+  const { data: sms } = useQuery({
+    queryKey: ["sms-availability"],
+    queryFn: () => getSmsAvailability(),
+    enabled: isPatient,
+    staleTime: 60_000,
+    retry: false,
+  });
+  // undefined while that check is still running; the page doesn't wait on it.
+  const smsAvailable: boolean | undefined = sms?.available;
+
   const method: TwoFactorMethod | null = !profile
     ? null
-    : (profile.method ?? (profile.role === "patient" ? choice : "totp"));
+    : isPatient
+      ? (choice ?? profile.method)
+      : "totp";
+  const enrolling = !!profile && method === "totp" && !profile.totpSecret;
 
   const subtitle = isLoading
     ? "Checking your account…"
@@ -159,9 +159,10 @@ function TwoFactor() {
         // error, and should be announced as politely as it looks.
         <div
           role="status"
+          data-testid="demo-mode-banner"
           className="fixed inset-x-0 top-0 z-50 border-b border-amber-200 bg-amber-100 px-4 py-2 text-center text-sm font-medium text-stone-800"
         >
-          Demo mode — skip verification for testing purposes.
+          Demo mode — two-factor verification can be skipped on this screen.
         </div>
       )}
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8 animate-fade-up">
@@ -201,34 +202,76 @@ function TwoFactor() {
             </button>
           </div>
         ) : method === null ? (
-          <MethodChoice onPick={setChoice} />
+          <MethodChoice smsAvailable={smsAvailable} onPick={setChoice} />
         ) : method === "sms" ? (
-          <SmsCode onVerified={() => finish(profile)} canUseApp={enrolling} />
+          <SmsCode
+            smsAvailable={smsAvailable}
+            hasAuthenticator={!!profile.totpSecret}
+            onUseApp={() => setChoice("totp")}
+            // The server records "text message" on the profile itself once a
+            // code is verified.
+            onVerified={() => finish(profile)}
+          />
         ) : (
           <AuthenticatorCode
             storedSecret={profile.totpSecret}
             account={u}
-            onVerified={() => finish(profile)}
+            onVerified={() => {
+              // Remember the choice so it is offered first next time.
+              if (isPatient && profile.method !== "totp") {
+                void rememberTwoFactorMethod("totp");
+              }
+              finish(profile);
+            }}
           />
+        )}
+
+        {/* The way across to the other method, for patients. Not offered to
+            staff, and not on the choice screen (which already shows both). */}
+        {profile && isPatient && method !== null && (
+          <div className="mt-4 text-center">
+            {method === "totp" ? (
+              smsAvailable === false ? (
+                <p className="text-xs text-muted-foreground">
+                  Text-message codes aren't available right now: SMS isn't
+                  configured.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setChoice("sms")}
+                  className="text-sm text-[oklch(0.55_0.18_245)] hover:underline"
+                >
+                  Use a text message instead
+                </button>
+              )
+            ) : (
+              <button
+                type="button"
+                onClick={() => setChoice("totp")}
+                className="text-sm text-[oklch(0.55_0.18_245)] hover:underline"
+              >
+                {profile.totpSecret
+                  ? "Use my authenticator app instead"
+                  : "Set up an authenticator app instead"}
+              </button>
+            )}
+          </div>
         )}
 
         {devBypass && profile && (
           <button
             type="button"
-            onClick={() => finish(profile, { devBypass: true })}
+            data-testid="demo-skip"
+            onClick={async () => {
+              // Ask the server again: the button must stop working the moment
+              // the flag is cleared, not only after the page is reloaded.
+              const now = await getDemoMode().catch(() => ({ enabled: false }));
+              if (now.enabled === true) finish(profile, { devBypass: true });
+            }}
             className="w-full mt-4 rounded-md border border-gray-300 bg-white py-2.5 font-medium text-gray-700 hover:bg-gray-50"
           >
-            Continue without a code (demo)
-          </button>
-        )}
-
-        {enrolling && profile.role === "patient" && method !== null && (
-          <button
-            type="button"
-            onClick={() => setChoice(null)}
-            className="w-full mt-4 text-sm text-[oklch(0.55_0.18_245)] hover:underline"
-          >
-            Choose a different method
+            Skip (demo mode)
           </button>
         )}
 
@@ -246,25 +289,34 @@ function TwoFactor() {
   );
 }
 
-/* ---------------- method choice (patients enrolling) ---------------- */
+/* ---------------- method choice (a patient with nothing set up yet) ---------------- */
 
-function MethodChoice({ onPick }: { onPick: (m: TwoFactorMethod) => void }) {
+function MethodChoice({
+  smsAvailable,
+  onPick,
+}: {
+  smsAvailable: boolean | undefined;
+  onPick: (m: TwoFactorMethod) => void;
+}) {
+  const smsOff = smsAvailable === false;
   const option = (
     m: TwoFactorMethod,
     Icon: typeof MessageSquare,
     title: string,
     body: string,
+    disabledNote?: string,
   ) => (
     <button
       type="button"
       onClick={() => onPick(m)}
-      className="w-full flex items-start gap-3 text-left rounded-lg border p-4 hover:border-[oklch(0.55_0.18_245)] hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-[oklch(0.55_0.18_245)] outline-none transition"
+      disabled={!!disabledNote}
+      className="w-full flex items-start gap-3 text-left rounded-lg border p-4 hover:border-[oklch(0.55_0.18_245)] hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-[oklch(0.55_0.18_245)] outline-none transition disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:border-border"
     >
       <Icon size={20} className="mt-0.5 shrink-0 text-[oklch(0.55_0.18_245)]" />
       <span>
         <span className="block font-medium text-sm">{title}</span>
         <span className="block text-xs text-muted-foreground mt-0.5">
-          {body}
+          {disabledNote ?? body}
         </span>
       </span>
     </button>
@@ -276,6 +328,9 @@ function MethodChoice({ onPick }: { onPick: (m: TwoFactorMethod) => void }) {
         MessageSquare,
         "Text message",
         "We'll send a code to the mobile number you registered with.",
+        smsOff
+          ? "SMS isn't configured right now. Use an authenticator app."
+          : undefined,
       )}
       {option(
         "totp",
@@ -283,27 +338,53 @@ function MethodChoice({ onPick }: { onPick: (m: TwoFactorMethod) => void }) {
         "Authenticator app",
         "Use Google Authenticator, Microsoft Authenticator or Authy.",
       )}
+      <p className="pt-1 text-center text-xs text-muted-foreground">
+        You can switch between them on this screen whenever you sign in.
+      </p>
     </div>
   );
 }
 
 /* ---------------- text-message code ---------------- */
 
+// A server call that never answers would leave the button on "Sending…" for
+// good; give up after this long and say so.
+const SERVER_CALL_TIMEOUT_MS = 20_000;
+class TimeoutError extends Error {}
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new TimeoutError("timed out")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
 function smsMessage(
   reason: SmsCodeFailure,
   extra: { retryAt?: number; attemptsLeft?: number },
-  canUseApp: boolean,
 ): string {
-  const orApp = canUseApp ? ", or use an authenticator app instead." : ".";
+  const orApp = ", or use an authenticator app instead.";
   switch (reason) {
+    case "not-configured":
+      return "SMS isn't configured right now. Use an authenticator app instead.";
+    case "provider-rejected":
+      return `The text-message service isn't accepting requests right now. Try again later${orApp}`;
+    case "number-rejected":
+      return `The text-message service couldn't deliver to the number on your account. Ask clinic reception to check it${orApp}`;
+    case "limited-to-test-numbers":
+      return "Text messages are limited to approved test numbers on this system, and yours isn't one of them. Use an authenticator app instead.";
+    case "server-error":
+      return `We couldn't reach the text-message service just now. Try again in a minute${orApp}`;
     case "no-phone":
       return `We don't have a South African mobile number on your account. Ask clinic reception to update it${orApp}`;
-    case "not-configured":
-      return `Text message codes aren't available right now${
-        canUseApp
-          ? ". Use an authenticator app instead."
-          : ". Contact the clinic for help."
-      }`;
     case "not-eligible":
       return "Text message sign-in isn't available for this account.";
     case "unauthenticated":
@@ -348,11 +429,15 @@ function smsMessage(
 }
 
 function SmsCode({
+  smsAvailable,
+  hasAuthenticator,
+  onUseApp,
   onVerified,
-  canUseApp,
 }: {
+  smsAvailable: boolean | undefined;
+  hasAuthenticator: boolean;
+  onUseApp: () => void;
   onVerified: () => void;
-  canUseApp: boolean;
 }) {
   const [digits, setDigits] = useState(EMPTY);
   const [last4, setLast4] = useState<string | null>(null);
@@ -367,9 +452,10 @@ function SmsCode({
     setError("");
     setSending(true);
     try {
-      const res = await sendSmsCode({
-        data: { idToken: await currentIdToken() },
-      });
+      const res = await withTimeout(
+        sendSmsCode({ data: { idToken: await currentIdToken() } }),
+        SERVER_CALL_TIMEOUT_MS,
+      );
       if (res.ok) {
         setLast4(res.phoneLast4);
         setResendAt(res.resendAt);
@@ -380,10 +466,18 @@ function SmsCode({
         // them enter it.
         if (res.reason === "cooldown" && res.phoneLast4)
           setLast4(res.phoneLast4);
-        setError(smsMessage(res.reason, res, canUseApp));
+        // The page shows a patient-friendly sentence; the exact reason is here
+        // for whoever is debugging.
+        console.warn(`[two-factor] text-message code not sent: ${res.reason}`);
+        setError(smsMessage(res.reason, res));
       }
-    } catch {
-      setError("Something went wrong sending the code. Try again.");
+    } catch (err) {
+      console.error("[two-factor] sending the text-message code failed:", err);
+      setError(
+        err instanceof TimeoutError
+          ? "The text message service isn't answering. Try again in a minute."
+          : "Something went wrong sending the code. Try again.",
+      );
     } finally {
       setSending(false);
     }
@@ -399,17 +493,23 @@ function SmsCode({
     setError("");
     setChecking(true);
     try {
-      const res = await verifySmsCode({
-        data: { idToken: await currentIdToken(), code },
-      });
+      const res = await withTimeout(
+        verifySmsCode({ data: { idToken: await currentIdToken(), code } }),
+        SERVER_CALL_TIMEOUT_MS,
+      );
       if (res.ok) {
         onVerified();
         return;
       }
-      setError(smsMessage(res.reason, res, canUseApp));
+      setError(smsMessage(res.reason, res));
       setDigits(EMPTY);
-    } catch {
-      setError("Something went wrong checking the code. Try again.");
+    } catch (err) {
+      console.error("[two-factor] checking the text-message code failed:", err);
+      setError(
+        err instanceof TimeoutError
+          ? "The text message service isn't answering. Try again in a minute."
+          : "Something went wrong checking the code. Try again.",
+      );
     } finally {
       setChecking(false);
     }
@@ -417,11 +517,30 @@ function SmsCode({
 
   const secondsLeft = Math.max(0, Math.ceil((resendAt - now) / 1000));
 
+  // Known not to work on this server: say so plainly instead of offering a
+  // button that can only fail.
+  if (smsAvailable === false) {
+    return (
+      <div className="space-y-3">
+        <p role="alert" className="text-sm text-destructive text-center">
+          {smsMessage("not-configured", {})}
+        </p>
+        <button type="button" onClick={onUseApp} className={PRIMARY_BUTTON}>
+          {hasAuthenticator
+            ? "Use my authenticator app"
+            : "Set up an authenticator app"}
+        </button>
+      </div>
+    );
+  }
+
   if (last4 === null) {
     return (
       <div className="space-y-3">
         {error && (
-          <p className="text-sm text-destructive text-center">{error}</p>
+          <p role="alert" className="text-sm text-destructive text-center">
+            {error}
+          </p>
         )}
         <button
           type="button"
@@ -446,7 +565,11 @@ function SmsCode({
         <strong className="font-mono">{last4}</strong>. It expires in 5 minutes.
       </p>
       <CodeInput value={digits} onChange={setDigits} />
-      {error && <p className="text-sm text-destructive text-center">{error}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-destructive text-center">
+          {error}
+        </p>
+      )}
       <button disabled={checking} className={PRIMARY_BUTTON}>
         {checking ? "Verifying…" : "Verify"}
       </button>

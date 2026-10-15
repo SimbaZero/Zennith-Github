@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Loading } from "@/components/Loading";
 import { AppShell } from "@/components/AppShell";
 import { useLogs } from "@/lib/audit";
 import { useCurrentAdmin } from "@/lib/auth";
@@ -271,7 +272,9 @@ function AdminAudit() {
                 </p>
               </div>
             ) : staffLoading ? (
-              <AuditEmptyLine>Loading…</AuditEmptyLine>
+              <AuditEmptyLine>
+                <Loading label="Loading" />
+              </AuditEmptyLine>
             ) : (
               <AuditEventList
                 rows={visibleStaff}
@@ -299,7 +302,9 @@ function AdminAudit() {
             hint="How the waiting room ran — who was added, called, moved or removed"
           >
             {queueLoading ? (
-              <AuditEmptyLine>Loading…</AuditEmptyLine>
+              <AuditEmptyLine>
+                <Loading label="Loading" />
+              </AuditEmptyLine>
             ) : (
               <AuditEventList
                 rows={visibleQueue}

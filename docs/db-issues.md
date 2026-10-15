@@ -141,10 +141,10 @@ You asked whether Receptionist had the same class of issues Nurse did — mostly
 
 ### 23. Gemini Vision is a **prototype**, not a finished decision — two real gaps, not one
 
-- **Where:** `src/lib/gemini-ocr.ts`.
+- **Where:** `src/lib/gemini-ocr.ts` (client call) and `src/server/gemini-ocr.ts` (the Gemini request).
 - **Why it replaced Tesseract.js:** Tesseract performed very poorly on handwritten clinic files in real testing (as low as 24% confidence). Gemini's multimodal vision handled the same sample meaningfully better. `src/lib/ocr.ts` (the old Tesseract module) has been deleted — confirmed unused anywhere in the app.
 - **Gap 1 — data privacy / free tier:** Gemini's free tier allows Google to use submitted prompts/images to improve their products — real patient data should not go through it. **Current mitigation:** tested with fake/synthetic patients only, code marked `TODO(compliance)`.
-- **Gap 2 — API key exposure:** no backend exists, so the key ships in the client bundle (`VITE_GEMINI_API_KEY`). Marked `TODO(security)`.
+- **Gap 2 — API key exposure: closed.** The call now runs in a server function (`src/server/gemini-ocr.ts`) using the server-only `GEMINI_API_KEY`; the browser sends the photo plus the staff member's Firebase ID token. Any key that was ever shipped as `VITE_GEMINI_API_KEY` should still be rotated.
 - **Ask the team, before any real patient data goes through this:** move the call behind a real backend (a Cloud Function would solve both gaps at once), and/or move to Gemini's paid tier.
 
 ---
